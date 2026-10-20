@@ -53,6 +53,23 @@ docker compose exec backend sh -c 'ALEMBIC_DATABASE_URL=$TEST_DATABASE_URL alemb
 5. **Gesprächsverlauf:** Der Verlauf wird pro Abenteuer gespeichert (`agent_history`). Folgenachrichten wie „Mach daraus 4 Tage“ passen deshalb den bestehenden Plan an.
 6. **Streaming:** `POST /api/chat/{id}` streamt die Arbeit als Server-Sent Events (`token`, `tool_call`, `tool_result`, `question`, `plan`, `error`, `done`). Das Frontend zeigt die Tool-Aufrufe live an.
 
+## Wissensbasis erweitern
+
+- **Upload:** Als Admin unter *Wissensbasis* `.md`-, `.txt`- oder `.pdf`-Dateien hochladen. Gleicher Dateiname ersetzt die vorhandene Version.
+- **Als Datei:** `.md` nach `backend/app/seed/documents/` legen und mit `python -m app.seed` einlesen (`--force` liest alle neu ein).
+- **Wikivoyage-Import:** Artikel werden abgerufen, in Markdown umgewandelt (mit Quelle, Versionsdatum und Lizenzhinweis) und als `wikivoyage-<titel>.md` gespeichert sowie eingelesen.
+
+```bash
+docker compose exec backend python -m app.seed.wikivoyage --search "Radweg Bayern"   # Titel finden
+docker compose exec backend python -m app.seed.wikivoyage "Bodensee-Radweg" "Europäischer Fernwanderweg E5"
+docker compose exec backend python -m app.seed.wikivoyage --no-ingest "Donauradweg"  # nur speichern, später einlesen
+docker compose exec backend python -m app.seed.wikivoyage --dry-run "Allgäu"         # nur anzeigen
+```
+
+Wikivoyage-Inhalte stehen unter CC BY-SA 4.0: Bei Weitergabe (z. B. in einem öffentlichen Repository) müssen Quelle und Lizenz genannt bleiben, Bearbeitungen stehen unter derselben Lizenz. Der Kopf jeder importierten Datei enthält die nötigen Angaben.
+
+Das Einlesen erzeugt Embeddings über `EMBEDDING_MODEL`. Ist der Anbieter nicht erreichbar, wird die Datei trotzdem gespeichert und kann später mit `python -m app.seed` eingelesen werden.
+
 ## Konfiguration (`.env`)
 
 | Variable | Bedeutung |
