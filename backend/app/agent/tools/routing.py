@@ -1,3 +1,4 @@
+import math
 import time
 import uuid
 from typing import Any
@@ -38,7 +39,10 @@ ESTIMATE_FACTORS: dict[TransportMode, tuple[float, float]] = {
     TransportMode.public_transport: (1.3, 50.0),
 }
 
-MAX_GEOMETRY_POINTS = 400
+# Vereinfachung der Geometrie: genau genug für GPX-Navigation, klein genug für die Karte
+SIMPLIFY_TOLERANCE_M = 3.0
+MAX_GEOMETRY_POINTS = 4000
+METERS_PER_DEGREE = 111_320.0
 
 
 class Coordinate(BaseModel):
@@ -46,13 +50,44 @@ class Coordinate(BaseModel):
     lon: float
 
 
-def _downsample(points: list[list[float]], max_points: int = MAX_GEOMETRY_POINTS) -> list[list[float]]:
-    if len(points) <= max_points:
+def simplify_track(points: list[list[float]], tolerance_m: float = SIMPLIFY_TOLERANCE_M) -> list[list[float]]:
+    """Douglas-Peucker auf [lat, lon, (ele)]-Punkten; behält Kurven, entfernt Punkte auf Geraden.
+
+    Wird die Obergrenze überschritten, wird die Toleranz schrittweise verdoppelt.
+    """
+    if len(points) <= 2:
         return points
-    step = len(points) / max_points
-    sampled = [points[int(i * step)] for i in range(max_points)]
-    sampled.append(points[-1])
-    return sampled
+    cos_lat = math.cos(math.radians(points[0][0]))
+
+    def xy(p: list[float]) -> tuple[float, float]:
+        return p[1] * cos_lat * METERS_PER_DEGREE, p[0] * METERS_PER_DEGREE
+
+    coords = [xy(p) for p in points]
+    while True:
+        keep = [False] * len(points)
+        keep[0] = keep[-1] = True
+        stack = [(0, len(points) - 1)]
+        while stack:
+            start, end = stack.pop()
+            (x1, y1), (x2, y2) = coords[start], coords[end]
+            dx, dy = x2 - x1, y2 - y1
+            length = math.hypot(dx, dy)
+            max_dist, index = 0.0, -1
+            for i in range(start + 1, end):
+                px, py = coords[i]
+                if length == 0:
+                    dist = math.hypot(px - x1, py - y1)
+                else:
+                    dist = abs(dy * px - dx * py + x2 * y1 - y2 * x1) / length
+                if dist > max_dist:
+                    max_dist, index = dist, i
+            if max_dist > tolerance_m:
+                keep[index] = True
+                stack.extend([(start, index), (index, end)])
+        result = [p for p, k in zip(points, keep) if k]
+        if len(result) <= MAX_GEOMETRY_POINTS:
+            return result
+        tolerance_m *= 2
 
 
 def _estimate(waypoints: list[Coordinate], transport: TransportMode, reason: str) -> dict[str, Any]:
@@ -133,7 +168,10 @@ async def plan_route(
     props = feature["properties"]
     summary = props.get("summary", {})
     route_id = f"r-{uuid.uuid4().hex[:8]}"
-    ctx.deps.routes[route_id] = _downsample([[c[1], c[0]] for c in feature["geometry"]["coordinates"]])
+    # GeoJSON liefert [lon, lat, ele]; gespeichert wird [lat, lon, ele] (Leaflet- und GPX-Reihenfolge)
+    ctx.deps.routes[route_id] = simplify_track(
+        [[round(c[1], 6), round(c[0], 6), *([round(c[2], 1)] if len(c) > 2 else [])] for c in feature["geometry"]["coordinates"]]
+    )
 
     return {
         "route_id": route_id,

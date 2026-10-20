@@ -27,8 +27,13 @@ def build_stored_plan(outcome: RunOutcome, deps: AgentDeps, previous: dict[str, 
     """Plan + Routengeometrien für die Karte. Geometrien früherer Läufe bleiben erhalten."""
     assert outcome.plan is not None
     known_routes = (previous or {}).get("routes", {}) | deps.routes
+    route_ids = [rid for rid in outcome.plan.route_ids if rid in known_routes]
+    if not route_ids and deps.routes:
+        # Modell hat route_ids vergessen → die zuletzt berechnete Route ist in der Regel die finale
+        route_ids = [list(deps.routes)[-1]]
     return outcome.plan.model_dump(mode="json") | {
-        "routes": {rid: known_routes[rid] for rid in outcome.plan.route_ids if rid in known_routes}
+        "route_ids": route_ids,
+        "routes": {rid: known_routes[rid] for rid in route_ids},
     }
 
 

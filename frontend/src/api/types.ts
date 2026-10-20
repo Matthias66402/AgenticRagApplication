@@ -50,7 +50,7 @@ export interface AdventurePlan {
   accommodation_type: AccommodationType | null;
   stages: Stage[];
   route_ids: string[];
-  routes: Record<string, [number, number][]>;
+  routes: Record<string, ([number, number] | [number, number, number])[]>;
   weather_summary?: string | null;
   packing_tips: string[];
   safety_notes: string[];

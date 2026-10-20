@@ -207,7 +207,7 @@ export function AdventurePage() {
 
       <section className="plan-pane">
         {plan ? (
-          <PlanCard plan={plan} />
+          <PlanCard plan={plan} adventureId={id} />
         ) : (
           <div className="plan-placeholder muted">
             <div className="big-icon" aria-hidden>

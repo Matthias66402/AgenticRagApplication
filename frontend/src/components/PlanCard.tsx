@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { downloadFile } from "../api/client";
 import type { AdventurePlan } from "../api/types";
 import { ACCOMMODATION_LABELS, TRANSPORT_LABELS, formatDate, shortPlace } from "../lib/labels";
 import { RouteMap } from "./RouteMap";
@@ -5,14 +7,48 @@ import { RouteMap } from "./RouteMap";
 const num = (value: number | null | undefined, unit: string) =>
   value === null || value === undefined ? null : `${value.toLocaleString("de-DE", { maximumFractionDigits: 1 })} ${unit}`;
 
-export function PlanCard({ plan }: { plan: AdventurePlan }) {
+function GpxButton({ adventureId, hasTrack }: { adventureId: number; hasTrack: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download() {
+    setBusy(true);
+    setError(null);
+    try {
+      await downloadFile(`/api/adventures/${adventureId}/gpx`, "abenteuer.gpx");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="gpx">
+      <button
+        onClick={download}
+        disabled={busy}
+        title={hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"}
+      >
+        {busy ? "Erstelle GPX …" : hasTrack ? "⬇ GPX herunterladen" : "⬇ GPX (nur Wegpunkte)"}
+      </button>
+      {error && <span className="error small">{error}</span>}
+    </div>
+  );
+}
+
+export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventureId: number }) {
   const totalKm = plan.stages.reduce((sum, s) => sum + s.distance_km, 0);
   const totalAscent = plan.stages.reduce((sum, s) => sum + (s.ascent_m ?? 0), 0);
+  const hasTrack = plan.route_ids.some((id) => (plan.routes?.[id]?.length ?? 0) > 0);
 
   return (
     <article className="plan">
       <header>
-        <h2>{plan.title}</h2>
+        <div className="plan-title">
+          <h2>{plan.title}</h2>
+          <GpxButton adventureId={adventureId} hasTrack={hasTrack} />
+        </div>
         <div className="chips">
           <span className="chip">{TRANSPORT_LABELS[plan.transport]}</span>
           <span className="chip">📅 {formatDate(plan.start_date)}</span>

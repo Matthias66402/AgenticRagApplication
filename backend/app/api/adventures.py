@@ -1,12 +1,15 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.auth.deps import CurrentUser, SessionDep
+from app.export.gpx import build_gpx, gpx_filename, has_track
 from app.models import Adventure
 from app.schemas.adventure import AdventureCreate, AdventureRead, AdventureSummary, AdventureUpdate
 
 router = APIRouter(prefix="/api/adventures", tags=["adventures"])
+
+GPX_MEDIA_TYPE = "application/gpx+xml"
 
 
 async def get_owned_adventure(session: SessionDep, adventure_id: int, user_id: int) -> Adventure:
@@ -36,6 +39,22 @@ async def create_adventure(data: AdventureCreate, user: CurrentUser, session: Se
 @router.get("/{adventure_id}", response_model=AdventureRead)
 async def read_adventure(adventure_id: int, user: CurrentUser, session: SessionDep) -> Adventure:
     return await get_owned_adventure(session, adventure_id, user.id)
+
+
+@router.get("/{adventure_id}/gpx", response_class=Response, responses={200: {"content": {GPX_MEDIA_TYPE: {}}}})
+async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep) -> Response:
+    """GPX-Datei mit Track (falls eine Route berechnet wurde) und Wegpunkten für Start, Etappen und Unterkünfte."""
+    adventure = await get_owned_adventure(session, adventure_id, user.id)
+    if not adventure.plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Abenteuer gibt es noch keinen Plan")
+    return Response(
+        content=build_gpx(adventure.plan),
+        media_type=GPX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{gpx_filename(adventure.title)}"',
+            "X-Gpx-Has-Track": "true" if has_track(adventure.plan) else "false",
+        },
+    )
 
 
 @router.patch("/{adventure_id}", response_model=AdventureRead)

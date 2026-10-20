@@ -220,3 +220,11 @@ td.actions { text-align: right; white-space: nowrap; }
   .page { padding: 16px; }
   .stage { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* GPX-Download */
+.plan-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.plan-title h2 { margin: 0; }
+.gpx { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.gpx button { white-space: nowrap; font-size: 0.9rem; }
+.gpx button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.gpx .error { margin: 0; padding: 2px 8px; }

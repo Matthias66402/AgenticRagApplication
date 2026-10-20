@@ -17,5 +17,5 @@ class AgentDeps:
     session_factory: async_sessionmaker[AsyncSession]
     user_name: str
     today: date = field(default_factory=date.today)
-    # route_id -> Geometrie [[lat, lon], ...]; nur für die Karte, wird nicht an das LLM zurückgegeben
+    # route_id -> Geometrie [[lat, lon, ele], ...]; für Karte und GPX, wird nicht an das LLM zurückgegeben
     routes: dict[str, list[list[float]]] = field(default_factory=dict)

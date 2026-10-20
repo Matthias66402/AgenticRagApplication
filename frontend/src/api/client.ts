@@ -68,6 +68,23 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
 
 export const json = (data: unknown): RequestInit["body"] => JSON.stringify(data);
 
+/** Lädt eine Datei mit Auth-Header und stößt den Browser-Download an (ein normaler Link kann keinen Token senden). */
+export async function downloadFile(path: string, fallbackName: string): Promise<Response> {
+  const response = await fetch(path, { headers: authHeaders() });
+  if (!response.ok) throw await errorFrom(response);
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await response.clone().blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return response;
+}
+
 /** POST mit Server-Sent-Events-Antwort (EventSource kann weder POST noch Auth-Header). */
 export async function streamChat(
   adventureId: number,

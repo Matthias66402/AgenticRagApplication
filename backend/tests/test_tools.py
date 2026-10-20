@@ -74,7 +74,7 @@ async def test_route_with_ors(ctx) -> None:
     assert result["distance_km"] == 21.0
     assert result["ascent_m"] == 900
     # Geometrie landet in den Deps (für die Karte), nicht im LLM-Ergebnis
-    assert ctx.deps.routes[result["route_id"]] == [[47.0, 11.0], [47.1, 11.1]]
+    assert ctx.deps.routes[result["route_id"]] == [[47.0, 11.0, 700.0], [47.1, 11.1, 900.0]]
     assert "geometry" not in result
 
 
