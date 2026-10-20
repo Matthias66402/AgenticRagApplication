@@ -25,6 +25,18 @@ async def _throttle() -> None:
         _last_request = time.monotonic()
 
 
+async def nominatim_search(ctx: RunContext[AgentDeps], params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Gedrosselte Nominatim-Suche (gemeinsam für Geocoding und Unterkunftssuche)."""
+    await _throttle()
+    response = await ctx.deps.http.get(
+        NOMINATIM_URL,
+        params={"format": "jsonv2", "accept-language": "de"} | params,
+        headers={"User-Agent": ctx.deps.settings.nominatim_user_agent},
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 async def geocode(
     ctx: RunContext[AgentDeps], place_name: str, country_codes: str | None = None
 ) -> list[dict[str, Any]] | dict[str, Any]:
@@ -41,15 +53,11 @@ async def geocode(
     if key in _cache:
         return _cache[key]
 
-    params = {"q": place_name, "format": "jsonv2", "limit": 3, "accept-language": "de"}
+    params: dict[str, Any] = {"q": place_name, "limit": 3}
     if country_codes:
         params["countrycodes"] = country_codes
     try:
-        await _throttle()
-        response = await ctx.deps.http.get(
-            NOMINATIM_URL, params=params, headers={"User-Agent": ctx.deps.settings.nominatim_user_agent}
-        )
-        response.raise_for_status()
+        items = await nominatim_search(ctx, params)
     except httpx.HTTPError as exc:
         return tool_error(http_error_message("Nominatim", exc))
 
@@ -60,7 +68,7 @@ async def geocode(
             "lon": round(float(item["lon"]), 6),
             "type": f"{item.get('category', '')}/{item.get('type', '')}",
         }
-        for item in response.json()
+        for item in items
     ]
     if not results:
         return tool_error(f"Kein Ort zu '{place_name}' gefunden. Schreibweise prüfen oder den Nutzer fragen.")

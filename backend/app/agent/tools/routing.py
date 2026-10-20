@@ -1,6 +1,9 @@
+"""Routing über OpenRouteService (mit API-Key) und BRouter (ohne Key) mit gegenseitigem Fallback."""
+
 import math
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -12,21 +15,29 @@ from app.agent.plan_schema import TransportMode
 from app.agent.tools.common import haversine_km, http_error_message, tool_error
 
 ORS_URL = "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
+BROUTER_URL = "https://brouter.de/brouter"
 
-# Profile in Reihenfolge der Präferenz. cycling-regular ist bei ORS zeitweise sehr langsam;
-# cycling-electric routet fast identisch (Tourenrad), cycling-road als letzte Alternative.
-ORS_PROFILES: dict[TransportMode, list[str]] = {
-    TransportMode.hiking: ["foot-hiking"],
-    TransportMode.cycling: ["cycling-regular", "cycling-electric", "cycling-road"],
-    TransportMode.mtb: ["cycling-mountain"],
-    TransportMode.car: ["driving-car"],
-}
-ORS_TIMEOUT_SECONDS = 12
-# Bei diesen Status ein anderes Profil versuchen (Überlast; 404 = Punkt im Profil nicht routbar)
-ORS_RETRY_STATUS = {404, 429, 500, 502, 503, 504}
+# (Anbieter, Profil) in Reihenfolge der Präferenz. ORS hängt zeitweise (cycling-regular teils stundenlang),
+# BRouter ist schnell und braucht keinen Key; cycling-electric/-road routen ähnlich wie cycling-regular.
+ROUTING_CHAIN: dict[TransportMode, list[tuple[str, str]]] = {
+    TransportMode.hiking: [("ors", "foot-hiking"), ("brouter", "hiking-mountain")],
+    TransportMode.cycling: [
+        ("ors", "cycling-regular"), ("brouter", "trekking"), ("ors", "cycling-electric"), ("ors", "cycling-road"),
+    ],
+    TransportMode.mtb: [("ors", "cycling-mountain"), ("brouter", "mtb")],
+    TransportMode.car: [("ors", "driving-car"), ("brouter", "car-fast")],
+}  # fmt: skip
+PROVIDER_NAMES = {"ors": "OpenRouteService", "brouter": "BRouter"}
+
+# ORS hängt sporadisch bei einzelnen Anfragen; eine Wiederholung antwortet meist sofort
+ORS_TIMEOUT_SECONDS = 8
+ORS_ATTEMPTS_PER_PROFILE = 2
+BROUTER_TIMEOUT_SECONDS = 20
 SLOW_PROFILE_COOLDOWN_SECONDS = 600
+# Höhen-Hysterese für selbst berechnete Höhenmeter (filtert Messrauschen der Höhendaten)
+ELEVATION_HYSTERESIS_M = 10.0
 
-# Profil -> Zeitpunkt, bis zu dem es nach einem Timeout übersprungen wird (sofern es Alternativen gibt)
+# "anbieter:profil" -> Zeitpunkt, bis zu dem es nach wiederholtem Timeout übersprungen wird
 _slow_until: dict[str, float] = {}
 
 # Für die Luftlinien-Schätzung: Umwegfaktor und Durchschnittsgeschwindigkeit (km/h)
@@ -48,6 +59,18 @@ METERS_PER_DEGREE = 111_320.0
 class Coordinate(BaseModel):
     lat: float
     lon: float
+
+
+@dataclass
+class RouteData:
+    """Einheitliches Ergebnis beider Anbieter. Geometrie als [lat, lon, ele]."""
+
+    geometry: list[list[float]]
+    distance_m: float
+    duration_s: float
+    ascent_m: float
+    descent_m: float
+    segments: list[dict[str, float]] = field(default_factory=list)
 
 
 def simplify_track(points: list[list[float]], tolerance_m: float = SIMPLIFY_TOLERANCE_M) -> list[list[float]]:
@@ -90,6 +113,56 @@ def simplify_track(points: list[list[float]], tolerance_m: float = SIMPLIFY_TOLE
         tolerance_m *= 2
 
 
+def elevation_gain(points: list[list[float]], hysteresis_m: float = ELEVATION_HYSTERESIS_M) -> tuple[float, float]:
+    """Auf- und Abstieg mit Hysterese.
+
+    Ein Richtungswechsel zählt erst ab `hysteresis_m`; in der bestätigten Richtung zählt jeder weitere Meter.
+    """
+    elevations = [p[2] for p in points if len(p) > 2]
+    if len(elevations) < 2:
+        return 0.0, 0.0
+    ascent = descent = 0.0
+    reference, direction = elevations[0], 0
+    for ele in elevations[1:]:
+        diff = ele - reference
+        if diff >= hysteresis_m or (direction > 0 and diff > 0):
+            ascent += diff
+            reference, direction = ele, 1
+        elif diff <= -hysteresis_m or (direction < 0 and diff < 0):
+            descent -= diff
+            reference, direction = ele, -1
+    return ascent, descent
+
+
+def split_segments(
+    geometry: list[list[float]], waypoints: list[Coordinate], duration_s: float
+) -> list[dict[str, float]]:
+    """Teilt eine Gesamtroute an den Zwischen-Wegpunkten und berechnet Werte je Teilstück."""
+    cumulative = [0.0]
+    for a, b in zip(geometry, geometry[1:]):
+        cumulative.append(cumulative[-1] + haversine_km(a[0], a[1], b[0], b[1]) * 1000)
+    total = cumulative[-1] or 1.0
+
+    cuts = [0]
+    for waypoint in waypoints[1:-1]:
+        start = cuts[-1]
+        nearest = min(
+            range(start, len(geometry)),
+            key=lambda i: haversine_km(waypoint.lat, waypoint.lon, geometry[i][0], geometry[i][1]),
+        )
+        cuts.append(nearest)
+    cuts.append(len(geometry) - 1)
+
+    segments = []
+    for start, end in zip(cuts, cuts[1:]):
+        distance = cumulative[end] - cumulative[start]
+        ascent, descent = elevation_gain(geometry[start : end + 1])
+        segments.append({
+            "distance": distance, "duration": duration_s * distance / total, "ascent": ascent, "descent": descent,
+        })  # fmt: skip
+    return segments
+
+
 def _estimate(waypoints: list[Coordinate], transport: TransportMode, reason: str) -> dict[str, Any]:
     factor, speed = ESTIMATE_FACTORS[transport]
     segments = []
@@ -105,10 +178,75 @@ def _estimate(waypoints: list[Coordinate], transport: TransportMode, reason: str
     }
 
 
+async def _route_ors(ctx: RunContext[AgentDeps], profile: str, waypoints: list[Coordinate]) -> RouteData:
+    body = {
+        "coordinates": [[w.lon, w.lat] for w in waypoints],
+        "elevation": True,
+        "instructions": True,  # nötig, damit ORS `segments` (Werte je Teilstück = je Etappe) mitliefert
+    }
+    for attempt in range(1, ORS_ATTEMPTS_PER_PROFILE + 1):
+        try:
+            response = await ctx.deps.http.post(
+                ORS_URL.format(profile=profile),
+                json=body,
+                headers={"Authorization": ctx.deps.settings.ors_api_key},
+                timeout=ORS_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            break
+        except httpx.TimeoutException:
+            if attempt == ORS_ATTEMPTS_PER_PROFILE:
+                raise
+
+    feature = response.json()["features"][0]
+    props = feature["properties"]
+    summary = props.get("summary", {})
+    return RouteData(
+        # GeoJSON liefert [lon, lat, ele]; gespeichert wird [lat, lon, ele] (Leaflet- und GPX-Reihenfolge)
+        geometry=[[c[1], c[0], *c[2:3]] for c in feature["geometry"]["coordinates"]],
+        distance_m=summary.get("distance", 0),
+        duration_s=summary.get("duration", 0),
+        ascent_m=props.get("ascent", 0),
+        descent_m=props.get("descent", 0),
+        segments=props.get("segments", []),
+    )
+
+
+async def _route_brouter(ctx: RunContext[AgentDeps], profile: str, waypoints: list[Coordinate]) -> RouteData:
+    response = await ctx.deps.http.get(
+        BROUTER_URL,
+        params={
+            "lonlats": "|".join(f"{w.lon:.6f},{w.lat:.6f}" for w in waypoints),
+            "profile": profile,
+            "alternativeidx": 0,
+            "format": "geojson",
+        },
+        headers={"User-Agent": ctx.deps.settings.nominatim_user_agent},
+        timeout=BROUTER_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    feature = response.json()["features"][0]
+    props = feature["properties"]
+    geometry = [[c[1], c[0], *c[2:3]] for c in feature["geometry"]["coordinates"]]
+    duration = float(props.get("total-time", 0))
+    ascent, descent = elevation_gain(geometry)
+    return RouteData(
+        geometry=geometry,
+        distance_m=float(props.get("track-length", 0)),
+        duration_s=duration,
+        ascent_m=ascent,
+        descent_m=descent,
+        segments=split_segments(geometry, waypoints, duration),
+    )
+
+
+ROUTERS = {"ors": _route_ors, "brouter": _route_brouter}
+
+
 async def plan_route(
     ctx: RunContext[AgentDeps], waypoints: list[Coordinate], transport: TransportMode
 ) -> dict[str, Any]:
-    """Berechnet eine Route über die angegebenen Wegpunkte (OpenRouteService).
+    """Berechnet eine Route über die angegebenen Wegpunkte (OpenRouteService, Ersatz: BRouter).
 
     Für mehrtägige Touren die Etappenorte bzw. Unterkünfte als Zwischenpunkte übergeben:
     `segments` enthält dann Distanz, Dauer und Höhenmeter je Teilstück (= je Etappe).
@@ -125,62 +263,45 @@ async def plan_route(
     if len(waypoints) > 25:
         return tool_error("Maximal 25 Wegpunkte pro Anfrage.")
 
-    profiles = ORS_PROFILES.get(transport)
-    if profiles is None:
+    chain = ROUTING_CHAIN.get(transport)
+    if chain is None:
         return _estimate(waypoints, transport, f"Für '{transport.value}' gibt es kein Straßen-/Wegerouting.")
-    api_key = ctx.deps.settings.ors_api_key
-    if not api_key:
-        return _estimate(waypoints, transport, "Kein ORS_API_KEY konfiguriert.")
+    if not ctx.deps.settings.ors_api_key:
+        chain = [(provider, profile) for provider, profile in chain if provider != "ors"]
 
-    body = {
-        "coordinates": [[w.lon, w.lat] for w in waypoints],
-        "elevation": True,
-        "instructions": False,
-    }
-    response: httpx.Response | None = None
+    now = time.monotonic()
+    available = [entry for entry in chain if _slow_until.get(":".join(entry), 0) < now] or chain
     problems: list[str] = []
-    available = [p for p in profiles if _slow_until.get(p, 0) < time.monotonic()] or profiles
-    for profile in available:
+    route: RouteData | None = None
+    for provider, profile in available:
+        label = f"{PROVIDER_NAMES[provider]} {profile}"
         try:
-            response = await ctx.deps.http.post(
-                ORS_URL.format(profile=profile),
-                json=body,
-                headers={"Authorization": api_key},
-                timeout=ORS_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
+            route = await ROUTERS[provider](ctx, profile, waypoints)
             break
-        except httpx.HTTPStatusError as exc:
-            problems.append(f"{profile}: {http_error_message('OpenRouteService', exc)}")
-            response = None
-            if exc.response.status_code not in ORS_RETRY_STATUS:
-                break  # z. B. Distanzlimit überschritten – ein anderes Profil hilft nicht
         except httpx.HTTPError as exc:
-            problems.append(f"{profile}: {http_error_message('OpenRouteService', exc)}")
-            response = None
+            # Jeder Fehler (Überlast, ungültiger Key, Distanzlimit, nicht routbarer Punkt) → nächster Eintrag
+            problems.append(f"{label}: {http_error_message(PROVIDER_NAMES[provider], exc)}")
             if isinstance(exc, httpx.TimeoutException):
-                _slow_until[profile] = time.monotonic() + SLOW_PROFILE_COOLDOWN_SECONDS
-    if response is None:
+                # Hing bei jedem Versuch → eine Weile überspringen
+                _slow_until[f"{provider}:{profile}"] = time.monotonic() + SLOW_PROFILE_COOLDOWN_SECONDS
+        except (KeyError, IndexError, ValueError) as exc:  # unerwartetes Antwortformat
+            problems.append(f"{label}: unerwartete Antwort ({exc})")
+    if route is None:
         # Schätzung statt Abbruch, damit der Agent weiterplanen kann
         return _estimate(waypoints, transport, " ".join(problems))
 
-    feature = response.json()["features"][0]
-    props = feature["properties"]
-    summary = props.get("summary", {})
     route_id = f"r-{uuid.uuid4().hex[:8]}"
-    # GeoJSON liefert [lon, lat, ele]; gespeichert wird [lat, lon, ele] (Leaflet- und GPX-Reihenfolge)
     ctx.deps.routes[route_id] = simplify_track(
-        [[round(c[1], 6), round(c[0], 6), *([round(c[2], 1)] if len(c) > 2 else [])] for c in feature["geometry"]["coordinates"]]
+        [[round(p[0], 6), round(p[1], 6), *[round(e, 1) for e in p[2:3]]] for p in route.geometry]
     )
-
     return {
         "route_id": route_id,
         "estimated": False,
-        "profile": profile,
-        "distance_km": round(summary.get("distance", 0) / 1000, 1),
-        "duration_hours": round(summary.get("duration", 0) / 3600, 1),
-        "ascent_m": round(props.get("ascent", 0)),
-        "descent_m": round(props.get("descent", 0)),
+        "source": label,
+        "distance_km": round(route.distance_m / 1000, 1),
+        "duration_hours": round(route.duration_s / 3600, 1),
+        "ascent_m": round(route.ascent_m),
+        "descent_m": round(route.descent_m),
         "segments": [
             {
                 "distance_km": round(s.get("distance", 0) / 1000, 1),
@@ -188,7 +309,7 @@ async def plan_route(
                 "ascent_m": round(s.get("ascent", 0)),
                 "descent_m": round(s.get("descent", 0)),
             }
-            for s in props.get("segments", [])
+            for s in route.segments
         ],
     }
 

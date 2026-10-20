@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -11,7 +12,7 @@ from app.agent.tools import accommodation, routing
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
-from app.agent.tools.routing import ORS_URL, Coordinate, estimate_hiking_time, plan_route
+from app.agent.tools.routing import BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
 from app.agent.tools.weather import ARCHIVE_URL, FORECAST_URL, get_weather
 from app.config import get_settings
@@ -25,6 +26,12 @@ def reset_overpass_state(monkeypatch) -> None:
     monkeypatch.setattr(accommodation, "_cache", {})
     monkeypatch.setattr(accommodation, "_unavailable_until", 0.0)
     monkeypatch.setattr(routing, "_slow_until", {})
+    monkeypatch.setattr(geocode_module, "_last_request", 0.0)
+
+    async def no_throttle() -> None:
+        pass
+
+    monkeypatch.setattr(geocode_module, "_throttle", no_throttle)
 
 
 @pytest.fixture
@@ -88,28 +95,86 @@ ORS_OK = {
 }
 
 
-@respx.mock
-async def test_route_falls_back_to_next_cycling_profile(ctx) -> None:
-    respx.post(ORS_URL.format(profile="cycling-regular")).mock(side_effect=httpx.ReadTimeout("langsam"))
-    respx.post(ORS_URL.format(profile="cycling-electric")).respond(json=ORS_OK)
-    result = await plan_route(ctx, [Coordinate(lat=53.1, lon=8.2), Coordinate(lat=52.9, lon=8.4)], TransportMode.cycling)
-    assert result["estimated"] is False
-    assert result["profile"] == "cycling-electric"
-    assert result["distance_km"] == 36.0
+# Gerade Strecke 53.10 → 52.90 entlang 8.2 mit Zwischenpunkt bei 53.00; Höhe steigt erst, fällt dann
+BROUTER_OK = {
+    "features": [
+        {
+            "geometry": {"coordinates": [
+                [8.2, 53.10, 10.0], [8.2, 53.05, 40.0], [8.2, 53.00, 60.0], [8.2, 52.95, 30.0], [8.2, 52.90, 15.0],
+            ]},
+            "properties": {"track-length": "22300", "total-time": "4000"},
+        }
+    ]
+}  # fmt: skip
+START, VIA, END = Coordinate(lat=53.1, lon=8.2), Coordinate(lat=53.0, lon=8.2), Coordinate(lat=52.9, lon=8.2)
 
-    # Das hängende Profil wird beim nächsten Aufruf übersprungen
+
+@respx.mock
+async def test_route_falls_back_to_brouter(ctx) -> None:
+    respx.post(ORS_URL.format(profile="cycling-regular")).mock(side_effect=httpx.ReadTimeout("langsam"))
+    brouter = respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    result = await plan_route(ctx, [START, VIA, END], TransportMode.cycling)
+
+    assert result["estimated"] is False
+    assert result["source"] == "BRouter trekking"
+    assert brouter.calls[0].request.url.params["lonlats"] == "8.200000,53.100000|8.200000,53.000000|8.200000,52.900000"
+    assert result["distance_km"] == 22.3
+    assert (result["ascent_m"], result["descent_m"]) == (50, 45)
+    # Segmente werden am Zwischenpunkt geteilt, Dauer anteilig nach Strecke
+    first, second = result["segments"]
+    assert (first["ascent_m"], first["descent_m"], second["ascent_m"], second["descent_m"]) == (50, 0, 0, 45)
+    assert first["distance_km"] == second["distance_km"] == 11.1
+    assert first["duration_hours"] == second["duration_hours"] == 0.6
+
+    # Das hängende ORS-Profil wird beim nächsten Aufruf übersprungen → nur noch BRouter
     calls_before = respx.calls.call_count
-    await plan_route(ctx, [Coordinate(lat=53.1, lon=8.2), Coordinate(lat=52.8, lon=8.5)], TransportMode.cycling)
+    await plan_route(ctx, [START, END], TransportMode.cycling)
     assert respx.calls.call_count == calls_before + 1
 
 
 @respx.mock
-async def test_route_estimates_when_all_profiles_fail(ctx) -> None:
-    for profile in ("cycling-regular", "cycling-electric", "cycling-road"):
-        respx.post(ORS_URL.format(profile=profile)).mock(side_effect=httpx.ReadTimeout("langsam"))
-    result = await plan_route(ctx, [Coordinate(lat=53.1, lon=8.2), Coordinate(lat=52.9, lon=8.4)], TransportMode.cycling)
+async def test_route_uses_ors_cycling_electric_when_brouter_fails(ctx) -> None:
+    respx.post(ORS_URL.format(profile="cycling-regular")).respond(status_code=503)
+    respx.get(BROUTER_URL).respond(status_code=500)
+    respx.post(ORS_URL.format(profile="cycling-electric")).respond(json=ORS_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling)
+    assert result["source"] == "OpenRouteService cycling-electric"
+    assert result["distance_km"] == 36.0
+
+
+@respx.mock
+async def test_route_retries_same_profile_after_sporadic_timeout(ctx) -> None:
+    route = respx.post(ORS_URL.format(profile="cycling-regular")).mock(
+        side_effect=[httpx.ReadTimeout("hängt"), httpx.Response(200, json=ORS_OK)]
+    )
+    result = await plan_route(ctx, [START, END], TransportMode.cycling)
+    assert result["source"] == "OpenRouteService cycling-regular"
+    assert route.call_count == 2
+    assert json.loads(route.calls[0].request.content)["instructions"] is True  # sonst fehlen die segments
+    assert routing._slow_until == {}  # ein einzelner Aussetzer sperrt das Profil nicht
+
+
+@respx.mock
+async def test_route_without_ors_key_uses_brouter(ctx) -> None:
+    ctx.deps.settings = ctx.deps.settings.model_copy(update={"ors_api_key": ""})
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling)
+    assert result["source"] == "BRouter trekking"
+
+
+@respx.mock
+async def test_route_estimates_when_all_providers_fail(ctx) -> None:
+    respx.post(url__startswith="https://api.openrouteservice.org/").mock(side_effect=httpx.ReadTimeout("langsam"))
+    respx.get(BROUTER_URL).respond(status_code=503)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling)
     assert result["estimated"] is True
-    assert "cycling-regular" in result["note"]
+    assert "cycling-regular" in result["note"] and "BRouter" in result["note"]
+
+
+def test_elevation_gain_ignores_noise() -> None:
+    noisy = [[0, 0, e] for e in (100, 104, 99, 103, 100, 130, 126, 131, 100)]
+    # Rauschen um 100 m und die Delle 130 → 126 zählen nicht, der Gipfel bei 131 m schon
+    assert elevation_gain(noisy) == (31.0, 31.0)
 
 
 async def test_route_estimate_for_canoe(ctx) -> None:
@@ -153,7 +218,45 @@ async def test_weather_rejects_past(ctx) -> None:
 
 
 @respx.mock
-async def test_accommodation_fallback_and_filter(ctx) -> None:
+async def test_accommodation_via_nominatim(ctx) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"]
+        assert request.url.params["bounded"] == "1" and request.url.params["extratags"] == "1"
+        if query == "[tourism=alpine_hut]":
+            return httpx.Response(200, json=[
+                {"osm_type": "way", "osm_id": 1, "name": "Ferne Hütte", "lat": "47.04", "lon": "11.0", "extratags": None},
+                {"osm_type": "node", "osm_id": 2, "name": "Nahe Hütte", "lat": "47.01", "lon": "11.0",
+                 "extratags": {"contact:website": "https://huette.example", "capacity": "40"}},
+                {"osm_type": "node", "osm_id": 3, "name": "", "lat": "47.0", "lon": "11.005", "extratags": {}},
+            ])  # fmt: skip
+        # Selbstversorgerhütte taucht doppelt auf (beide Filter) → nur einmal im Ergebnis
+        return httpx.Response(200, json=[{"osm_type": "node", "osm_id": 2, "name": "Nahe Hütte", "lat": "47.01", "lon": "11.0"}])
+
+    route = respx.get(geocode_module.NOMINATIM_URL).mock(side_effect=respond)
+    result = await find_accommodation(ctx, 47.0, 11.0, AccommodationType.hut, radius_km=5)
+
+    assert route.call_count == 2  # alpine_hut + wilderness_hut
+    assert result["source"] == "Nominatim"
+    assert [r["name"] for r in result["results"]] == ["Nahe Hütte", "Ferne Hütte", "Unbenannt"]
+    assert result["results"][0]["capacity"] == "40"
+
+
+@respx.mock
+async def test_bivouac_filters_shelter_type(ctx) -> None:
+    shelters = [
+        {"osm_type": "node", "osm_id": 1, "name": "Biwakschachtel", "lat": "47.0", "lon": "11.0", "extratags": {"shelter_type": "basic_hut"}},
+        {"osm_type": "node", "osm_id": 2, "name": "Bushaltestelle", "lat": "47.0", "lon": "11.0", "extratags": {"shelter_type": "public_transport"}},
+    ]  # fmt: skip
+    respx.get(geocode_module.NOMINATIM_URL).mock(
+        side_effect=lambda request: httpx.Response(200, json=shelters if "shelter" in request.url.params["q"] else [])
+    )
+    result = await find_accommodation(ctx, 47.0, 11.0, AccommodationType.bivouac)
+    assert [r["name"] for r in result["results"]] == ["Biwakschachtel"]
+
+
+@respx.mock
+async def test_accommodation_overpass_fallback_and_filter(ctx) -> None:
+    respx.get(geocode_module.NOMINATIM_URL).respond(status_code=503)
     urls = ctx.deps.settings.overpass_url_list
     respx.post(urls[0]).respond(status_code=504)
     respx.post(urls[1]).respond(
@@ -169,10 +272,12 @@ async def test_accommodation_fallback_and_filter(ctx) -> None:
     names = [r["name"] for r in result["results"]]
     assert names == ["Nahe Hütte", "Unbenannt"]
     assert result["results"][0]["website"] == "https://x"
+    assert result["source"] == "Overpass"
 
 
 @respx.mock
 async def test_accommodation_circuit_breaker(ctx) -> None:
+    respx.get(geocode_module.NOMINATIM_URL).respond(status_code=503)
     routes = [respx.post(url).respond(status_code=504) for url in ctx.deps.settings.overpass_url_list]
     assert "error" in await find_accommodation(ctx, 47.0, 11.0, AccommodationType.hut)
     calls = sum(r.call_count for r in routes)

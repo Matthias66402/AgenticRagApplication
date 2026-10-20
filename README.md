@@ -8,7 +8,7 @@ Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage H
 | Backend | FastAPI, SQLAlchemy 2 (async), Alembic, JWT-Auth |
 | Agent | PydanticAI (anbieter-agnostisch, Modell per `.env`) |
 | RAG | pgvector (HNSW, Kosinus), Embeddings über PydanticAI `Embedder` |
-| Datenquellen | Nominatim, OpenRouteService, Open-Meteo, Overpass (OSM) |
+| Datenquellen | Nominatim (Geocoding, Unterkünfte), OpenRouteService + BRouter (Routing), Open-Meteo (Wetter), Overpass als Ersatz |
 
 ## Schnellstart
 
@@ -49,7 +49,7 @@ docker compose exec backend sh -c 'ALEMBIC_DATABASE_URL=$TEST_DATABASE_URL alemb
 1. **Strukturierte Ausgabe:** Der Agent liefert entweder `final_plan` (ein `AdventurePlan`) oder `ask_user` (eine `ClarificationQuestion`).
 2. **Pydantic-Validierung:** Bei mehrtägigen Touren ist die Übernachtungsart Pflicht, und es muss genau eine Etappe pro Tag geben. Schlägt die Validierung fehl, korrigiert sich das Modell selbst.
 3. **Output-Validator:** Er verlangt vor jedem Plan mindestens eine Suche in der Wissensbasis und weist zu lange Etappen je Fortbewegungsart zurück (`MAX_STAGE_KM`).
-4. **Fehler als Ergebnis:** Tools geben Fehler als lesbares Ergebnis zurück, statt Exceptions zu werfen. Der Agent kann darauf reagieren, etwa mit einer Luftlinien-Schätzung ohne ORS-Key oder einem Hinweis bei überlasteter Overpass-API.
+4. **Fehler als Ergebnis:** Tools geben Fehler als lesbares Ergebnis zurück, statt Exceptions zu werfen. Der Agent kann darauf reagieren, etwa mit einem anderen Routing-Anbieter, einer Luftlinien-Schätzung als letztem Ausweg oder einem Hinweis im Plan.
 5. **Gesprächsverlauf:** Der Verlauf wird pro Abenteuer gespeichert (`agent_history`). Folgenachrichten wie „Mach daraus 4 Tage“ passen deshalb den bestehenden Plan an.
 6. **Streaming:** `POST /api/chat/{id}` streamt die Arbeit als Server-Sent Events (`token`, `tool_call`, `tool_result`, `question`, `plan`, `error`, `done`). Das Frontend zeigt die Tool-Aufrufe live an.
 
@@ -59,8 +59,8 @@ docker compose exec backend sh -c 'ALEMBIC_DATABASE_URL=$TEST_DATABASE_URL alemb
 |---|---|
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | Bei einem Wechsel: `EMBEDDING_DIM` anpassen, Migration für die Vektorspalte erzeugen, `python -m app.seed --force` |
-| `ORS_API_KEY` | Kostenlos unter openrouteservice.org. Ohne Key schätzt das Routing nur (Luftlinie × Umwegfaktor, ohne Höhenmeter und Kartenlinie). |
-| `OVERPASS_URLS` | Kommagetrennte Overpass-Instanzen, werden der Reihe nach probiert |
+| `ORS_API_KEY` | Optional, kostenlos unter openrouteservice.org (Free-Tarif: 200 Routen/Tag). Routing-Kette: ORS → BRouter (ohne Key) → weitere ORS-Profile → Luftlinien-Schätzung. Ohne Key wird direkt BRouter genutzt. |
+| `OVERPASS_URLS` | Kommagetrennte Overpass-Instanzen; nur Ersatz, falls die Unterkunftssuche über Nominatim scheitert |
 
 ## Projektstruktur
 
