@@ -44,6 +44,8 @@ docker compose exec backend sh -c 'ALEMBIC_DATABASE_URL=$TEST_DATABASE_URL alemb
 
 ## Wie der Agent arbeitet
 
+Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-rag.md)
+
 `backend/app/agent/planner.py`
 
 1. **Strukturierte Ausgabe:** Der Agent liefert entweder `final_plan` (ein `AdventurePlan`) oder `ask_user` (eine `ClarificationQuestion`).
