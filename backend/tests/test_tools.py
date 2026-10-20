@@ -7,7 +7,7 @@ import respx
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AccommodationType, TransportMode
-from app.agent.tools import accommodation
+from app.agent.tools import accommodation, routing
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
@@ -24,6 +24,7 @@ TODAY = dt.date(2026, 7, 1)
 def reset_overpass_state(monkeypatch) -> None:
     monkeypatch.setattr(accommodation, "_cache", {})
     monkeypatch.setattr(accommodation, "_unavailable_until", 0.0)
+    monkeypatch.setattr(routing, "_slow_until", {})
 
 
 @pytest.fixture
@@ -75,6 +76,40 @@ async def test_route_with_ors(ctx) -> None:
     # Geometrie landet in den Deps (für die Karte), nicht im LLM-Ergebnis
     assert ctx.deps.routes[result["route_id"]] == [[47.0, 11.0], [47.1, 11.1]]
     assert "geometry" not in result
+
+
+ORS_OK = {
+    "features": [
+        {
+            "geometry": {"coordinates": [[8.2, 53.1, 5], [8.4, 52.9, 20]]},
+            "properties": {"summary": {"distance": 36000, "duration": 7200}, "ascent": 40, "descent": 25, "segments": []},
+        }
+    ]
+}
+
+
+@respx.mock
+async def test_route_falls_back_to_next_cycling_profile(ctx) -> None:
+    respx.post(ORS_URL.format(profile="cycling-regular")).mock(side_effect=httpx.ReadTimeout("langsam"))
+    respx.post(ORS_URL.format(profile="cycling-electric")).respond(json=ORS_OK)
+    result = await plan_route(ctx, [Coordinate(lat=53.1, lon=8.2), Coordinate(lat=52.9, lon=8.4)], TransportMode.cycling)
+    assert result["estimated"] is False
+    assert result["profile"] == "cycling-electric"
+    assert result["distance_km"] == 36.0
+
+    # Das hängende Profil wird beim nächsten Aufruf übersprungen
+    calls_before = respx.calls.call_count
+    await plan_route(ctx, [Coordinate(lat=53.1, lon=8.2), Coordinate(lat=52.8, lon=8.5)], TransportMode.cycling)
+    assert respx.calls.call_count == calls_before + 1
+
+
+@respx.mock
+async def test_route_estimates_when_all_profiles_fail(ctx) -> None:
+    for profile in ("cycling-regular", "cycling-electric", "cycling-road"):
+        respx.post(ORS_URL.format(profile=profile)).mock(side_effect=httpx.ReadTimeout("langsam"))
+    result = await plan_route(ctx, [Coordinate(lat=53.1, lon=8.2), Coordinate(lat=52.9, lon=8.4)], TransportMode.cycling)
+    assert result["estimated"] is True
+    assert "cycling-regular" in result["note"]
 
 
 async def test_route_estimate_for_canoe(ctx) -> None:

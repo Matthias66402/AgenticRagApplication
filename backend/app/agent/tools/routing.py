@@ -1,3 +1,4 @@
+import time
 import uuid
 from typing import Any
 
@@ -11,12 +12,21 @@ from app.agent.tools.common import haversine_km, http_error_message, tool_error
 
 ORS_URL = "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
 
-ORS_PROFILES: dict[TransportMode, str] = {
-    TransportMode.hiking: "foot-hiking",
-    TransportMode.cycling: "cycling-regular",
-    TransportMode.mtb: "cycling-mountain",
-    TransportMode.car: "driving-car",
+# Profile in Reihenfolge der Präferenz. cycling-regular ist bei ORS zeitweise sehr langsam;
+# cycling-electric routet fast identisch (Tourenrad), cycling-road als letzte Alternative.
+ORS_PROFILES: dict[TransportMode, list[str]] = {
+    TransportMode.hiking: ["foot-hiking"],
+    TransportMode.cycling: ["cycling-regular", "cycling-electric", "cycling-road"],
+    TransportMode.mtb: ["cycling-mountain"],
+    TransportMode.car: ["driving-car"],
 }
+ORS_TIMEOUT_SECONDS = 12
+# Bei diesen Status ein anderes Profil versuchen (Überlast; 404 = Punkt im Profil nicht routbar)
+ORS_RETRY_STATUS = {404, 429, 500, 502, 503, 504}
+SLOW_PROFILE_COOLDOWN_SECONDS = 600
+
+# Profil -> Zeitpunkt, bis zu dem es nach einem Timeout übersprungen wird (sofern es Alternativen gibt)
+_slow_until: dict[str, float] = {}
 
 # Für die Luftlinien-Schätzung: Umwegfaktor und Durchschnittsgeschwindigkeit (km/h)
 ESTIMATE_FACTORS: dict[TransportMode, tuple[float, float]] = {
@@ -80,8 +90,8 @@ async def plan_route(
     if len(waypoints) > 25:
         return tool_error("Maximal 25 Wegpunkte pro Anfrage.")
 
-    profile = ORS_PROFILES.get(transport)
-    if profile is None:
+    profiles = ORS_PROFILES.get(transport)
+    if profiles is None:
         return _estimate(waypoints, transport, f"Für '{transport.value}' gibt es kein Straßen-/Wegerouting.")
     api_key = ctx.deps.settings.ors_api_key
     if not api_key:
@@ -92,16 +102,32 @@ async def plan_route(
         "elevation": True,
         "instructions": False,
     }
-    try:
-        response = await ctx.deps.http.post(
-            ORS_URL.format(profile=profile), json=body, headers={"Authorization": api_key}
-        )
-        response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        # z. B. Punkt nicht routbar oder Distanzlimit überschritten → Schätzung statt Abbruch
-        return _estimate(waypoints, transport, http_error_message("OpenRouteService", exc) + ".")
-    except httpx.HTTPError as exc:
-        return tool_error(http_error_message("OpenRouteService", exc))
+    response: httpx.Response | None = None
+    problems: list[str] = []
+    available = [p for p in profiles if _slow_until.get(p, 0) < time.monotonic()] or profiles
+    for profile in available:
+        try:
+            response = await ctx.deps.http.post(
+                ORS_URL.format(profile=profile),
+                json=body,
+                headers={"Authorization": api_key},
+                timeout=ORS_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            break
+        except httpx.HTTPStatusError as exc:
+            problems.append(f"{profile}: {http_error_message('OpenRouteService', exc)}")
+            response = None
+            if exc.response.status_code not in ORS_RETRY_STATUS:
+                break  # z. B. Distanzlimit überschritten – ein anderes Profil hilft nicht
+        except httpx.HTTPError as exc:
+            problems.append(f"{profile}: {http_error_message('OpenRouteService', exc)}")
+            response = None
+            if isinstance(exc, httpx.TimeoutException):
+                _slow_until[profile] = time.monotonic() + SLOW_PROFILE_COOLDOWN_SECONDS
+    if response is None:
+        # Schätzung statt Abbruch, damit der Agent weiterplanen kann
+        return _estimate(waypoints, transport, " ".join(problems))
 
     feature = response.json()["features"][0]
     props = feature["properties"]
@@ -112,6 +138,7 @@ async def plan_route(
     return {
         "route_id": route_id,
         "estimated": False,
+        "profile": profile,
         "distance_km": round(summary.get("distance", 0) / 1000, 1),
         "duration_hours": round(summary.get("duration", 0) / 3600, 1),
         "ascent_m": round(props.get("ascent", 0)),
