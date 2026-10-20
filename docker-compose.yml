@@ -1,0 +1,37 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: agenticrag_db
+    environment:
+      POSTGRES_USER: adventure
+      POSTGRES_PASSWORD: adventure
+      POSTGRES_DB: adventure
+    ports:
+      - "5440:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U adventure"]
+      interval: 5s
+      retries: 10
+
+  # Läuft im Container: Windows-Anwendungssteuerung blockiert die nativen Postgres-Treiber (asyncpg/psycopg).
+  backend:
+    build: ./backend
+    container_name: agenticrag_backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://adventure:adventure@db:5432/adventure
+      TEST_DATABASE_URL: postgresql+asyncpg://adventure:adventure@db:5432/adventure_test
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8010:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

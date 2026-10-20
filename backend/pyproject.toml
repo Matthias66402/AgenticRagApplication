@@ -1,0 +1,33 @@
+[project]
+name = "adventure-planner"
+version = "0.1.0"
+description = "AgenticRAG-Abenteuerplaner (FastAPI + PydanticAI + pgvector)"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.150",
+    "uvicorn[standard]>=0.54",
+    "sqlalchemy[asyncio]>=2.1",
+    "asyncpg>=0.32",
+    "alembic>=1.20",
+    "pgvector>=0.5",
+    "pydantic[email]>=2.14",
+    "pydantic-settings>=2.16",
+    "pydantic-ai-slim[openai]>=2.58",
+    "pwdlib[argon2]>=0.3",
+    "pyjwt>=2.15",
+    "httpx>=0.28",
+    "python-dotenv",
+    "python-multipart",
+    "pypdf",
+    "astral>=3.2",
+    "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9", "pytest-asyncio>=1.4", "respx>=0.23"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
