@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { downloadFile } from "../api/client";
 import type { AdventurePlan } from "../api/types";
 import { ACCOMMODATION_LABELS, TRANSPORT_LABELS, formatDate, shortPlace } from "../lib/labels";
+import { ElevationProfile, buildProfile } from "./ElevationProfile";
+import type { ProfilePoint } from "./ElevationProfile";
 import { RouteMap } from "./RouteMap";
 
 const num = (value: number | null | undefined, unit: string) =>
@@ -45,6 +47,8 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
   const totalKm = plan.stages.reduce((sum, s) => sum + s.distance_km, 0);
   const totalAscent = plan.stages.reduce((sum, s) => sum + (s.ascent_m ?? 0), 0);
   const hasTrack = plan.route_ids.some((id) => (plan.routes?.[id]?.length ?? 0) > 0);
+  const profile = useMemo(() => buildProfile(plan), [plan]);
+  const [hovered, setHovered] = useState<ProfilePoint | null>(null);
 
   return (
     <article className="plan">
@@ -81,7 +85,14 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
         <p>{plan.summary}</p>
       </header>
 
-      <RouteMap plan={plan} />
+      <RouteMap plan={plan} highlight={hovered && [hovered.lat, hovered.lon]} />
+
+      {profile && (
+        <section>
+          <h3>Höhenprofil</h3>
+          <ElevationProfile plan={plan} points={profile} onHover={setHovered} />
+        </section>
+      )}
 
       <section>
         <h3>Etappen</h3>

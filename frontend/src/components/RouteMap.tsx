@@ -13,7 +13,8 @@ function FitBounds({ points }: { points: LatLngTuple[] }) {
   return null;
 }
 
-export function RouteMap({ plan }: { plan: AdventurePlan }) {
+/** `highlight`: Position aus dem Höhenprofil, die auf der Route markiert wird */
+export function RouteMap({ plan, highlight }: { plan: AdventurePlan; highlight?: LatLngTuple | null }) {
   const routes = useMemo(
     () => plan.route_ids.map((id) => plan.routes?.[id]).filter((r): r is [number, number][] => Boolean(r)),
     [plan],
@@ -74,6 +75,14 @@ export function RouteMap({ plan }: { plan: AdventurePlan }) {
       >
         <Tooltip>Start: {shortPlace(plan.start.name)}</Tooltip>
       </CircleMarker>
+      {highlight && (
+        <CircleMarker
+          center={highlight}
+          radius={6}
+          interactive={false}
+          pathOptions={{ color: "#fff", weight: 2, fillColor: "#1c2128", fillOpacity: 1 }}
+        />
+      )}
     </MapContainer>
   );
 }
