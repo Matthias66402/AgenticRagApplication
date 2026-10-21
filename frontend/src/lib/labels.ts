@@ -25,6 +25,7 @@ export const TOOL_LABELS: Record<string, { icon: string; label: string }> = {
   find_accommodation: { icon: "🏕️", label: "Unterkünfte" },
   search_knowledge: { icon: "📚", label: "Wissensbasis" },
   sun_times: { icon: "🌅", label: "Sonnenzeiten" },
+  find_train_connections: { icon: "🚆", label: "Bahnverbindung" },
 };
 
 const dateFormat = new Intl.DateTimeFormat("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });

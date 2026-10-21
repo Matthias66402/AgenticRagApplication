@@ -8,7 +8,7 @@ Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage H
 | Backend | FastAPI, SQLAlchemy 2 (async), Alembic, JWT-Auth |
 | Agent | PydanticAI (anbieter-agnostisch, Modell per `.env`) |
 | RAG | pgvector (HNSW, Kosinus), Embeddings über PydanticAI `Embedder` |
-| Datenquellen | Nominatim (Geocoding, Unterkünfte), OpenRouteService + BRouter (Routing), Open-Meteo (Wetter), Overpass als Ersatz |
+| Datenquellen | Nominatim (Geocoding, Unterkünfte), OpenRouteService + BRouter (Routing), Open-Meteo (Wetter), Transitous (Bahnverbindungen für An- und Abreise), Overpass als Ersatz |
 
 ## Schnellstart
 
@@ -48,7 +48,7 @@ Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-
 
 `backend/app/agent/planner.py`
 
-1. **Strukturierte Ausgabe:** Der Agent liefert entweder `final_plan` (ein `AdventurePlan`) oder `ask_user` (eine `ClarificationQuestion`).
+1. **Strukturierte Ausgabe:** Der Agent liefert `final_plan` (ein `AdventurePlan`), `ask_user` (eine `ClarificationQuestion`) oder – bei Anfragen ohne Tour, etwa einer reinen Bahnauskunft – `answer_user` (eine `TextAnswer`).
 2. **Pydantic-Validierung:** Bei mehrtägigen Touren ist die Übernachtungsart Pflicht, und es muss genau eine Etappe pro Tag geben. Schlägt die Validierung fehl, korrigiert sich das Modell selbst.
 3. **Output-Validator:** Er verlangt vor jedem Plan mindestens eine Suche in der Wissensbasis und weist zu lange Etappen je Fortbewegungsart zurück (`MAX_STAGE_KM`).
 4. **Fehler als Ergebnis:** Tools geben Fehler als lesbares Ergebnis zurück, statt Exceptions zu werfen. Der Agent kann darauf reagieren, etwa mit einem anderen Routing-Anbieter, einer Luftlinien-Schätzung als letztem Ausweg oder einem Hinweis im Plan.
@@ -80,6 +80,7 @@ Das Einlesen erzeugt Embeddings über `EMBEDDING_MODEL`. Ist der Anbieter nicht 
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | Bei einem Wechsel: `EMBEDDING_DIM` anpassen, Migration für die Vektorspalte erzeugen, `python -m app.seed --force` |
 | `ORS_API_KEY` | Optional, kostenlos unter openrouteservice.org (Free-Tarif: 200 Routen/Tag). Routing-Kette: ORS → BRouter (ohne Key) → weitere ORS-Profile → Luftlinien-Schätzung. Ohne Key wird direkt BRouter genutzt. |
 | `OVERPASS_URLS` | Kommagetrennte Overpass-Instanzen; nur Ersatz, falls die Unterkunftssuche über Nominatim scheitert |
+| `TRANSIT_API_URL` | Fahrplanauskunft für An- und Abreise mit Bahn/ÖPNV. Standard ist die offene MOTIS-Instanz von [Transitous](https://transitous.org) (ohne Key; verlangt einen aussagekräftigen User-Agent, dafür wird `NOMINATIM_USER_AGENT` mitgeschickt); jede andere MOTIS-Instanz funktioniert ebenso. Leer = aus. |
 
 ## Projektstruktur
 

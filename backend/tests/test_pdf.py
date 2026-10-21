@@ -135,3 +135,32 @@ async def test_pdf_requires_plan_and_ownership(client: httpx.AsyncClient, user_h
     await create_user("pdf-other@example.com")
     other = await auth_headers(client, "pdf-other@example.com")
     assert (await client.get(f"/api/adventures/{planned_id}/pdf", headers=other)).status_code == 404
+
+
+def test_pdf_with_train_journeys() -> None:
+    leg = {"from_stop": "München Hbf", "to_stop": "Garmisch-Partenkirchen", "track": "28", "direction": "Mittenwald"}
+    outbound = {
+        "departure": "2026-11-06T07:04:00", "arrival": "2026-11-06T08:36:00", "duration_minutes": 92, "transfers": 0,
+        "legs": [
+            {"line": "Fußweg (8 min)", "from_stop": "München", "to_stop": "München Hbf",
+             "departure": "2026-11-06T07:04:00", "arrival": "2026-11-06T07:12:00"},
+            leg | {"line": "RB6", "departure": "2026-11-06T07:12:00", "arrival": "2026-11-06T08:36:00"},
+        ],
+        "notes": "Frühe Verbindung, damit die erste Etappe bei Tageslicht endet.",
+    }  # fmt: skip
+    night = outbound | {"departure": "2026-11-07T22:10:00", "arrival": "2026-11-08T06:05:00", "transfers": 2, "notes": None}
+    text = pdf_text(build_pdf(PLAN | {"outbound_journey": outbound, "return_journey": night}))
+
+    assert "An- und Abreise" in text
+    assert "Anreise · Fr., 06.11.2026" in text
+    assert "07:04 München → 08:36 Garmisch-Partenkirchen · 1:32 h · ohne Umstieg" in text
+    assert "München Hbf (Gl. 28) → Garmisch-Partenkirchen · Richtung Mittenwald" in text
+    assert "Fußweg (8 min) → München Hbf" in text
+    assert "Frühe Verbindung" in text
+    assert "Rückreise · Sa., 07.11.2026" in text
+    assert "06:05 (+1)" in text and "2 Umstiege" in text
+    assert "Fahrplandaten: Transitous" in text
+
+
+def test_pdf_without_journeys_has_no_travel_section() -> None:
+    assert "An- und Abreise" not in pdf_text(build_pdf(PLAN))

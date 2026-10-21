@@ -44,6 +44,8 @@ def build_stored_plan(
 def assistant_text(outcome: RunOutcome) -> str:
     if outcome.question:
         return outcome.question.question
+    if outcome.answer:
+        return outcome.answer
     if outcome.plan:
         return outcome.text.strip() or f"Hier ist Dein Plan „{outcome.plan.title}“. {outcome.plan.summary}"
     return outcome.error or outcome.text.strip() or "Keine Antwort erhalten."
@@ -79,7 +81,7 @@ async def chat(
 ) -> StreamingResponse:
     """Schickt eine Nachricht an den Planungs-Agenten und streamt dessen Arbeit als Server-Sent Events.
 
-    Events: `token`, `tool_call`, `tool_result`, `question`, `plan`, `error`, `done`.
+    Events: `token`, `tool_call`, `tool_result`, `question`, `answer`, `plan`, `error`, `done`.
     """
     adventure = await get_owned_adventure(session, adventure_id, user.id)
     history = list(adventure.agent_history or [])
@@ -103,6 +105,8 @@ async def chat(
             yield sse({"type": "plan", "plan": build_stored_plan(outcome, deps, adventure.plan)})
         elif outcome.question is not None:
             yield sse({"type": "question", **outcome.question.model_dump()})
+        elif outcome.answer is not None:
+            yield sse({"type": "answer", "content": outcome.answer})
         yield sse({"type": "done"})
 
     return StreamingResponse(

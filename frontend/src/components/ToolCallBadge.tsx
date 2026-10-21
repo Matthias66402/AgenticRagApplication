@@ -19,6 +19,8 @@ function describeArgs(call: ToolCall): string {
       return `${a.distance_km} km, +${a.ascent_m ?? 0} Hm`;
     case "sun_times":
       return String(a.date ?? "");
+    case "find_train_connections":
+      return `${a.from_name} → ${a.to_name}, ${a.date} ${a.arrive_by ? "an" : "ab"} ${String(a.time ?? "08:00").slice(0, 5)}`;
     default:
       return "";
   }

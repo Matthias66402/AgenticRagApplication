@@ -59,7 +59,9 @@ run_planner()                                 agent/runner.py
 │   → plan_route mit Campingplätzen als Wegpunkte               │
 │   → get_weather(...)                                          │
 │   → search_knowledge("Wildcampen Deutschland Regeln")   ← RAG │
-│   → final_plan(AdventurePlan)   oder   ask_user(Frage)        │
+│   → find_train_connections(...)   falls An-/Abreise per Bahn  │
+│   → final_plan(AdventurePlan) | ask_user(Frage)               │
+│     | answer_user(Text, z. B. reine Bahnauskunft)             │
 │                                                               │
 │ Validierung schlägt fehl? → Fehlertext zurück ans LLM,        │
 │   es korrigiert sich und gibt erneut aus                      │
@@ -82,7 +84,7 @@ Alle Pfade beziehen sich auf `backend/app/`.
 |---|---|
 | `INSTRUCTIONS` | System-Prompt: Pflichtangaben, empfohlenes Vorgehen, Regeln (z. B. „Unterkünfte nur aus Tool-Ergebnissen“, „Etappenenden sind reale Orte“) |
 | `build_agent()` | Erzeugt den PydanticAI-`Agent` mit Modell aus `LLM_MODEL`, den Tools und den beiden möglichen Ausgaben |
-| `ToolOutput(..., name="final_plan")` / `ToolOutput(..., name="ask_user")` | Die zwei Wege, die Schleife zu beenden: fertiger Plan oder Rückfrage. Was zutrifft, entscheidet der Agent selbst. |
+| `ToolOutput(..., name="final_plan")` / `ToolOutput(..., name="ask_user")` / `ToolOutput(..., name="answer_user")` | Die drei Wege, die Schleife zu beenden: fertiger Plan, Rückfrage oder Antwort ohne Plan (z. B. reine Bahnauskunft). Was zutrifft, entscheidet der Agent selbst. Bei `answer_user` hängt das Backend die gefundenen Bahnverbindungen formatiert an, das LLM muss sie nicht abschreiben. |
 | `@agent.instructions` → `current_context()` | Gibt bei jedem Lauf das heutige Datum und den Nutzernamen mit, damit Angaben wie „nächsten Samstag“ aufgelöst werden können |
 | `@agent.output_validator` → `check_plausibility()` | Selbstprüfung vor der Ausgabe (siehe unten) |
 | `used_tool()` | Prüft im Nachrichtenverlauf, ob ein bestimmtes Tool schon aufgerufen wurde |
@@ -132,6 +134,7 @@ Jedes Tool ist eine normale Python-Funktion. PydanticAI erzeugt aus **Docstring 
 | `get_weather` | `weather.py` | Open-Meteo | Vorhersage (≤ 15 Tage) bzw. Klimamittel |
 | `estimate_hiking_time` | `routing.py` | lokal (DAV-Formel) | Gehzeit je Wanderetappe |
 | `sun_times` | `sun.py` | lokal (`astral`) | Tageslicht bei langen Etappen |
+| `find_train_connections` | `transit.py` | Transitous (MOTIS-Fahrplanrouter) | An- und Abreise mit Bahn/ÖPNV |
 
 ### Gemeinsamer Kontext: `AgentDeps`
 
@@ -215,6 +218,7 @@ Der komplette PydanticAI-Nachrichtenverlauf wird als `agent_history` am Abenteue
 | `plan_route` | Kette ORS → BRouter → weitere ORS-Profile → Luftlinien-Schätzung; sporadische Timeouts werden wiederholt, hängende Profile 10 min übersprungen |
 | `find_accommodation` | Nominatim; bei Fehler Overpass mit Circuit Breaker (2 min Pause nach Ausfall) |
 | `geocode` | Drosselung auf 1 Anfrage/s (Nominatim-Richtlinie), Cache |
+| `find_train_connections` | Fehler oder fehlende Verbindungen als Tool-Ergebnis; der Agent plant ohne konkrete An- und Abreise weiter |
 | `search_knowledge` | Fehler (z. B. Embedding-Anbieter nicht erreichbar) als Tool-Ergebnis; der Agent plant ohne RAG-Inhalte weiter |
 
 ---

@@ -39,6 +39,8 @@ MAP_HEIGHT = 80.0
 PROFILE_HEIGHT = 38.0
 DAY_COLUMN = 30.0
 EARTH_RADIUS_KM = 6371.0
+JOURNEYS = [("Anreise", "outbound_journey"), ("Rückreise", "return_journey")]
+TRANSIT_NOTE = "Fahrplandaten: Transitous (transitous.org) · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise prüfen."
 
 
 def _num(value: float, unit: str) -> str:
@@ -50,6 +52,15 @@ def _num(value: float, unit: str) -> str:
 def _date(iso: str) -> str:
     day = dt.date.fromisoformat(iso)
     return f"{WEEKDAYS[day.weekday()]}, {day:%d.%m.%Y}"
+
+
+def _time(iso: str) -> str:
+    """Ortszeit "2026-10-24T07:36" → "07:36" (Fahrplanzeiten werden nicht umgerechnet)."""
+    return iso[11:16]
+
+
+def _duration(minutes: int) -> str:
+    return f"{minutes // 60}:{minutes % 60:02d} h"
 
 
 def _short(name: str) -> str:
@@ -347,6 +358,47 @@ class PlanPdf(FPDF):
             bottom = max(self.get_y(), left_bottom) if self.page == page else self.get_y()
             self.set_xy(self.l_margin, bottom + 3)
 
+    def journeys(self) -> None:
+        """An- und Rückreise mit Bahn/ÖPNV: Überblick und Teilstrecken mit Zeiten, Linie und Gleis."""
+        journeys = [(label, self.plan.get(key)) for label, key in JOURNEYS if self.plan.get(key)]
+        if not journeys:
+            return
+        self.heading("An- und Abreise")
+        for label, journey in journeys:
+            self.ensure_space(25)
+            legs = journey["legs"]
+            days_later = (dt.date.fromisoformat(journey["arrival"][:10]) - dt.date.fromisoformat(journey["departure"][:10])).days
+            transfers = journey["transfers"]
+            self.style(10.5, bold=True)
+            self.cell(0, 5.5, f"{label} · {_date(journey['departure'][:10])}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            self.paragraph(
+                f"{_time(journey['departure'])} {legs[0]['from_stop']} → {_time(journey['arrival'])}"
+                f"{f' (+{days_later})' if days_later else ''} {legs[-1]['to_stop']} · {_duration(journey['duration_minutes'])} · "
+                + ("ohne Umstieg" if not transfers else f"{transfers} {'Umstieg' if transfers == 1 else 'Umstiege'}"),
+                size=9.5,
+            )
+            self.ln(1)
+            for leg in legs:
+                self.style(8.5, color=MUTED)
+                self.cell(24, 4.5, f"{_time(leg['departure'])}–{_time(leg['arrival'])}")
+                if leg["line"].startswith("Fußweg"):
+                    self.multi_cell(0, 4.5, f"{leg['line']} → {leg['to_stop']}", align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                    continue
+                self.style(8.5, bold=True)
+                self.cell(self.get_string_width(leg["line"]) + 2.5, 4.5, leg["line"])
+                track = f" (Gl. {leg['track']})" if leg.get("track") else ""
+                direction = f" · Richtung {leg['direction']}" if leg.get("direction") else ""
+                self.style(8.5)
+                self.multi_cell(
+                    0, 4.5, f"{leg['from_stop']}{track} → {leg['to_stop']}{direction}",
+                    align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+                )  # fmt: skip
+            if journey.get("notes"):
+                self.ln(1)
+                self.paragraph(journey["notes"], size=9.5)
+            self.ln(3)
+        self.paragraph(TRANSIT_NOTE, size=8, color=MUTED)
+
     def lists(self) -> None:
         plan = self.plan
         if plan.get("weather_summary"):
@@ -395,7 +447,7 @@ class PlanPdf(FPDF):
 
 
 def build_pdf(plan: dict[str, Any], basemap: Image.Image | None = None) -> bytes:
-    """Druckversion des Plans: Überblick, Karte, Höhenprofil, Etappen, Wetter, Packliste, Sicherheit, Quellen.
+    """Druckversion des Plans: Überblick, Karte, Höhenprofil, Etappen, An- und Abreise, Wetter, Packliste, Sicherheit, Quellen.
 
     `basemap` ist der Kartenhintergrund für map_viewport(plan), siehe basemap.render_basemap.
     """
@@ -405,5 +457,6 @@ def build_pdf(plan: dict[str, Any], basemap: Image.Image | None = None) -> bytes
     pdf.route_map()
     pdf.elevation_profile()
     pdf.stages()
+    pdf.journeys()
     pdf.lists()
     return bytes(pdf.output())

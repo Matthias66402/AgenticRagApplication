@@ -19,8 +19,9 @@ from pydantic_ai import (
 from pydantic_ai.exceptions import AgentRunError
 
 from app.agent.deps import AgentDeps
-from app.agent.plan_schema import AdventurePlan, ClarificationQuestion
+from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
 from app.agent.planner import planner_agent
+from app.agent.tools.transit import format_train_queries
 
 RESULT_PREVIEW_CHARS = 600
 USAGE_LIMITS = UsageLimits(request_limit=40)
@@ -32,6 +33,8 @@ class RunOutcome:
 
     plan: AdventurePlan | None = None
     question: ClarificationQuestion | None = None
+    # Antwort ohne Plan, inkl. der in diesem Lauf gefundenen Bahnverbindungen
+    answer: str | None = None
     text: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     history_json: list[Any] | None = None
@@ -46,7 +49,7 @@ def _preview(content: Any) -> str:
 async def run_planner(
     message: str, history_json: list[Any], deps: AgentDeps, outcome: RunOutcome
 ) -> AsyncIterator[dict[str, Any]]:
-    """Streamt Events: token, tool_call, tool_result, plan, question, error."""
+    """Streamt Events: token, tool_call, tool_result, plan, question, answer, error."""
     history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else None
     calls_by_id: dict[str, dict[str, Any]] = {}
 
@@ -81,6 +84,11 @@ async def run_planner(
                         outcome.plan = output
                     elif isinstance(output, ClarificationQuestion):
                         outcome.question = output
+                    elif isinstance(output, TextAnswer):
+                        queries = list(deps.train_queries.values())
+                        outcome.answer = output.message.strip()
+                        if queries:
+                            outcome.answer += "\n\n" + format_train_queries(queries)
     except AgentRunError as exc:
         outcome.error = f"Der Agent konnte die Anfrage nicht abschließen: {exc}"
     except Exception as exc:  # Anbieter-/Netzwerkfehler sollen den Stream sauber beenden

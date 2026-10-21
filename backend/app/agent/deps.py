@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -19,3 +20,5 @@ class AgentDeps:
     today: date = field(default_factory=date.today)
     # route_id -> Geometrie [[lat, lon, ele], ...]; für Karte und GPX, wird nicht an das LLM zurückgegeben
     routes: dict[str, list[list[float]]] = field(default_factory=dict)
+    # Fahrplanabfragen dieses Laufs: Schlüssel aus den Suchparametern -> Abfrage samt Verbindungen
+    train_queries: dict[tuple[Any, ...], dict[str, Any]] = field(default_factory=dict)

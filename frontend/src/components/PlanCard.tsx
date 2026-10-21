@@ -4,6 +4,7 @@ import type { AdventurePlan } from "../api/types";
 import { ACCOMMODATION_LABELS, TRANSPORT_LABELS, formatDate, shortPlace } from "../lib/labels";
 import { ElevationProfile, buildProfile } from "./ElevationProfile";
 import type { ProfilePoint } from "./ElevationProfile";
+import { JourneyCard } from "./JourneyCard";
 import { RouteMap } from "./RouteMap";
 
 const num = (value: number | null | undefined, unit: string) =>
@@ -136,6 +137,23 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           ))}
         </ol>
       </section>
+
+      {(plan.outbound_journey || plan.return_journey) && (
+        <section>
+          <h3>An- und Abreise</h3>
+          <div className="journeys">
+            {plan.outbound_journey && <JourneyCard label="🚆 Anreise" journey={plan.outbound_journey} />}
+            {plan.return_journey && <JourneyCard label="🚆 Rückreise" journey={plan.return_journey} />}
+          </div>
+          <p className="muted small">
+            Fahrplandaten:{" "}
+            <a href="https://transitous.org" target="_blank" rel="noreferrer">
+              Transitous
+            </a>{" "}
+            · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise in der Fahrplanauskunft prüfen.
+          </p>
+        </section>
+      )}
 
       {plan.weather_summary && (
         <section>

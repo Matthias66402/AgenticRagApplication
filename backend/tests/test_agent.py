@@ -7,12 +7,15 @@ from typing import Any
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 from pydantic_ai import ModelMessage
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
 from app.agent.planner import planner_agent
+from app.config import get_settings
+from tests.test_tools import TRANSIT_OK
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
 
@@ -115,6 +118,90 @@ async def test_plan_with_tool_call_and_self_correction(
     assert stored["status"] == "planned"
     assert stored["title"] == "Testtour"
     assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["estimate_hiking_time", "search_knowledge"]
+
+
+JOURNEY = {
+    "departure": f"{TOMORROW}T07:12",
+    "arrival": f"{TOMORROW}T09:28",
+    "duration_minutes": 136,
+    "transfers": 0,
+    "legs": [
+        {
+            "line": "RB6",
+            "from_stop": "München Hbf",
+            "to_stop": "Garmisch-Partenkirchen",
+            "departure": f"{TOMORROW}T07:12",
+            "arrival": f"{TOMORROW}T09:28",
+            "track": "28",
+        }
+    ],
+}
+
+
+def test_journey_times_are_local_without_timezone() -> None:
+    plan = make_plan() | {"return_journey": JOURNEY}
+    assert AdventurePlan.model_validate(plan).return_journey.departure == f"{TOMORROW}T07:12"
+    with pytest.raises(ValidationError, match="pattern"):
+        AdventurePlan.model_validate(plan | {"return_journey": JOURNEY | {"departure": f"{TOMORROW}T05:12:00Z"}})
+
+
+@respx.mock
+async def test_journey_only_from_train_connections(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": []})
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    plan = make_plan() | {"outbound_journey": JOURNEY}
+    connection_args = {
+        "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
+        "to_name": "Garmisch", "to_lat": 47.49, "to_lon": 11.09, "date": TOMORROW.isoformat(),
+    }  # fmt: skip
+    model = scripted_model(
+        ("search_knowledge", {"query": "Anreise Bahn"}),
+        ("final_plan", plan),  # Verbindung ohne Fahrplanabfrage → Validator verlangt find_train_connections
+        ("find_train_connections", connection_args),
+        ("final_plan", plan),
+    )
+    with planner_agent.override(model=model):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung, Anreise ab München"}
+        )
+    events = parse_sse(response.text)
+    assert events[-2]["type"] == "plan", events
+    assert events[-2]["plan"]["outbound_journey"]["legs"][0]["line"] == "RB6"
+    assert events[-2]["plan"]["return_journey"] is None
+    stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
+    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["search_knowledge", "find_train_connections"]
+
+
+@respx.mock
+async def test_train_connection_answer_without_plan(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    transit = respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    args = {
+        "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
+        "to_name": "Garmisch-Partenkirchen", "to_lat": 47.49, "to_lon": 11.1, "date": TOMORROW.isoformat(),
+    }  # fmt: skip
+    model = scripted_model(
+        ("find_train_connections", args),
+        ("find_train_connections", args),  # Wiederholung geht nicht erneut an die API
+        ("answer_user", {"message": "Die Direktverbindung mit dem RB6 ist am schnellsten."}),
+    )
+    with planner_agent.override(model=model):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Zug München → Garmisch morgen"}
+        )
+    events = parse_sse(response.text)
+    assert [e["type"] for e in events][-2:] == ["answer", "done"], events
+    answer = events[-2]["content"]
+    assert answer.startswith("Die Direktverbindung mit dem RB6 ist am schnellsten.")
+    assert "🚆 München → Garmisch-Partenkirchen" in answer
+    assert "08:28 RB6: München Hbf (Gl. 28) → Garmisch-Partenkirchen 09:52" in answer
+    assert "– fällt aus!" in answer
+    assert "Fahrplandaten: Transitous" in answer
+    assert transit.call_count == 1
+
+    stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
+    assert stored["status"] == "draft" and stored["plan"] is None
+    assert stored["messages"][1]["content"] == answer
 
 
 async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

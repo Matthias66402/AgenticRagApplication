@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     http_timeout_seconds: float = 20.0
     # Kartenhintergrund im PDF-Export; leer = nur Route und Marker ohne Karte
     map_tile_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    # Fahrplanauskunft für An- und Abreise (MOTIS-API, z. B. Transitous); leer = aus
+    transit_api_url: str = "https://api.transitous.org/api/v1/plan"
 
     cors_origins: str = "http://localhost:5180"
 

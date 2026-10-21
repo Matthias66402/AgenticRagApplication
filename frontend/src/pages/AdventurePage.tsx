@@ -63,6 +63,8 @@ export function AdventurePage() {
           };
         case "question":
           return { ...m, content: event.question };
+        case "answer":
+          return { ...m, content: event.content };
         case "error":
           return { ...m, error: event.message };
         default:

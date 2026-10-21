@@ -39,6 +39,26 @@ export interface Stage {
   notes?: string | null;
 }
 
+export interface JourneyLeg {
+  line: string;
+  from_stop: string;
+  to_stop: string;
+  /** Ortszeit ohne Zeitzone, z. B. 2026-10-24T07:36 */
+  departure: string;
+  arrival: string;
+  direction?: string | null;
+  track?: string | null;
+}
+
+export interface Journey {
+  departure: string;
+  arrival: string;
+  duration_minutes: number;
+  transfers: number;
+  legs: JourneyLeg[];
+  notes?: string | null;
+}
+
 export interface Attribution {
   publisher: string;
   title: string;
@@ -61,6 +81,9 @@ export interface AdventurePlan {
   stages: Stage[];
   route_ids: string[];
   routes: Record<string, ([number, number] | [number, number, number])[]>;
+  /** An- und Rückreise mit Bahn/ÖPNV; fehlen bei alten Plänen */
+  outbound_journey?: Journey | null;
+  return_journey?: Journey | null;
   weather_summary?: string | null;
   packing_tips: string[];
   safety_notes: string[];
@@ -111,6 +134,7 @@ export type ChatEvent =
   | ({ type: "tool_call" } & ToolCall)
   | { type: "tool_result"; id: string; result: string; failed: boolean }
   | { type: "question"; question: string; missing_fields: string[] }
+  | { type: "answer"; content: string }
   | { type: "plan"; plan: AdventurePlan }
   | { type: "error"; message: string }
   | { type: "done" };

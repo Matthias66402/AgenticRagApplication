@@ -2,7 +2,7 @@
 
 import datetime as dt
 from enum import StrEnum
-from typing import Self
+from typing import Any, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -64,6 +64,36 @@ class Stage(BaseModel):
     notes: str | None = None
 
 
+# Fahrplanzeiten als Ortszeit-Text wie im Tool-Ergebnis. Ein datetime-Feld verlangt im strict-Modus eine Zeitzone,
+# dabei würde das Modell Ortszeiten womöglich in UTC umrechnen.
+LOCAL_TIME_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$"
+
+
+def local_time(description: str = "Ortszeit YYYY-MM-DDTHH:MM, unverändert aus find_train_connections") -> Any:
+    return Field(pattern=LOCAL_TIME_PATTERN, description=description)
+
+
+class JourneyLeg(BaseModel):
+    line: str = Field(description='Linie wie "ICE 595" oder "Fußweg (8 min)"')
+    from_stop: str
+    to_stop: str
+    departure: str = local_time()
+    arrival: str = local_time()
+    direction: str | None = None
+    track: str | None = None
+
+
+class Journey(BaseModel):
+    """Bahnverbindung für An- oder Abreise; nur aus find_train_connections-Ergebnissen übernehmen."""
+
+    departure: str = local_time()
+    arrival: str = local_time()
+    duration_minutes: int = Field(ge=0)
+    transfers: int = Field(ge=0)
+    legs: list[JourneyLeg] = Field(min_length=1)
+    notes: str | None = None
+
+
 class AdventurePlan(BaseModel):
     """Vollständiger Abenteuerplan. Nur ausgeben, wenn alle Pflichtangaben bekannt sind."""
 
@@ -81,6 +111,10 @@ class AdventurePlan(BaseModel):
     route_ids: list[str] = Field(
         default_factory=list, description="route_id-Werte aus plan_route, die die Gesamtroute bilden"
     )
+    outbound_journey: Journey | None = Field(
+        default=None, description="Anreise mit Bahn/ÖPNV zum Tourstart, falls gewünscht"
+    )
+    return_journey: Journey | None = Field(default=None, description="Rückreise mit Bahn/ÖPNV vom Tourziel")
     weather_summary: str | None = None
     packing_tips: list[str] = Field(default_factory=list)
     safety_notes: list[str] = Field(default_factory=list)
@@ -97,6 +131,14 @@ class AdventurePlan(BaseModel):
                 f"Es müssen genau {self.duration_days} Etappen sein (eine pro Tag), nicht {len(self.stages)}"
             )
         return self
+
+
+class TextAnswer(BaseModel):
+    """Antwort ohne Abenteuerplan, z. B. eine reine Bahnverbindungsauskunft."""
+
+    message: str = Field(
+        description="Kurze Antwort. Gefundene Bahnverbindungen werden automatisch darunter angezeigt, nicht wiederholen."
+    )
 
 
 class ClarificationQuestion(BaseModel):
