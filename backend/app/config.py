@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"
     overpass_urls: str = "https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter"
     http_timeout_seconds: float = 20.0
+    # Kartenhintergrund im PDF-Export; leer = nur Route und Marker ohne Karte
+    map_tile_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 
     cors_origins: str = "http://localhost:5180"
 

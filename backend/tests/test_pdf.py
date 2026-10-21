@@ -1,18 +1,39 @@
 import io
 
 import httpx
+import pytest
+import respx
+from PIL import Image
 from pypdf import PdfReader
 
-from app.export.pdf import build_pdf
+from app.export import basemap
+from app.export.basemap import ATTRIBUTION, PADDING, TARGET_WIDTH_PX, TILE_SIZE, fit_viewport
+from app.export.pdf import build_pdf, map_viewport
 from tests.conftest import auth_headers, create_user
 from tests.test_gpx import PLAN, store_adventure
+
+
+TILE_PATTERN = r"https://tile\.openstreetmap\.org/\d+/\d+/\d+\.png"
+
+
+@pytest.fixture(autouse=True)
+def empty_tile_cache(monkeypatch) -> None:
+    monkeypatch.setattr(basemap, "_cache", {})
+
+
+def png_tile() -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (TILE_SIZE, TILE_SIZE), (170, 211, 223)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def pdf_text(content: bytes) -> str:
     return "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(content)).pages)
 
 
+@respx.mock
 async def test_pdf_download(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    tiles = respx.get(url__regex=TILE_PATTERN).respond(content=png_tile(), headers={"Content-Type": "image/png"})
     adventure_id = await store_adventure("user@example.com", PLAN)
     response = await client.get(f"/api/adventures/{adventure_id}/pdf", headers=user_headers)
 
@@ -29,6 +50,36 @@ async def test_pdf_download(client: httpx.AsyncClient, user_headers: dict[str, s
     assert "Garmisch → Mittenwald" in text
     assert "Übernachtung: Testhütte (Hütte)" in text
     assert "https://huette.example" in text
+    # Kartenhintergrund eingebettet, mit OSM-Namensnennung
+    assert tiles.called
+    assert ATTRIBUTION in text
+    assert len(PdfReader(io.BytesIO(response.content)).pages[0].images) == 1
+
+
+@respx.mock
+async def test_pdf_without_tile_server_has_no_basemap(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    respx.get(url__regex=TILE_PATTERN).respond(status_code=503)
+    adventure_id = await store_adventure("user@example.com", PLAN)
+    response = await client.get(f"/api/adventures/{adventure_id}/pdf", headers=user_headers)
+
+    assert response.status_code == 200
+    assert ATTRIBUTION not in pdf_text(response.content)
+    assert len(PdfReader(io.BytesIO(response.content)).pages[0].images) == 0
+
+
+def test_map_viewport_contains_route_and_markers() -> None:
+    viewport = map_viewport(PLAN)
+    assert TARGET_WIDTH_PX / 2 < viewport.width <= TARGET_WIDTH_PX
+    for lat, lon, *_ in PLAN["routes"]["r-1"]:
+        fx, fy = viewport.project(lat, lon)
+        assert PADDING * 0.99 <= fx <= 1 - PADDING * 0.99
+        assert 0 <= fy <= 1
+
+
+def test_fit_viewport_single_point() -> None:
+    viewport = fit_viewport([(47.49, 11.09)], aspect=2)
+    assert viewport.project(47.49, 11.09) == pytest.approx((0.5, 0.5))
+    assert viewport.zoom == basemap.MAX_ZOOM
 
 
 def test_pdf_without_route_and_with_optional_sections() -> None:

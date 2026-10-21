@@ -20,6 +20,7 @@ dependencies = [
     "python-multipart",
     "pypdf",
     "fpdf2>=2.8",
+    "pillow",
     "astral>=3.2",
     "tzdata",
 ]

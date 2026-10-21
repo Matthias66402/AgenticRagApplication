@@ -5,7 +5,8 @@ from sqlalchemy.orm import selectinload
 from app.auth.deps import CurrentUser, SessionDep
 from app.export.filename import export_filename
 from app.export.gpx import build_gpx, has_track
-from app.export.pdf import build_pdf
+from app.export.basemap import render_basemap
+from app.export.pdf import build_pdf, map_viewport
 from app.models import Adventure
 from app.schemas.adventure import AdventureCreate, AdventureRead, AdventureSummary, AdventureUpdate
 
@@ -66,10 +67,12 @@ async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep
 
 @router.get("/{adventure_id}/pdf", response_class=Response, responses={200: {"content": {"application/pdf": {}}}})
 async def download_pdf(adventure_id: int, user: CurrentUser, session: SessionDep) -> Response:
-    """Druckbarer Plan als PDF mit Routenskizze, Höhenprofil, Etappen, Packliste und Sicherheitshinweisen."""
+    """Druckbarer Plan als PDF mit Karte, Höhenprofil, Etappen, Packliste und Sicherheitshinweisen."""
     adventure = await get_planned_adventure(session, adventure_id, user.id)
+    # Ohne erreichbaren Tile-Server enthält das PDF Route und Marker ohne Kartenhintergrund
+    basemap = await render_basemap(map_viewport(adventure.plan))
     return Response(
-        content=build_pdf(adventure.plan),
+        content=build_pdf(adventure.plan, basemap),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{export_filename(adventure.title, "pdf")}"'},
     )

@@ -7,7 +7,9 @@ from typing import Any
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
+from PIL import Image
 
+from app.export.basemap import ATTRIBUTION, Viewport, fit_viewport
 from app.export.gpx import ACCOMMODATION_LABELS
 
 # Wird im Dockerfile installiert (fonts-dejavu-core); die PDF-Standardschriften können nur Latin-1
@@ -30,11 +32,12 @@ PRIMARY_SOFT = (232, 239, 255)
 START_COLOR = (234, 88, 12)
 ACCOMMODATION_COLOR = (22, 163, 74)
 
+MARGIN = 18.0
+MAP_WIDTH = 210.0 - 2 * MARGIN  # A4, volle Textbreite
 MAP_HEIGHT = 80.0
 PROFILE_HEIGHT = 38.0
 DAY_COLUMN = 30.0
 EARTH_RADIUS_KM = 6371.0
-KM_PER_DEGREE = 111.32
 
 
 def _num(value: float, unit: str) -> str:
@@ -63,17 +66,32 @@ def _track(plan: dict[str, Any]) -> list[list[float]]:
     return [point for rid in plan.get("route_ids", []) for point in routes.get(rid, [])]
 
 
+def _stage_points(plan: dict[str, Any]) -> list[list[float]]:
+    return [[plan["start"]["lat"], plan["start"]["lon"]]] + [[s["end"]["lat"], s["end"]["lon"]] for s in plan["stages"]]
+
+
+def _accommodations(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    return [s["accommodation"] for s in plan["stages"] if s.get("accommodation")]
+
+
+def map_viewport(plan: dict[str, Any]) -> Viewport:
+    """Kartenausschnitt mit Track, Etappenzielen und Unterkünften; gemeinsam für Hintergrundkarte und Zeichnung."""
+    points = _track(plan) + _stage_points(plan) + [[a["lat"], a["lon"]] for a in _accommodations(plan)]
+    return fit_viewport([(p[0], p[1]) for p in points], MAP_WIDTH / MAP_HEIGHT)
+
+
 def _nice_scale_km(max_km: float) -> float:
     candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
     return max((c for c in candidates if c <= max_km), default=candidates[0])
 
 
 class PlanPdf(FPDF):
-    def __init__(self, plan: dict[str, Any]) -> None:
+    def __init__(self, plan: dict[str, Any], basemap: Image.Image | None) -> None:
         super().__init__(format="A4")
         self.plan = plan
-        self.set_margins(18, 18, 18)
-        self.set_auto_page_break(True, margin=18)
+        self.basemap = basemap
+        self.set_margins(MARGIN, MARGIN, MARGIN)
+        self.set_auto_page_break(True, margin=MARGIN)
         self.add_font(FONT, "", FONT_DIR / "DejaVuSans.ttf")
         self.add_font(FONT, "B", FONT_DIR / "DejaVuSans-Bold.ttf")
         self.set_title(plan["title"])
@@ -145,32 +163,25 @@ class PlanPdf(FPDF):
         self.paragraph(plan.get("summary", ""))
 
     def route_map(self) -> None:
-        """Vereinfachte Übersichtskarte ohne Kacheln: Track (oder Luftlinie zwischen den Etappenzielen) und Marker."""
+        """Übersichtskarte: OSM-Hintergrund (falls geladen), darüber Track bzw. Luftlinie und Marker als Vektoren."""
         plan = self.plan
         track = _track(plan)
-        stage_points = [[plan["start"]["lat"], plan["start"]["lon"]]] + [[s["end"]["lat"], s["end"]["lon"]] for s in plan["stages"]]
-        accommodations = [s["accommodation"] for s in plan["stages"] if s.get("accommodation")]
-        line = track or stage_points
-        bounds = line + stage_points + [[a["lat"], a["lon"]] for a in accommodations]
+        accommodations = _accommodations(plan)
+        line = track or _stage_points(plan)
+        viewport = map_viewport(plan)
 
         self.heading("Routenübersicht")
         self.ensure_space(MAP_HEIGHT + 8)
-        x0, y0, width, height, pad = self.l_margin, self.get_y(), self.epw, MAP_HEIGHT, 8.0
-        self.set_fill_color(*SURFACE)
-        self.set_draw_color(*BORDER)
-        self.rect(x0, y0, width, height, style="DF", round_corners=True, corner_radius=2)
-
-        # Lokale Projektion: Längengrade mit cos(Breite) stauchen, damit die Form stimmt
-        cos_lat = math.cos(math.radians(sum(p[0] for p in bounds) / len(bounds)))
-        xs = [p[1] * cos_lat for p in bounds]
-        ys = [p[0] for p in bounds]
-        span_x, span_y = max(max(xs) - min(xs), 1e-4), max(max(ys) - min(ys), 1e-4)
-        scale = min((width - 2 * pad) / span_x, (height - 2 * pad) / span_y)  # mm pro Grad
-        offset_x = x0 + (width - span_x * scale) / 2
-        offset_y = y0 + (height - span_y * scale) / 2
+        x0, y0, width, height = self.l_margin, self.get_y(), MAP_WIDTH, MAP_HEIGHT
+        if self.basemap:
+            self.image(self.basemap, x0, y0, width, height)
+        else:
+            self.set_fill_color(*SURFACE)
+            self.rect(x0, y0, width, height, style="F")
 
         def project(lat: float, lon: float) -> tuple[float, float]:
-            return offset_x + (lon * cos_lat - min(xs)) * scale, offset_y + (max(ys) - lat) * scale
+            fx, fy = viewport.project(lat, lon)
+            return x0 + fx * width, y0 + fy * height
 
         self.set_draw_color(*PRIMARY)
         self.set_line_width(0.7)
@@ -186,22 +197,12 @@ class PlanPdf(FPDF):
         for stage in plan["stages"]:
             x, y = project(stage["end"]["lat"], stage["end"]["lon"])
             self.marker(x, y, 1.6, PRIMARY)
-            self.style(7, bold=True, color=PRIMARY)
-            self.text(x + 2.2, y - 1.2, str(stage["day"]))
+            self.map_label(x + 2.2, y - 3.6, str(stage["day"]), bold=True, color=PRIMARY)
         self.marker(*project(plan["start"]["lat"], plan["start"]["lon"]), 1.9, START_COLOR)
 
-        # Maßstab unten links
-        km_per_mm = KM_PER_DEGREE / scale
-        bar_km = _nice_scale_km(width / 4 * km_per_mm)
-        bar_mm = bar_km / km_per_mm
-        bx, by = x0 + 4, y0 + height - 4
-        self.set_draw_color(*TEXT)
-        self.set_line_width(0.4)
-        self.line(bx, by, bx + bar_mm, by)
-        self.line(bx, by - 1, bx, by)
-        self.line(bx + bar_mm, by - 1, bx + bar_mm, by)
-        self.style(7, color=TEXT)
-        self.text(bx, by - 1.8, _num(bar_km, "km"))
+        self.set_draw_color(*BORDER)
+        self.set_line_width(0.3)
+        self.rect(x0, y0, width, height)
 
         self.set_y(y0 + height + 2)
         legend = [(START_COLOR, "Start"), (PRIMARY, "Etappenziel (Tag)")]
@@ -215,9 +216,37 @@ class PlanPdf(FPDF):
             self.set_xy(x + 3, self.get_y())
             self.cell(self.get_string_width(label) + 6, 5, label)
             x = self.get_x()
+        self.scale_and_attribution(viewport, y0 + height + 2)
         self.ln(5)
         if not track:
             self.paragraph("Keine berechnete Route – gestrichelt ist die Luftlinie zwischen den Etappenzielen.", size=7.5, color=MUTED)
+
+    def scale_and_attribution(self, viewport: Viewport, y: float) -> None:
+        """Rechts unter der Karte, damit nichts die Route verdeckt: Maßstabsleiste und OSM-Hinweis (ODbL)."""
+        km_per_mm = viewport.meters_per_pixel() * viewport.width / MAP_WIDTH / 1000
+        bar_km = _nice_scale_km(MAP_WIDTH / 5 * km_per_mm)
+        bar_mm = bar_km / km_per_mm
+        self.style(7.5, color=MUTED)
+        parts = [_num(bar_km, "km")] + ([ATTRIBUTION] if self.basemap else [])
+        label = " · ".join(parts)
+        right = self.l_margin + MAP_WIDTH
+        text_x = right - self.get_string_width(label)
+        self.text(text_x, y + 3.6, label)
+        bar_x, bar_y = text_x - 2 - bar_mm, y + 3.2
+        self.set_draw_color(*TEXT)
+        self.set_line_width(0.4)
+        self.line(bar_x, bar_y, bar_x + bar_mm, bar_y)
+        self.line(bar_x, bar_y - 1, bar_x, bar_y)
+        self.line(bar_x + bar_mm, bar_y - 1, bar_x + bar_mm, bar_y)
+
+    def map_label(
+        self, x: float, y: float, text: str, size: float = 7, bold: bool = False, color: tuple[int, int, int] = TEXT
+    ) -> None:
+        """Kurzer Text mit weißem Hintergrund, lesbar auf der Karte; (x, y) ist die linke obere Ecke."""
+        self.style(size, bold=bold, color=color)
+        self.set_fill_color(255, 255, 255)
+        self.set_xy(x, y)
+        self.cell(self.get_string_width(text) + 1, size * 0.45, text, fill=True, align="C")
 
     def marker(self, x: float, y: float, radius: float, color: tuple[int, int, int]) -> None:
         self.set_fill_color(*color)
@@ -328,9 +357,12 @@ class PlanPdf(FPDF):
             self.bullets(plan["sources"], size=8.5, color=MUTED)
 
 
-def build_pdf(plan: dict[str, Any]) -> bytes:
-    """Druckversion des Plans: Überblick, Routenskizze, Höhenprofil, Etappen, Wetter, Packliste, Sicherheit, Quellen."""
-    pdf = PlanPdf(plan)
+def build_pdf(plan: dict[str, Any], basemap: Image.Image | None = None) -> bytes:
+    """Druckversion des Plans: Überblick, Karte, Höhenprofil, Etappen, Wetter, Packliste, Sicherheit, Quellen.
+
+    `basemap` ist der Kartenhintergrund für map_viewport(plan), siehe basemap.render_basemap.
+    """
+    pdf = PlanPdf(plan, basemap)
     pdf.add_page()
     pdf.title_block()
     pdf.route_map()
