@@ -72,11 +72,24 @@ Wikivoyage-Inhalte stehen unter CC BY-SA 4.0: Bei Weitergabe (z. B. in einem öf
 
 Das Einlesen erzeugt Embeddings über `EMBEDDING_MODEL`. Ist der Anbieter nicht erreichbar, wird die Datei trotzdem gespeichert und kann später mit `python -m app.seed` eingelesen werden.
 
+## Retrieval-Qualität messen
+
+`backend/app/evaluation/retrieval_cases.json` enthält Testfragen mit den Abschnitten der Wissensbasis, die sie beantworten, sowie Fragen, die die Wissensbasis nicht beantworten kann. Die Auswertung fragt jede Frage gegen die aktuelle Wissensbasis ab (kostet je Frage ein Embedding):
+
+```bash
+docker compose exec backend python -m app.evaluation.retrieval                          # Kennzahlen ausgeben
+docker compose exec backend python -m app.evaluation.retrieval --output /app/report.json  # zusätzlich als JSON
+docker compose exec backend python -m app.evaluation.retrieval --grade                  # inkl. Relevanzprüfung (LLM)
+```
+
+Kennzahlen: **Hit@1/Hit@4** (relevanter Abschnitt auf Platz 1 bzw. unter den ersten 4, so viele bekommt der Agent), **MRR** (mittlerer Kehrwert des Rangs), **Recall wie im Agenten** (Top 4 und über der Mindestähnlichkeit), **Fehlkontext** (nicht beantwortbare Fragen, für die trotzdem Abschnitte geliefert werden) und ein **Schwellen-Sweep** über die Mindestähnlichkeit. Mit `--grade` kommen Recall und Fehlkontext nach der Relevanzprüfung hinzu. Neue Dokumente sollten mit eigenen Testfragen ergänzt werden, damit Änderungen an Chunking, Suche oder Schwelle vergleichbar bleiben.
+
 ## Konfiguration (`.env`)
 
 | Variable | Bedeutung |
 |---|---|
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
+| `RELEVANCE_MODEL` | Kleines Modell, das die Treffer von `search_knowledge` vor der Weitergabe an den Agenten auf Relevanz prüft (Standard `openai:gpt-4.1-mini`, ein Aufruf je Suche). Leer = nur Mindestähnlichkeit. Bei einem Fehler gehen die Treffer ungeprüft weiter. |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | Bei einem Wechsel: `EMBEDDING_DIM` anpassen, Migration für die Vektorspalte erzeugen, `python -m app.seed --force` |
 | `ORS_API_KEY` | Optional, kostenlos unter openrouteservice.org (Free-Tarif: 200 Routen/Tag). Routing-Kette: ORS → BRouter (ohne Key) → weitere ORS-Profile → Luftlinien-Schätzung. Ohne Key wird direkt BRouter genutzt. |
 | `OVERPASS_URLS` | Kommagetrennte Overpass-Instanzen; nur Ersatz, falls die Unterkunftssuche über Nominatim scheitert |

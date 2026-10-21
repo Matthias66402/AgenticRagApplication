@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     llm_model: str = "openai:gpt-5-mini"
     embedding_model: str = "openai:text-embedding-3-small"
     embedding_dim: int = 1536
+    # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit
+    relevance_model: str = "openai:gpt-4.1-mini"
 
     ors_api_key: str = ""
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"

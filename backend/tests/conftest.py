@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator, Iterator  # noqa: E402
 import httpx  # noqa: E402
 import pytest  # noqa: E402
 from pydantic_ai.embeddings import TestEmbeddingModel  # noqa: E402
+from pydantic_ai.models.test import TestModel  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app.auth.security import hash_password  # noqa: E402
@@ -18,6 +19,7 @@ from app.db import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User, UserRole  # noqa: E402
 from app.rag.embeddings import get_embedder  # noqa: E402
+from app.rag.relevance import get_relevance_agent  # noqa: E402
 
 PASSWORD = "secret-pass-123"
 
@@ -38,6 +40,13 @@ async def dispose_engine() -> AsyncIterator[None]:
 @pytest.fixture(autouse=True)
 def fake_embeddings() -> Iterator[None]:
     with get_embedder().override(model=TestEmbeddingModel(dimensions=get_settings().embedding_dim)):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def keep_all_hits() -> Iterator[None]:
+    """Relevanzprüfung ohne LLM: keine Bewertungen, also bleiben alle Treffer erhalten."""
+    with get_relevance_agent().override(model=TestModel(custom_output_args={"judgements": []})):
         yield
 
 

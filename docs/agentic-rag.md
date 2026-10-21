@@ -127,7 +127,7 @@ Jedes Tool ist eine normale Python-Funktion. PydanticAI erzeugt aus **Docstring 
 
 | Tool | Datei | Quelle | Wann typischerweise |
 |---|---|---|---|
-| `search_knowledge` | `knowledge.py` | **eigene Wissensbasis (RAG)** | Regeln, Tipps, Ausrüstung, Sicherheit |
+| `search_knowledge` | `knowledge.py` | **eigene Wissensbasis (RAG)**: Vektorsuche, Mindestähnlichkeit, Relevanzprüfung durch ein kleines LLM (`rag/relevance.py`) | Regeln, Tipps, Ausrüstung, Sicherheit |
 | `geocode` | `geocode.py` | Nominatim (OSM) | Start, Ziel, Etappenorte |
 | `plan_route` | `routing.py` | OpenRouteService → BRouter → Schätzung | Strecke, Höhenmeter, Werte je Etappe |
 | `find_accommodation` | `accommodation.py` | Nominatim-Kategoriesuche → Overpass | Hütten, Camping, Hotels nahe Etappenenden |
@@ -219,7 +219,7 @@ Der komplette PydanticAI-Nachrichtenverlauf wird als `agent_history` am Abenteue
 | `find_accommodation` | Nominatim; bei Fehler Overpass mit Circuit Breaker (2 min Pause nach Ausfall) |
 | `geocode` | Drosselung auf 1 Anfrage/s (Nominatim-Richtlinie), Cache |
 | `find_train_connections` | Fehler oder fehlende Verbindungen als Tool-Ergebnis; der Agent plant ohne konkrete An- und Abreise weiter |
-| `search_knowledge` | Fehler (z. B. Embedding-Anbieter nicht erreichbar) als Tool-Ergebnis; der Agent plant ohne RAG-Inhalte weiter |
+| `search_knowledge` | Fehler (z. B. Embedding-Anbieter nicht erreichbar) als Tool-Ergebnis; der Agent plant ohne RAG-Inhalte weiter. Fällt die Relevanzprüfung aus, gehen die Treffer ungeprüft weiter |
 
 ---
 

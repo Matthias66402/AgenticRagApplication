@@ -4,6 +4,7 @@ from pydantic_ai import RunContext
 
 from app.agent.deps import AgentDeps
 from app.agent.tools.common import tool_error
+from app.rag.relevance import grade_hits
 from app.rag.retrieve import search_chunks
 
 
@@ -24,4 +25,11 @@ async def search_knowledge(ctx: RunContext[AgentDeps], query: str) -> list[dict[
         return tool_error(f"Wissensbasis nicht verfügbar: {exc}")
     if not chunks:
         return tool_error("Nichts Passendes in der Wissensbasis gefunden.")
-    return [c.model_dump() for c in chunks]
+    graded = await grade_hits(query, chunks)
+    if not graded.kept:
+        titles = ", ".join(dict.fromkeys(f"„{c.document}“" for c in graded.discarded))
+        return tool_error(
+            f"Die Wissensbasis enthält dazu nichts Passendes (gefunden, aber unpassend: {titles}). "
+            "Anders formulieren oder ohne diese Informationen planen und im Plan darauf hinweisen."
+        )
+    return [c.model_dump() for c in graded.kept]
