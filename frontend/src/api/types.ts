@@ -39,6 +39,16 @@ export interface Stage {
   notes?: string | null;
 }
 
+export interface Attribution {
+  publisher: string;
+  title: string;
+  url: string;
+  revision_date: string;
+  history_url: string;
+  license: string;
+  license_url: string;
+}
+
 export interface AdventurePlan {
   title: string;
   summary: string;
@@ -55,6 +65,8 @@ export interface AdventurePlan {
   packing_tips: string[];
   safety_notes: string[];
   sources: string[];
+  /** Namensnennung für genutzte Wissensbasis-Inhalte (z. B. Wikivoyage, CC BY-SA); fehlt bei alten Plänen */
+  attributions?: Attribution[];
 }
 
 export interface ToolCall {

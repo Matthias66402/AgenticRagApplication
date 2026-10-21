@@ -9,14 +9,42 @@ import unicodedata
 from dataclasses import dataclass
 
 import httpx
+from pydantic import BaseModel
 
 API_URL = "https://{lang}.wikivoyage.org/w/api.php"
-LICENSE = "CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/deed.de)"
+LICENSE_NAME = "CC BY-SA 4.0"
+LICENSE_URL = "https://creativecommons.org/licenses/by-sa/4.0/deed.de"
+LICENSE = f"{LICENSE_NAME} ({LICENSE_URL})"
+
+# Kopfzeile, die fetch_article jedem Artikel voranstellt; parse_attribution liest sie wieder aus
+ATTRIBUTION_RE = re.compile(
+    r"^> Quelle: (?P<publisher>Wikivoyage), Artikel „(?P<title>.+?)“ \((?P<url>\S+)\), "
+    r"Version vom (?P<revision_date>\d{4}-\d{2}-\d{2})\. Autoren: siehe (?P<history_url>\S+)\. "
+    r"Lizenz: (?P<license>.+?) \((?P<license_url>\S+)\)\.$",
+    re.MULTILINE,
+)
 
 # Abschnitte ohne Nutzen für die Tourenplanung (Linklisten, Literaturangaben)
 SKIP_SECTIONS = {"literatur", "weblinks", "einzelnachweise", "anmerkungen", "quellen", "further reading", "external links"}
 
 SECTION_RE = re.compile(r"^(={2,6})\s*(.*?)\s*\1\s*$")
+
+
+class Attribution(BaseModel):
+    """Namensnennung nach CC BY-SA: Titel, Link, Autoren (Versionsgeschichte), Lizenz mit Link."""
+
+    publisher: str
+    title: str
+    url: str
+    revision_date: str
+    history_url: str
+    license: str
+    license_url: str
+
+
+def parse_attribution(text: str) -> Attribution | None:
+    match = ATTRIBUTION_RE.search(text)
+    return Attribution(**match.groupdict()) if match else None
 
 
 class ArticleNotFound(Exception):

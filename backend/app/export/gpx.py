@@ -36,6 +36,13 @@ def build_gpx(plan: dict[str, Any]) -> str:
     metadata = ET.SubElement(gpx, "metadata")
     ET.SubElement(metadata, "name").text = plan["title"]
     ET.SubElement(metadata, "desc").text = plan.get("summary", "")
+    # Namensnennung für genutzte Wissensbasis-Inhalte (z. B. Wikivoyage, CC BY-SA)
+    for attribution in plan.get("attributions", []):
+        link = ET.SubElement(metadata, "link", href=attribution["url"])
+        ET.SubElement(link, "text").text = (
+            f"{attribution['publisher']}: „{attribution['title']}“, Version vom {attribution['revision_date']}, "
+            f"Autoren: {attribution['history_url']}, Lizenz: {attribution['license']} ({attribution['license_url']})"
+        )
 
     start = plan["start"]
     _add_waypoint(gpx, start["lat"], start["lon"], f"Start: {_short(start['name'])}", plan["start_date"], "Flag, Green")

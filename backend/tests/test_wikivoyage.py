@@ -2,7 +2,7 @@ import httpx
 import pytest
 import respx
 
-from app.rag.wikivoyage import API_URL, ArticleNotFound, extract_to_markdown, fetch_article
+from app.rag.wikivoyage import API_URL, ArticleNotFound, extract_to_markdown, fetch_article, parse_attribution
 from app.seed import wikivoyage as cli
 
 EXTRACT = """Einleitung zum Radweg.
@@ -66,6 +66,28 @@ async def test_fetch_article_adds_source_and_license() -> None:
     assert article.markdown.startswith("# Testradweg\n\n> Quelle: Wikivoyage")
     assert "Version vom 2026-10-03" in article.markdown
     assert "?action=history" in article.markdown and "CC BY-SA 4.0" in article.markdown
+
+    # Die Kopfzeile lässt sich für die Quellenangabe im Plan wieder auslesen
+    attribution = parse_attribution(article.markdown)
+    assert attribution is not None
+    assert attribution.title == "Testradweg"
+    assert attribution.url == "https://de.wikivoyage.org/wiki/Testradweg"
+    assert attribution.history_url == "https://de.wikivoyage.org/wiki/Testradweg?action=history"
+    assert attribution.revision_date == "2026-10-03"
+    assert attribution.license == "CC BY-SA 4.0"
+
+
+def test_parse_attribution_with_parentheses_in_url() -> None:
+    header = (
+        "> Quelle: Wikivoyage, Artikel „Rhein (Fluss)“ (https://de.wikivoyage.org/wiki/Rhein_(Fluss)), "
+        "Version vom 2026-01-02. Autoren: siehe https://de.wikivoyage.org/wiki/Rhein_(Fluss)?action=history. "
+        "Lizenz: CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/deed.de)."
+    )
+    attribution = parse_attribution(f"# Rhein (Fluss)\n\n{header}\n\nText")
+    assert attribution is not None
+    assert attribution.url == "https://de.wikivoyage.org/wiki/Rhein_(Fluss)"
+    assert attribution.license_url == "https://creativecommons.org/licenses/by-sa/4.0/deed.de"
+    assert parse_attribution("# Eigenes Dokument\n\nOhne Lizenzzeile") is None
 
 
 @respx.mock

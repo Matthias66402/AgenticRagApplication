@@ -14,6 +14,7 @@ from app.auth.deps import CurrentUser, SessionDep
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Adventure, AdventureStatus, ChatMessage
+from app.rag.attribution import knowledge_attributions, merge_attributions
 from app.schemas.adventure import ChatRequest
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -23,8 +24,10 @@ def sse(event: dict[str, Any]) -> str:
     return f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
-def build_stored_plan(outcome: RunOutcome, deps: AgentDeps, previous: dict[str, Any] | None) -> dict[str, Any]:
-    """Plan + Routengeometrien für die Karte. Geometrien früherer Läufe bleiben erhalten."""
+def build_stored_plan(
+    outcome: RunOutcome, deps: AgentDeps, previous: dict[str, Any] | None, attributions: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Plan + Routengeometrien für die Karte + Quellenangaben. Geometrien und Quellen früherer Läufe bleiben erhalten."""
     assert outcome.plan is not None
     known_routes = (previous or {}).get("routes", {}) | deps.routes
     route_ids = [rid for rid in outcome.plan.route_ids if rid in known_routes]
@@ -34,6 +37,7 @@ def build_stored_plan(outcome: RunOutcome, deps: AgentDeps, previous: dict[str, 
     return outcome.plan.model_dump(mode="json") | {
         "route_ids": route_ids,
         "routes": {rid: known_routes[rid] for rid in route_ids},
+        "attributions": merge_attributions((previous or {}).get("attributions", []), attributions or []),
     }
 
 
@@ -62,7 +66,8 @@ async def save_outcome(adventure_id: int, user_message: str, outcome: RunOutcome
         if outcome.history_json is not None:
             adventure.agent_history = outcome.history_json
         if outcome.plan is not None:
-            adventure.plan = build_stored_plan(outcome, deps, adventure.plan)
+            attributions = await knowledge_attributions(session, adventure.agent_history or [])
+            adventure.plan = build_stored_plan(outcome, deps, adventure.plan, attributions)
             adventure.title = outcome.plan.title
             adventure.status = AdventureStatus.planned
         await session.commit()

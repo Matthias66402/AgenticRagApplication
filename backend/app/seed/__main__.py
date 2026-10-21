@@ -1,4 +1,5 @@
-"""Legt den Admin-Nutzer an und liest die Beispieldokumente in die Wissensbasis ein.
+"""Legt den Admin-Nutzer an, liest die Beispieldokumente in die Wissensbasis ein und ergänzt fehlende
+Quellenangaben in bestehenden Plänen.
 
 Aufruf: ``python -m app.seed`` (idempotent; ``--force`` liest vorhandene Dokumente neu ein).
 """
@@ -12,7 +13,8 @@ from sqlalchemy import select
 from app.auth.security import hash_password
 from app.config import get_settings
 from app.db import SessionLocal, engine
-from app.models import Document, User, UserRole
+from app.models import Adventure, Document, User, UserRole
+from app.rag.attribution import knowledge_attributions
 from app.rag.ingest import ingest_document
 
 DOCUMENTS_DIR = Path(__file__).parent / "documents"
@@ -47,10 +49,26 @@ async def seed_documents(force: bool = False) -> None:
             print(f"  eingelesen: {path.name} ({len(document.chunks)} Abschnitte)")
 
 
+async def backfill_attributions() -> None:
+    """Pläne aus der Zeit vor der Quellenangabe: genutzte Wikivoyage-Artikel aus dem Agent-Verlauf ergänzen."""
+    async with SessionLocal() as session:
+        adventures = await session.scalars(select(Adventure).where(Adventure.plan.is_not(None)))
+        updated = 0
+        for adventure in adventures:
+            if "attributions" in adventure.plan:
+                continue
+            attributions = await knowledge_attributions(session, adventure.agent_history or [])
+            adventure.plan = adventure.plan | {"attributions": attributions}
+            updated += 1
+        await session.commit()
+        print(f"Quellenangaben ergänzt: {updated} Pläne")
+
+
 async def main() -> None:
     await seed_admin()
     print("Wissensbasis:")
     await seed_documents(force="--force" in sys.argv)
+    await backfill_attributions()
     await engine.dispose()
 
 

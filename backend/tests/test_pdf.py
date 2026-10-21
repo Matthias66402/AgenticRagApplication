@@ -82,17 +82,41 @@ def test_fit_viewport_single_point() -> None:
     assert viewport.zoom == basemap.MAX_ZOOM
 
 
+ATTRIBUTION_ENTRY = {
+    "publisher": "Wikivoyage", "title": "Rhein (Fluss)",
+    "url": "https://de.wikivoyage.org/wiki/Rhein_(Fluss)", "revision_date": "2026-01-02",
+    "history_url": "https://de.wikivoyage.org/wiki/Rhein_(Fluss)?action=history",
+    "license": "CC BY-SA 4.0", "license_url": "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
+}  # fmt: skip
+
+
 def test_pdf_without_route_and_with_optional_sections() -> None:
     plan = PLAN | {
         "route_ids": [], "routes": {},
         "weather_summary": "Sonnig, 12 °C", "packing_tips": ["Stirnlampe"],
-        "safety_notes": ["Notruf 112"], "sources": ["Open-Meteo"],
+        "safety_notes": ["Notruf 112"], "sources": ["Open-Meteo"], "attributions": [ATTRIBUTION_ENTRY],
     }  # fmt: skip
-    text = pdf_text(build_pdf(plan))
+    content = build_pdf(plan)
+    text = pdf_text(content)
     assert "Höhenprofil" not in text
     assert "Luftlinie" in text
     for expected in ("Wetter", "Sonnig, 12 °C", "Packliste & Tipps", "Stirnlampe", "Sicherheit & Regeln", "Quellen"):
         assert expected in text
+
+    # Namensnennung nach CC BY-SA, mit klickbaren Links auf Artikel, Versionsgeschichte und Lizenz
+    assert "„Rhein (Fluss)“ – Wikivoyage, Version vom 02.01.2026" in text
+    assert "zusammengefasst und bearbeitet" in text
+    assert "CC BY-SA 4.0" in text
+    links = {
+        annotation.get_object()["/A"]["/URI"]
+        for page in PdfReader(io.BytesIO(content)).pages
+        for annotation in page.get("/Annots", [])
+    }
+    assert {
+        "https://de.wikivoyage.org/wiki/Rhein_(Fluss)",
+        "https://de.wikivoyage.org/wiki/Rhein_%28Fluss%29?action=history",
+        "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
+    } <= links
 
 
 def test_pdf_handles_long_plans_across_pages() -> None:

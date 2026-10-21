@@ -68,7 +68,7 @@ docker compose exec backend python -m app.seed.wikivoyage --no-ingest "Donauradw
 docker compose exec backend python -m app.seed.wikivoyage --dry-run "Allgäu"         # nur anzeigen
 ```
 
-Wikivoyage-Inhalte stehen unter CC BY-SA 4.0: Bei Weitergabe (z. B. in einem öffentlichen Repository) müssen Quelle und Lizenz genannt bleiben, Bearbeitungen stehen unter derselben Lizenz. Der Kopf jeder importierten Datei enthält die nötigen Angaben.
+Wikivoyage-Inhalte stehen unter CC BY-SA 4.0: Bei Weitergabe (z. B. in einem öffentlichen Repository) müssen Quelle und Lizenz genannt bleiben, Bearbeitungen stehen unter derselben Lizenz. Der Kopf jeder importierten Datei enthält die nötigen Angaben. Nutzt der Agent einen solchen Artikel für einen Plan, landet die vollständige Quellenangabe (Artikel, Version, Autoren über die Versionsgeschichte, Lizenz, Hinweis auf Bearbeitung) automatisch im Plan, in der Planansicht, im PDF und in den GPX-Metadaten. Ermittelt wird das aus dem Agent-Verlauf (`backend/app/rag/attribution.py`), nicht aus der Freitext-Quellenliste des LLM. Für ältere Pläne ergänzt `python -m app.seed` die Angaben.
 
 Das Einlesen erzeugt Embeddings über `EMBEDDING_MODEL`. Ist der Anbieter nicht erreichbar, wird die Datei trotzdem gespeichert und kann später mit `python -m app.seed` eingelesen werden.
 

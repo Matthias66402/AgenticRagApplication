@@ -4,6 +4,7 @@ import datetime as dt
 import math
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
@@ -78,6 +79,11 @@ def map_viewport(plan: dict[str, Any]) -> Viewport:
     """Kartenausschnitt mit Track, Etappenzielen und Unterkünften; gemeinsam für Hintergrundkarte und Zeichnung."""
     points = _track(plan) + _stage_points(plan) + [[a["lat"], a["lon"]] for a in _accommodations(plan)]
     return fit_viewport([(p[0], p[1]) for p in points], MAP_WIDTH / MAP_HEIGHT)
+
+
+def _markdown_url(url: str) -> str:
+    """Klammern kodieren, sonst endet der Markdown-Link von fpdf2 zu früh (z. B. bei „Ort_(Region)“)."""
+    return url.replace("(", "%28").replace(")", "%29")
 
 
 def _nice_scale_km(max_km: float) -> float:
@@ -352,9 +358,40 @@ class PlanPdf(FPDF):
         if plan.get("safety_notes"):
             self.heading("Sicherheit & Regeln")
             self.bullets(plan["safety_notes"])
-        if plan.get("sources"):
+        if plan.get("sources") or plan.get("attributions"):
             self.heading("Quellen")
-            self.bullets(plan["sources"], size=8.5, color=MUTED)
+            self.bullets(plan.get("sources", []), size=8.5, color=MUTED)
+            self.attributions(plan.get("attributions", []))
+
+    def attributions(self, attributions: list[dict[str, Any]]) -> None:
+        """Namensnennung für lizenzierte Wissensbasis-Inhalte (CC BY-SA): Titel, Link, Autoren, Lizenz, Änderungen."""
+        if not attributions:
+            return
+        self.ensure_space(30)  # Einleitung nicht ohne ersten Eintrag am Seitenende
+        self.ln(2)
+        self.paragraph(
+            "Für diesen Plan wurden Inhalte der folgenden Artikel zusammengefasst und bearbeitet. "
+            "Sie stehen unter der jeweils genannten Lizenz.",
+            size=8.5,
+            color=MUTED,
+        )
+        for attribution in attributions:
+            self.ensure_space(15)
+            self.ln(1.5)
+            revision = dt.date.fromisoformat(attribution["revision_date"])
+            self.style(9, bold=True)
+            self.multi_cell(
+                0, 4.5, f"„{attribution['title']}“ – {attribution['publisher']}, Version vom {revision:%d.%m.%Y}",
+                link=attribution["url"], align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+            )  # fmt: skip
+            self.paragraph(unquote(attribution["url"]), size=8, color=PRIMARY, link=attribution["url"])
+            self.style(8, color=MUTED)
+            self.multi_cell(
+                0, 4, f"Autoren: [Versionsgeschichte]({_markdown_url(attribution['history_url'])}) · "
+                f"Lizenz: [{attribution['license']}]({_markdown_url(attribution['license_url'])}) "
+                f"({attribution['license_url'].removeprefix('https://')})",
+                markdown=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT,
+            )  # fmt: skip
 
 
 def build_pdf(plan: dict[str, Any], basemap: Image.Image | None = None) -> bytes:

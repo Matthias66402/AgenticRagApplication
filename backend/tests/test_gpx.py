@@ -6,6 +6,7 @@ from sqlalchemy import select
 from app.agent.tools.routing import simplify_track
 from app.db import SessionLocal
 from app.export.filename import export_filename
+from app.export.gpx import build_gpx
 from app.models import Adventure, AdventureStatus, User
 from tests.conftest import auth_headers, create_user
 
@@ -70,6 +71,19 @@ async def test_gpx_download(client: httpx.AsyncClient, user_headers: dict[str, s
     assert len(points) == 3
     assert points[1].get("lat") == "47.440000"
     assert points[1].findtext("g:ele", namespaces=NS) == "912.5"
+
+
+
+def test_gpx_names_wikivoyage_sources() -> None:
+    attribution = {
+        "publisher": "Wikivoyage", "title": "Testradweg", "url": "https://de.wikivoyage.org/wiki/Testradweg",
+        "revision_date": "2026-10-03", "history_url": "https://de.wikivoyage.org/wiki/Testradweg?action=history",
+        "license": "CC BY-SA 4.0", "license_url": "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
+    }  # fmt: skip
+    root = ET.fromstring(build_gpx(PLAN | {"attributions": [attribution]}))
+    link = root.find("g:metadata/g:link", NS)
+    assert link is not None and link.get("href") == attribution["url"]
+    assert "CC BY-SA 4.0" in link.findtext("g:text", namespaces=NS)
 
 
 async def test_gpx_without_route_has_only_waypoints(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

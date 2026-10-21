@@ -49,6 +49,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
   const hasTrack = plan.route_ids.some((id) => (plan.routes?.[id]?.length ?? 0) > 0);
   const profile = useMemo(() => buildProfile(plan), [plan]);
   const [hovered, setHovered] = useState<ProfilePoint | null>(null);
+  const attributions = plan.attributions ?? [];
 
   return (
     <article className="plan">
@@ -162,7 +163,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           </ul>
         </section>
       )}
-      {plan.sources.length > 0 && (
+      {(plan.sources.length > 0 || attributions.length > 0) && (
         <section>
           <h3>Quellen</h3>
           <ul className="muted small">
@@ -170,6 +171,31 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
               <li key={i}>{t}</li>
             ))}
           </ul>
+          {attributions.length > 0 && (
+            <div className="attributions small">
+              <p className="muted">
+                Für diesen Plan wurden Inhalte der folgenden Artikel zusammengefasst und bearbeitet. Sie stehen unter
+                der jeweils genannten Lizenz.
+              </p>
+              <ul>
+                {attributions.map((a) => (
+                  <li key={a.url}>
+                    <a href={a.url} target="_blank" rel="noreferrer">
+                      „{a.title}“
+                    </a>{" "}
+                    – {a.publisher}, Version vom {formatDate(a.revision_date)} ·{" "}
+                    <a href={a.history_url} target="_blank" rel="noreferrer">
+                      Autoren
+                    </a>{" "}
+                    · Lizenz:{" "}
+                    <a href={a.license_url} target="_blank" rel="noreferrer license">
+                      {a.license}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
       )}
     </article>
