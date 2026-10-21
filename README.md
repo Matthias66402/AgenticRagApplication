@@ -26,7 +26,7 @@ cd frontend && npm install && npm run dev            # http://localhost:5180
 - Anmeldung mit `ADMIN_EMAIL` / `ADMIN_PASSWORD` aus der `.env`. Neue Nutzer können sich auch selbst registrieren.
 - API-Dokumentation: http://localhost:8010/docs
 
-> **Warum läuft das Backend im Container?** Auf diesem Windows-Rechner blockiert die Anwendungssteuerung (Smart App Control) die nativen Postgres-Treiber (`asyncpg`, `psycopg`) und die Cython-Module von SQLAlchemy. Im Linux-Container tritt das nicht auf. Der Ordner `backend/` ist per Volume eingebunden, Codeänderungen werden also sofort neu geladen.
+> **Warum läuft das Backend im Container?** Auf manchen Windows-Rechnern blockiert die Anwendungssteuerung (Smart App Control) die nativen Postgres-Treiber (`asyncpg`, `psycopg`) und die Cython-Module von SQLAlchemy. Im Linux-Container tritt das nicht auf. Der Ordner `backend/` ist per Volume eingebunden, Codeänderungen werden also sofort neu geladen.
 
 ## Tests
 
