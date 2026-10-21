@@ -1,7 +1,5 @@
 """Export eines gespeicherten Abenteuerplans als GPX 1.1."""
 
-import re
-import unicodedata
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -72,8 +70,3 @@ def build_gpx(plan: dict[str, Any]) -> str:
     ET.indent(gpx)
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + ET.tostring(gpx, encoding="unicode")
 
-
-def gpx_filename(title: str) -> str:
-    ascii_title = unicodedata.normalize("NFKD", title.replace("ß", "ss")).encode("ascii", "ignore").decode()
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", ascii_title).strip("-").lower()[:80]
-    return f"{slug or 'abenteuer'}.gpx"

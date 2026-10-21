@@ -221,10 +221,11 @@ td.actions { text-align: right; white-space: nowrap; }
   .stage { grid-template-columns: 1fr; gap: 4px; }
 }
 
-/* GPX-Download */
+/* Downloads (PDF, GPX) */
 .plan-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .plan-title h2 { margin: 0; }
-.gpx { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.gpx button { white-space: nowrap; font-size: 0.9rem; }
-.gpx button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
-.gpx .error { margin: 0; padding: 2px 8px; }
+.downloads { display: flex; gap: 8px; align-items: flex-start; }
+.download { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.download button { white-space: nowrap; font-size: 0.9rem; }
+.download button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.download .error { margin: 0; padding: 2px 8px; }

@@ -113,7 +113,7 @@ Der `model_validator` in `AdventurePlan` erzwingt fachliche Regeln:
 - Bei mehrtägigen Touren ist `accommodation_type` Pflicht.
 - Es gibt genau eine Etappe pro Tag.
 
-Verstößt das LLM dagegen, erhält es die Pydantic-Fehlermeldung und korrigiert sich. So entsteht immer ein **strukturierter, validierter** Plan statt Freitext, und Frontend, Karte und GPX-Export können sich darauf verlassen.
+Verstößt das LLM dagegen, erhält es die Pydantic-Fehlermeldung und korrigiert sich. So entsteht immer ein **strukturierter, validierter** Plan statt Freitext, und Frontend, Karte, GPX- und PDF-Export können sich darauf verlassen.
 
 ---
 
@@ -139,7 +139,7 @@ Jedes Tool ist eine normale Python-Funktion. PydanticAI erzeugt aus **Docstring 
 
 Jedes Tool erhält über `ctx.deps` den HTTP-Client, eine DB-Session-Factory, die Einstellungen und das heutige Datum. Eine Factory statt einer einzelnen Session ist nötig, weil Tools parallel laufen können.
 
-`AgentDeps.routes` sammelt die Routengeometrien. Sie gehen **nicht** ans LLM, das würde nur Tokens kosten. Das LLM bekommt eine `route_id` und trägt sie in `AdventurePlan.route_ids` ein. Der Server ordnet beim Speichern die Geometrie zu, für Karte und GPX-Export.
+`AgentDeps.routes` sammelt die Routengeometrien. Sie gehen **nicht** ans LLM, das würde nur Tokens kosten. Das LLM bekommt eine `route_id` und trägt sie in `AdventurePlan.route_ids` ein. Der Server ordnet beim Speichern die Geometrie zu, für Karte, GPX- und PDF-Export.
 
 ### Fehler als Ergebnis
 

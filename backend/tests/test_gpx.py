@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.agent.tools.routing import simplify_track
 from app.db import SessionLocal
-from app.export.gpx import gpx_filename
+from app.export.filename import export_filename
 from app.models import Adventure, AdventureStatus, User
 from tests.conftest import auth_headers, create_user
 
@@ -101,7 +101,8 @@ def test_simplify_track_keeps_corners_and_drops_straight_points() -> None:
     assert simplified[1] == straight[-1]
 
 
-def test_gpx_filename() -> None:
-    assert gpx_filename("Radtour Ulm → Lindau (Camping)") == "radtour-ulm-lindau-camping.gpx"
-    assert gpx_filename("Straße über'n Paß") == "strasse-uber-n-pass.gpx"
-    assert gpx_filename("→→→") == "abenteuer.gpx"
+def test_export_filename() -> None:
+    assert export_filename("Radtour Ulm → Lindau (Camping)", "gpx") == "radtour-ulm-lindau-camping.gpx"
+    assert export_filename("Straße über'n Paß", "gpx") == "strasse-uber-n-pass.gpx"
+    assert export_filename("→→→", "gpx") == "abenteuer.gpx"
+    assert export_filename("Radtour", "pdf") == "radtour.pdf"

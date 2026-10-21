@@ -7,7 +7,15 @@ import { RouteMap } from "./RouteMap";
 const num = (value: number | null | undefined, unit: string) =>
   value === null || value === undefined ? null : `${value.toLocaleString("de-DE", { maximumFractionDigits: 1 })} ${unit}`;
 
-function GpxButton({ adventureId, hasTrack }: { adventureId: number; hasTrack: boolean }) {
+interface DownloadButtonProps {
+  path: string;
+  fallbackName: string;
+  label: string;
+  busyLabel: string;
+  title: string;
+}
+
+function DownloadButton({ path, fallbackName, label, busyLabel, title }: DownloadButtonProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -15,7 +23,7 @@ function GpxButton({ adventureId, hasTrack }: { adventureId: number; hasTrack: b
     setBusy(true);
     setError(null);
     try {
-      await downloadFile(`/api/adventures/${adventureId}/gpx`, "abenteuer.gpx");
+      await downloadFile(path, fallbackName);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -24,13 +32,9 @@ function GpxButton({ adventureId, hasTrack }: { adventureId: number; hasTrack: b
   }
 
   return (
-    <div className="gpx">
-      <button
-        onClick={download}
-        disabled={busy}
-        title={hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"}
-      >
-        {busy ? "Erstelle GPX …" : hasTrack ? "⬇ GPX herunterladen" : "⬇ GPX (nur Wegpunkte)"}
+    <div className="download">
+      <button onClick={download} disabled={busy} title={title}>
+        {busy ? busyLabel : label}
       </button>
       {error && <span className="error small">{error}</span>}
     </div>
@@ -47,7 +51,22 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
       <header>
         <div className="plan-title">
           <h2>{plan.title}</h2>
-          <GpxButton adventureId={adventureId} hasTrack={hasTrack} />
+          <div className="downloads">
+            <DownloadButton
+              path={`/api/adventures/${adventureId}/pdf`}
+              fallbackName="abenteuer.pdf"
+              label="⬇ PDF"
+              busyLabel="Erstelle PDF …"
+              title="Druckversion mit Routenskizze, Höhenprofil, Etappen und Packliste"
+            />
+            <DownloadButton
+              path={`/api/adventures/${adventureId}/gpx`}
+              fallbackName="abenteuer.gpx"
+              label={hasTrack ? "⬇ GPX" : "⬇ GPX (nur Wegpunkte)"}
+              busyLabel="Erstelle GPX …"
+              title={hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"}
+            />
+          </div>
         </div>
         <div className="chips">
           <span className="chip">{TRANSPORT_LABELS[plan.transport]}</span>
