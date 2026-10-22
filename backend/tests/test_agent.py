@@ -220,6 +220,77 @@ async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: d
     assert seen_history[1] > seen_history[0]
 
 
+async def test_agent_knows_home_and_default_transport(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    instructions: list[str] = []
+
+    def respond(messages: list[ModelMessage]) -> Step:
+        instructions.append(messages[-1].instructions or "")
+        return ("ask_user", {"question": "Wann?"})
+
+    with planner_agent.override(model=streaming_model(respond)):
+        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Tour"})
+        profile = {"home_address": "Nelkenstraße 10", "home_city": "26121 Oldenburg", "default_transport": "cycling"}
+        await client.patch("/api/users/me", headers=user_headers, json=profile)
+        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Morgen"})
+
+    assert "Profil-Vorgaben des Nutzers" not in instructions[0]
+    assert "Profil-Vorgaben des Nutzers" in instructions[1]
+    assert "- Wohnadresse: Nelkenstraße 10, 26121 Oldenburg." in instructions[1]
+    assert "- Standard-Fortbewegungsart: Radtour (transport=cycling)." in instructions[1]
+
+
+async def set_default_transport(client: httpx.AsyncClient, headers: dict[str, str], transport: str | None) -> None:
+    await client.patch("/api/users/me", headers=headers, json={"default_transport": transport})
+
+
+async def test_default_transport_instead_of_question(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Mit Standard-Fortbewegungsart geht eine Rückfrage nach dem Verkehrsmittel an das Modell zurück."""
+    await set_default_transport(client, user_headers, "cycling")
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    model = scripted_model(
+        ("ask_user", {"question": "Wie möchtest Du fahren?", "missing_fields": ["transport"]}),
+        ("ask_user", {"question": "Wann geht es los?", "missing_fields": ["start_date"]}),
+    )
+    with planner_agent.override(model=model):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Von Osnabrück nach Hause fahren"}
+        )
+    assert parse_sse(response.text)[-2]["question"] == "Wann geht es los?"
+
+
+@respx.mock
+async def test_default_transport_instead_of_train_answer(
+    client: httpx.AsyncClient, user_headers: dict[str, str]
+) -> None:
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    connection_args = {
+        "from_name": "Osnabrück", "from_lat": 52.27, "from_lon": 8.06,
+        "to_name": "Oldenburg", "to_lat": 53.14, "to_lon": 8.21, "date": TOMORROW.isoformat(),
+    }  # fmt: skip
+    steps = [
+        ("find_train_connections", connection_args),
+        ("answer_user", {"message": "Der RE9 ist am schnellsten."}),
+        ("ask_user", {"question": "Wann startest Du?", "missing_fields": ["start_date"]}),
+    ]
+
+    async def ask(message: str) -> list[dict[str, Any]]:
+        adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+        with planner_agent.override(model=scripted_model(*steps)):
+            response = await client.post(
+                f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": message}
+            )
+        return parse_sse(response.text)
+
+    # Ohne Verkehrsmittel und mit Standard Radtour ist eine reine Bahnauskunft unerwünscht
+    await set_default_transport(client, user_headers, "cycling")
+    assert (await ask("Morgen von Osnabrück nach Hause fahren"))[-2]["type"] == "question"
+    # Nennt der Nutzer die Bahn bzw. hat er keine Vorgabe, bleibt die Bahnauskunft
+    assert (await ask("Morgen mit der Bahn von Osnabrück nach Hause"))[-2]["type"] == "answer"
+    await set_default_transport(client, user_headers, None)
+    assert (await ask("Morgen von Osnabrück nach Hause fahren"))[-2]["type"] == "answer"
+
+
 @respx.mock
 async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     """Route berechnet, dann Rückfrage; der Plan im nächsten Lauf verweist auf diese route_id und zeigt ihre Geometrie."""

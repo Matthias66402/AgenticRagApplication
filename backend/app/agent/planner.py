@@ -1,4 +1,8 @@
-from pydantic_ai import Agent, ModelRetry, ModelResponse, RunContext, Tool, ToolCallPart, ToolOutput
+import re
+
+from pydantic_ai import (
+    Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, UserPromptPart,
+)  # fmt: skip
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, TextAnswer
@@ -13,6 +17,14 @@ from app.config import get_settings
 
 PlannerOutput = AdventurePlan | ClarificationQuestion | TextAnswer
 
+# Bezeichnungen der Profil-Vorgabe für die Anweisungen (app.schemas.user.DefaultTransport)
+TRANSPORT_LABELS = {"hiking": "Wandern", "cycling": "Radtour"}
+# Hinweis auf eine gewünschte Fahrt mit öffentlichen Verkehrsmitteln (nicht in "Fahrbahn", "Fährverbindung" o. Ä.)
+PUBLIC_TRANSPORT_WORDS = re.compile(
+    r"\b(zug|züge[n]?|bahn|bahnhof|s-bahn|bus|busse[n]?|öpnv|nahverkehr|ice|ic|rb|re|regionalzug|regionalbahn)\b",
+    re.IGNORECASE,
+)
+
 # Ausgaben im strict-Modus: Ohne Constrained Decoding hängt gpt-5-mini gelegentlich zehntausende Leerzeichen an
 # die JSON-Argumente an und braucht dafür Minuten. Das Tokenlimit fängt solche Ausreißer zusätzlich ab
 # (ein normaler Plan inkl. Reasoning braucht 2.000-5.000 Tokens).
@@ -25,12 +37,16 @@ Du planst mit dem Nutzer ein "Abenteuer" und antwortest immer auf Deutsch.
 ## Pflichtangaben
 Fortbewegungsart, Startdatum, Dauer in Tagen, Start, Ziel. Bei mehr als einem Tag zusätzlich die Übernachtungsart
 (hut, camping, hotel, hostel, bivouac). Bei einer Rundtour ist das Ziel gleich dem Start.
+Nennt der Nutzer keine Fortbewegungsart bzw. keinen Start, gelten seine Profil-Vorgaben (siehe unten, falls
+vorhanden). Ein allgemeines "fahren" ohne Verkehrsmittel ist dann eine Tour mit der Standard-Fortbewegungsart.
 Fehlt eine Pflichtangabe oder ist sie mehrdeutig, rufe `ask_user` auf: eine freundliche Rückfrage, die alle offenen
 Punkte auf einmal klärt. Rate keine Pflichtangaben. Optionale Details (Fitness, Budget) darfst Du sinnvoll annehmen.
 Relative Angaben wie "nächstes Wochenende" löst Du anhand des heutigen Datums auf.
 
 ## Reine Bahnauskunft
-Fragt der Nutzer nur nach einer Zug- bzw. ÖPNV-Verbindung ohne Tour, erstelle keinen Abenteuerplan:
+Nur wenn der Nutzer ausdrücklich Zug, Bahn, Bus bzw. ÖPNV nennt und keine Tour möchte. Sätze wie "nach Hause
+fahren" oder "von A nach B fahren" ohne Verkehrsmittel sind keine Bahnauskunft, wenn er eine
+Standard-Fortbewegungsart hat: dann eine Tour damit planen. Bei einer Bahnauskunft erstelle keinen Abenteuerplan:
 `geocode` für beide Bahnhöfe (z. B. "Augsburg Hbf", sofern der Nutzer keine Adresse nennt; fehlen Datum oder
 Uhrzeit, per `ask_user` nachfragen), einmal `find_train_connections`, dann `answer_user` mit einer kurzen Einordnung
 (z. B. schnellste Verbindung, wenige Umstiege). Die Verbindungen werden automatisch unter Deiner Antwort angezeigt;
@@ -75,7 +91,9 @@ Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig.
 - Übernimm die `route_id` der finalen Route(n) in `route_ids`.
 - Gibt der Nutzer später Änderungswünsche, passe den bestehenden Plan an und gib ihn vollständig neu aus.
 - Rufe ein Tool nicht mehrfach mit denselben Argumenten auf; das Ergebnis ändert sich nicht.
-- Gib das Ergebnis immer über `final_plan`, `ask_user` oder (nur ohne Tour) `answer_user` aus.
+- Gib das Ergebnis immer über `final_plan`, `ask_user` oder (nur ohne Tour) `answer_user` aus. Sobald alle
+  Pflichtangaben einer Tour bekannt sind, gib den Plan aus, statt nur Eckdaten zu nennen oder nachzufragen, ob
+  ein Plan gewünscht ist.
 """
 
 
@@ -87,6 +105,37 @@ def used_tool(ctx: RunContext[AgentDeps], tool_name: str) -> bool:
         if isinstance(message, ModelResponse)
         for part in message.parts
     )
+
+
+def mentions_public_transport(ctx: RunContext[AgentDeps]) -> bool:
+    """Hat der Nutzer in einer seiner Nachrichten Zug, Bahn, Bus oder ÖPNV erwähnt?"""
+    return any(
+        PUBLIC_TRANSPORT_WORDS.search(part.content)
+        for message in ctx.messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+    )
+
+
+def check_default_transport(ctx: RunContext[AgentDeps], output: PlannerOutput) -> None:
+    """Mit Standard-Fortbewegungsart im Profil wird ohne genanntes Verkehrsmittel weder danach gefragt noch nur eine
+    Bahnauskunft gegeben (das Modell deutet z. B. "nach Hause fahren" sonst gern als Zugfahrt)."""
+    transport = ctx.deps.default_transport
+    if not transport or mentions_public_transport(ctx):
+        return
+    label = TRANSPORT_LABELS.get(transport, transport)
+    if isinstance(output, ClarificationQuestion) and "transport" in output.missing_fields:
+        raise ModelRetry(
+            f"Der Nutzer hat kein Verkehrsmittel genannt, seine Standard-Fortbewegungsart ist {label} "
+            f"(transport={transport}). Frage nicht danach, sondern plane damit; frage höchstens nach anderen "
+            "fehlenden Pflichtangaben."
+        )
+    if isinstance(output, TextAnswer) and used_tool(ctx, "find_train_connections"):
+        raise ModelRetry(
+            f"Der Nutzer hat weder Zug noch Bahn genannt, also ist das keine Bahnauskunft. Plane eine Tour mit seiner "
+            f"Standard-Fortbewegungsart {label} (transport={transport})."
+        )
 
 
 def build_agent() -> Agent[AgentDeps, PlannerOutput]:
@@ -123,11 +172,23 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
 
     @agent.instructions
     def current_context(ctx: RunContext[AgentDeps]) -> str:
-        return f"Heute ist {ctx.deps.today.isoformat()} ({ctx.deps.today:%A}). Der Nutzer heißt {ctx.deps.user_name}."
+        deps = ctx.deps
+        lines = [f"Heute ist {deps.today.isoformat()} ({deps.today:%A}). Der Nutzer heißt {deps.user_name}."]
+        if deps.home or deps.default_transport:
+            lines.append("Profil-Vorgaben des Nutzers (gelten, wenn er nichts anderes nennt; frage dann nicht danach):")
+        if deps.home:
+            lines.append(
+                f"- Wohnadresse: {deps.home}. Start bzw. Abfahrtsort und Ziel bei \"nach Hause\" (per `geocode` suchen)."
+            )
+        if deps.default_transport:
+            label = TRANSPORT_LABELS.get(deps.default_transport, deps.default_transport)
+            lines.append(f"- Standard-Fortbewegungsart: {label} (transport={deps.default_transport}).")
+        return "\n".join(lines)
 
     @agent.output_validator
     def check_plausibility(ctx: RunContext[AgentDeps], output: PlannerOutput) -> PlannerOutput:
         """Selbstprüfung: Unplausible Pläne gehen mit konkretem Hinweis zurück an das Modell."""
+        check_default_transport(ctx, output)
         if not isinstance(output, AdventurePlan):
             return output
         if not used_tool(ctx, "search_knowledge"):

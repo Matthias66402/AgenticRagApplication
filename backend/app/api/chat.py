@@ -90,6 +90,8 @@ async def chat(
     # Routen aus früheren Läufen ohne Plan: Der Agent verweist im Plan oft auf eine schon berechnete route_id
     pending_routes = dict(adventure.pending_routes or {})
     user_name = user.display_name
+    home = ", ".join(part for part in (user.home_address, user.home_city) if part) or None
+    default_transport = user.default_transport
     # Die Request-Session wird nicht in den Stream mitgenommen; Tools und Speichern öffnen eigene Sessions.
     await session.close()
 
@@ -98,8 +100,9 @@ async def chat(
         outcome = RunOutcome()
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as http:
             deps = AgentDeps(
-                settings=settings, http=http, session_factory=SessionLocal, user_name=user_name, routes=pending_routes
-            )
+                settings=settings, http=http, session_factory=SessionLocal, user_name=user_name, routes=pending_routes,
+                home=home, default_transport=default_transport,
+            )  # fmt: skip
             async with aclosing(run_planner(data.message, history, deps, outcome)) as events:
                 async for event in events:
                     if await request.is_disconnected():

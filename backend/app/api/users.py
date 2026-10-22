@@ -5,13 +5,17 @@ from app.api.auth import ensure_email_free
 from app.auth.deps import AdminUser, CurrentUser, SessionDep
 from app.auth.security import hash_password
 from app.models import User, UserRole
-from app.schemas.user import UserAdminUpdate, UserCreate, UserRead, UserSelfUpdate
+from app.schemas.user import CLEARABLE_FIELDS, UserAdminUpdate, UserCreate, UserRead, UserSelfUpdate
 
 router = APIRouter(prefix="/api/users", tags=["users"])
 
 
 async def apply_update(session: SessionDep, user: User, data: UserSelfUpdate) -> User:
-    changes = data.model_dump(exclude_unset=True, exclude_none=True)
+    changes = {
+        field: value
+        for field, value in data.model_dump(exclude_unset=True).items()
+        if value is not None or field in CLEARABLE_FIELDS
+    }
     if "email" in changes:
         await ensure_email_free(session, changes["email"], exclude_user_id=user.id)
         changes["email"] = changes["email"].lower()

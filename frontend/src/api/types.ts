@@ -7,7 +7,13 @@ export interface User {
   role: Role;
   is_active: boolean;
   created_at: string;
+  home_address: string | null;
+  home_city: string | null;
+  default_transport: DefaultTransport | null;
 }
+
+/** Im Profil wählbare Standard-Fortbewegungsarten */
+export type DefaultTransport = Extract<TransportMode, "hiking" | "cycling">;
 
 export interface Place {
   name: string;

@@ -39,6 +39,31 @@ async def test_self_update_cannot_change_role(client: httpx.AsyncClient, user_he
     assert response.json()["role"] == "user"
 
 
+async def test_profile_home_and_default_transport(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    profile = {"home_address": " Nelkenstraße 10 ", "home_city": "26121 Oldenburg", "default_transport": "cycling"}
+    response = await client.patch("/api/users/me", headers=user_headers, json=profile)
+    assert response.status_code == 200
+    me = response.json()
+    assert (me["home_address"], me["home_city"], me["default_transport"]) == (
+        "Nelkenstraße 10", "26121 Oldenburg", "cycling",
+    )  # fmt: skip
+
+    # Andere Änderungen lassen die Angaben stehen; "" bzw. null leert sie
+    response = await client.patch("/api/users/me", headers=user_headers, json={"display_name": "Ute"})
+    assert response.json()["home_city"] == "26121 Oldenburg"
+    response = await client.patch(
+        "/api/users/me", headers=user_headers, json={"home_address": "", "default_transport": None}
+    )
+    assert (response.json()["home_address"], response.json()["default_transport"]) == (None, None)
+    assert response.json()["home_city"] == "26121 Oldenburg"
+
+    # Nur Wandern und Radtour sind als Standard wählbar; Name und E-Mail lassen sich nicht leeren
+    for invalid in ({"default_transport": "car"}, {"display_name": ""}):
+        assert (await client.patch("/api/users/me", headers=user_headers, json=invalid)).status_code == 422
+    response = await client.patch("/api/users/me", headers=user_headers, json={"display_name": None})
+    assert response.json()["display_name"] == "Ute"
+
+
 async def test_requires_login(client: httpx.AsyncClient) -> None:
     assert (await client.get("/api/users/me")).status_code == 401
 

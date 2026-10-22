@@ -19,6 +19,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(100))
+    # Optionale Vorgaben für die Planung: Wohnadresse als Start bzw. Abfahrtsort, Fortbewegungsart ohne Angabe
+    home_address: Mapped[str | None] = mapped_column(String(200))  # Straße und Hausnummer
+    home_city: Mapped[str | None] = mapped_column(String(100))  # PLZ und Ort
+    default_transport: Mapped[str | None] = mapped_column(String(20))
     role: Mapped[str] = mapped_column(String(20), default=UserRole.user)
     is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
