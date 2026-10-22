@@ -133,11 +133,29 @@ class AdventurePlan(BaseModel):
         return self
 
 
+# Art des gespeicherten Plans (Adventure.plan["kind"])
+PLAN_KIND_TOUR = "tour"
+PLAN_KIND_TRAIN_TRIP = "train_trip"
+
+
+class TrainTripPlan(BaseModel):
+    """Reisekarte für eine reine Bahnfahrt ohne Tour, z. B. die vom Nutzer gewählte Verbindung einer Bahnauskunft."""
+
+    title: str = Field(max_length=200, description='z. B. "Bahnfahrt Oldenburg → Bremen"')
+    summary: str = Field(
+        description="Ein Satz mit Ziel, Tag, Abfahrts- und Ankunftszeit; Linien, Umstiege und Fußwege zeigt die "
+        "Verbindung darunter, nicht wiederholen"
+    )
+    outbound_journey: Journey = Field(description="Gewählte Hinfahrt, unverändert aus find_train_connections")
+    return_journey: Journey | None = Field(default=None, description="Rückfahrt, nur wenn gesucht und gewünscht")
+
+
 class TextAnswer(BaseModel):
     """Antwort ohne Abenteuerplan, z. B. eine reine Bahnverbindungsauskunft."""
 
     message: str = Field(
-        description="Kurze Antwort. Gefundene Bahnverbindungen werden automatisch darunter angezeigt, nicht wiederholen."
+        description="Kurze Antwort. Bahnverbindungen aus find_train_connections-Aufrufen dieser Nachricht werden "
+        "automatisch darunter angezeigt, nicht wiederholen."
     )
 
 

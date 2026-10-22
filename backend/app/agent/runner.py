@@ -19,7 +19,7 @@ from pydantic_ai import (
 from pydantic_ai.exceptions import AgentRunError
 
 from app.agent.deps import AgentDeps
-from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
+from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
 from app.agent.planner import planner_agent
 from app.agent.tools.transit import format_train_queries
 
@@ -31,7 +31,7 @@ USAGE_LIMITS = UsageLimits(request_limit=40)
 class RunOutcome:
     """Wird während des Streams befüllt und danach vom Aufrufer gespeichert."""
 
-    plan: AdventurePlan | None = None
+    plan: AdventurePlan | TrainTripPlan | None = None
     question: ClarificationQuestion | None = None
     # Antwort ohne Plan, inkl. der in diesem Lauf gefundenen Bahnverbindungen
     answer: str | None = None
@@ -80,7 +80,7 @@ async def run_planner(
                 elif isinstance(event, AgentRunResultEvent):
                     output = event.result.output
                     outcome.history_json = json.loads(event.result.all_messages_json())
-                    if isinstance(output, AdventurePlan):
+                    if isinstance(output, (AdventurePlan, TrainTripPlan)):
                         outcome.plan = output
                     elif isinstance(output, ClarificationQuestion):
                         outcome.question = output

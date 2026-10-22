@@ -62,6 +62,7 @@ run_planner()                                 agent/runner.py
 │   → find_train_connections(...)   falls An-/Abreise per Bahn  │
 │   → final_plan(AdventurePlan) | ask_user(Frage)               │
 │     | answer_user(Text, z. B. reine Bahnauskunft)             │
+│     | final_train_trip(Reisekarte zur gewählten Verbindung)   │
 │                                                               │
 │ Validierung schlägt fehl? → Fehlertext zurück ans LLM,        │
 │   es korrigiert sich und gibt erneut aus                      │
@@ -84,7 +85,7 @@ Alle Pfade beziehen sich auf `backend/app/`.
 |---|---|
 | `INSTRUCTIONS` | System-Prompt: Pflichtangaben, empfohlenes Vorgehen, Regeln (z. B. „Unterkünfte nur aus Tool-Ergebnissen“, „Etappenenden sind reale Orte“) |
 | `build_agent()` | Erzeugt den PydanticAI-`Agent` mit Modell aus `LLM_MODEL`, den Tools und den beiden möglichen Ausgaben |
-| `ToolOutput(..., name="final_plan")` / `ToolOutput(..., name="ask_user")` / `ToolOutput(..., name="answer_user")` | Die drei Wege, die Schleife zu beenden: fertiger Plan, Rückfrage oder Antwort ohne Plan (z. B. reine Bahnauskunft). Was zutrifft, entscheidet der Agent selbst. Bei `answer_user` hängt das Backend die gefundenen Bahnverbindungen formatiert an, das LLM muss sie nicht abschreiben. |
+| `ToolOutput(..., name="final_plan")` / `ToolOutput(..., name="final_train_trip")` / `ToolOutput(..., name="ask_user")` / `ToolOutput(..., name="answer_user")` | Die vier Wege, die Schleife zu beenden: fertiger Plan, Reisekarte einer reinen Bahnfahrt, Rückfrage oder Antwort ohne Plan (z. B. reine Bahnauskunft). Was zutrifft, entscheidet der Agent selbst. Bei `answer_user` hängt das Backend die in diesem Lauf gefundenen Bahnverbindungen formatiert an, das LLM muss sie nicht abschreiben. Die Reisekarte akzeptiert der Validator nur mit Verbindungen, die `find_train_connections` tatsächlich geliefert hat. |
 | `@agent.instructions` → `current_context()` | Gibt bei jedem Lauf das heutige Datum und den Nutzernamen mit, damit Angaben wie „nächsten Samstag“ aufgelöst werden können |
 | `@agent.output_validator` → `check_plausibility()` | Selbstprüfung vor der Ausgabe (siehe unten) |
 | `used_tool()` | Prüft im Nachrichtenverlauf, ob ein bestimmtes Tool schon aufgerufen wurde |

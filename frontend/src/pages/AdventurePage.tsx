@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, json, streamChat } from "../api/client";
-import type { Adventure, AdventurePlan, ChatEvent, ToolCall } from "../api/types";
+import type { Adventure, ChatEvent, StoredPlan, ToolCall } from "../api/types";
 import { LinkedText } from "../components/LinkedText";
 import { PlanCard } from "../components/PlanCard";
 import { ToolCallBadge } from "../components/ToolCallBadge";
+import { TrainTripCard } from "../components/TrainTripCard";
 
 interface LiveMessage {
   content: string;
@@ -21,7 +22,7 @@ const EXAMPLES = [
 export function AdventurePage() {
   const id = Number(useParams().id);
   const [adventure, setAdventure] = useState<Adventure | null>(null);
-  const [plan, setPlan] = useState<AdventurePlan | null>(null);
+  const [plan, setPlan] = useState<StoredPlan | null>(null);
   const [input, setInput] = useState("");
   const [pendingUser, setPendingUser] = useState<string | null>(null);
   const [live, setLive] = useState<LiveMessage | null>(null);
@@ -219,7 +220,9 @@ export function AdventurePage() {
       </section>
 
       <section className="plan-pane">
-        {plan ? (
+        {plan?.kind === "train_trip" ? (
+          <TrainTripCard plan={plan} />
+        ) : plan ? (
           <PlanCard plan={plan} adventureId={id} />
         ) : (
           <div className="plan-placeholder muted">

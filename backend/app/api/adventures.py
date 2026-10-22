@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.agent.plan_schema import PLAN_KIND_TRAIN_TRIP
 from app.auth.deps import CurrentUser, SessionDep
 from app.export.filename import export_filename
 from app.export.gpx import build_gpx, has_track
@@ -26,9 +27,14 @@ async def get_owned_adventure(session: SessionDep, adventure_id: int, user_id: i
 
 
 async def get_planned_adventure(session: SessionDep, adventure_id: int, user_id: int) -> Adventure:
+    """Abenteuer mit Tourplan für die Exporte; Reisekarten reiner Bahnfahrten haben weder Route noch Etappen."""
     adventure = await get_owned_adventure(session, adventure_id, user_id)
     if not adventure.plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Abenteuer gibt es noch keinen Plan")
+    if adventure.plan.get("kind") == PLAN_KIND_TRAIN_TRIP:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Für Bahnfahrten gibt es keinen PDF- oder GPX-Export"
+        )
     return adventure
 
 

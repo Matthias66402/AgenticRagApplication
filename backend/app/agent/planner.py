@@ -1,13 +1,14 @@
 import re
 
 from pydantic_ai import (
-    Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, UserPromptPart,
+    Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, ToolReturnPart,
+    UserPromptPart,
 )  # fmt: skip
 from pydantic_ai.profiles.openai import openai_model_profile
 from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
-from app.agent.plan_schema import MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, TextAnswer
+from app.agent.plan_schema import MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.knowledge import search_knowledge
@@ -17,7 +18,7 @@ from app.agent.tools.transit import find_train_connections
 from app.agent.tools.weather import get_weather
 from app.config import get_settings
 
-PlannerOutput = AdventurePlan | ClarificationQuestion | TextAnswer
+PlannerOutput = AdventurePlan | TrainTripPlan | ClarificationQuestion | TextAnswer
 
 # Bezeichnungen der Profil-Vorgabe für die Anweisungen (app.schemas.user.DefaultTransport)
 TRANSPORT_LABELS = {"hiking": "Wandern", "cycling": "Radtour"}
@@ -26,6 +27,9 @@ PUBLIC_TRANSPORT_WORDS = re.compile(
     r"\b(zug|züge[n]?|bahn|bahnhof|s-bahn|bus|busse[n]?|öpnv|nahverkehr|ice|ic|rb|re|regionalzug|regionalbahn)\b",
     re.IGNORECASE,
 )
+
+# Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
+SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
 
 # Ausgaben im strict-Modus: Ohne Constrained Decoding hängt gpt-5-mini gelegentlich zehntausende Leerzeichen an
 # die JSON-Argumente an und braucht dafür Minuten. Das Tokenlimit fängt solche Ausreißer zusätzlich ab
@@ -62,8 +66,13 @@ Standard-Fortbewegungsart hat: dann eine Tour damit planen. Bei einer Bahnauskun
 `geocode` für beide Bahnhöfe (z. B. "Augsburg Hbf", sofern der Nutzer keine Adresse nennt; fehlen Datum oder
 Uhrzeit, per `ask_user` nachfragen), einmal `find_train_connections`, dann `answer_user` mit einer kurzen Einordnung
 (z. B. schnellste Verbindung, wenige Umstiege). Die Verbindungen werden automatisch unter Deiner Antwort angezeigt;
-liste sie nicht erneut auf. Biete höchstens an, was Deine Tools können (andere Uhrzeit, Rückfahrt, eine Tour am
-Zielort), keine Buchung, Favoriten oder Suche nach Fahrradmitnahme.
+liste sie nicht erneut auf. Das gilt nur für Abfragen in derselben Nachricht: Ohne neuen Aufruf von
+`find_train_connections` erscheint nichts unter der Antwort. Biete höchstens an, was Deine Tools können (andere
+Uhrzeit, Rückfahrt, Reisekarte zu einer Verbindung, eine Tour am Zielort), keine Buchung, Favoriten oder Suche nach
+Fahrradmitnahme.
+Wählt der Nutzer eine Verbindung aus oder möchte er einen Plan bzw. eine Übersicht seiner Bahnfahrt, gib eine
+Reisekarte über `final_train_trip` aus: die gewählte Verbindung unverändert aus dem `find_train_connections`-Ergebnis
+(auch aus früheren Nachrichten) übernehmen, eine Rückfahrt nur, wenn sie gesucht wurde und gewünscht ist.
 
 ## Vorgehen, sobald alles bekannt ist
 Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig.
@@ -103,9 +112,9 @@ Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig.
 - Übernimm die `route_id` der finalen Route(n) in `route_ids`.
 - Gibt der Nutzer später Änderungswünsche, passe den bestehenden Plan an und gib ihn vollständig neu aus.
 - Rufe ein Tool nicht mehrfach mit denselben Argumenten auf; das Ergebnis ändert sich nicht.
-- Gib das Ergebnis immer über `final_plan`, `ask_user` oder (nur ohne Tour) `answer_user` aus. Sobald alle
-  Pflichtangaben einer Tour bekannt sind, gib den Plan aus, statt nur Eckdaten zu nennen oder nachzufragen, ob
-  ein Plan gewünscht ist.
+- Gib das Ergebnis immer über `final_plan`, `ask_user` oder (nur ohne Tour) `final_train_trip` bzw. `answer_user`
+  aus. Sobald alle Pflichtangaben einer Tour bekannt sind, gib den Plan aus, statt nur Eckdaten zu nennen oder
+  nachzufragen, ob ein Plan gewünscht ist.
 """
 
 
@@ -143,10 +152,48 @@ def check_default_transport(ctx: RunContext[AgentDeps], output: PlannerOutput) -
             f"(transport={transport}). Frage nicht danach, sondern plane damit; frage höchstens nach anderen "
             "fehlenden Pflichtangaben."
         )
-    if isinstance(output, TextAnswer) and used_tool(ctx, "find_train_connections"):
+    if isinstance(output, (TextAnswer, TrainTripPlan)) and used_tool(ctx, "find_train_connections"):
         raise ModelRetry(
             f"Der Nutzer hat weder Zug noch Bahn genannt, also ist das keine Bahnauskunft. Plane eine Tour mit seiner "
             f"Standard-Fortbewegungsart {label} (transport={transport})."
+        )
+
+
+def found_connections(ctx: RunContext[AgentDeps]) -> set[tuple[str, str]]:
+    """Abfahrt und Ankunft aller Verbindungen aus `find_train_connections` im Verlauf (inkl. früherer Nachrichten)."""
+    return {
+        (connection["departure"], connection["arrival"])
+        for message in ctx.messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "find_train_connections"
+        and isinstance(part.content, dict)
+        for connection in part.content.get("connections", [])
+    }  # fmt: skip
+
+
+def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> None:
+    """Die Reisekarte zeigt nur Verbindungen, die die Fahrplanauskunft tatsächlich geliefert hat."""
+    known = found_connections(ctx)
+    for label, journey in (("Hinfahrt", output.outbound_journey), ("Rückfahrt", output.return_journey)):
+        if journey is None:
+            continue
+        if (journey.departure, journey.arrival) not in known:
+            raise ModelRetry(
+                f"Die {label} ({journey.departure} → {journey.arrival}) stammt aus keinem `find_train_connections`-"
+                "Ergebnis. Übernimm eine gefundene Verbindung unverändert oder frage die Verbindung neu ab."
+            )
+        if journey.departure[:10] < ctx.deps.today.isoformat():
+            raise ModelRetry(f"Die {label} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+
+
+def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:
+    """Verbindungen hängt das Backend nur an, wenn sie in diesem Lauf abgefragt wurden (siehe runner)."""
+    if not ctx.deps.train_queries and SHOWN_BELOW.search(output.message):
+        raise ModelRetry(
+            "Unter Deiner Antwort wird nichts angezeigt, weil Du in dieser Nachricht keine Verbindung abgefragt hast. "
+            "Verweise nicht auf \"unten\". Möchte der Nutzer eine Verbindung sehen, gib eine Reisekarte über "
+            "`final_train_trip` aus oder frage die Verbindungen mit `find_train_connections` erneut ab."
         )
 
 
@@ -159,6 +206,12 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             ToolOutput(AdventurePlan, name="final_plan", description="Fertigen Abenteuerplan ausgeben", strict=True),
             ToolOutput(
                 ClarificationQuestion, name="ask_user", description="Rückfrage an den Nutzer stellen", strict=True
+            ),
+            ToolOutput(
+                TrainTripPlan,
+                name="final_train_trip",
+                description="Reisekarte für eine reine Bahnfahrt ohne Tour ausgeben, z. B. zur gewählten Verbindung",
+                strict=True,
             ),
             ToolOutput(
                 TextAnswer,
@@ -202,6 +255,10 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
     def check_plausibility(ctx: RunContext[AgentDeps], output: PlannerOutput) -> PlannerOutput:
         """Selbstprüfung: Unplausible Pläne gehen mit konkretem Hinweis zurück an das Modell."""
         check_default_transport(ctx, output)
+        if isinstance(output, TextAnswer):
+            check_connections_shown(ctx, output)
+        if isinstance(output, TrainTripPlan):
+            check_train_trip(ctx, output)
         if not isinstance(output, AdventurePlan):
             return output
         if not used_tool(ctx, "search_knowledge"):

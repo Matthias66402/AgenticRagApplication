@@ -211,6 +211,59 @@ async def test_train_connection_answer_without_plan(client: httpx.AsyncClient, u
     assert stored["messages"][1]["content"] == answer
 
 
+@respx.mock
+async def test_train_trip_card_for_chosen_connection(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Folgenachricht "Plan für Verbindung 1": Reisekarte statt Verweis auf nicht angezeigte Verbindungen."""
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    args = {
+        "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
+        "to_name": "Garmisch-Partenkirchen", "to_lat": 47.49, "to_lon": 11.1, "date": TOMORROW.isoformat(),
+    }  # fmt: skip
+
+    def chosen(messages: list[ModelMessage]) -> dict[str, Any]:
+        return next(
+            part.content["connections"][0]
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "find_train_connections"
+        )
+
+    def trip(journey: dict[str, Any]) -> dict[str, Any]:
+        return {"title": "Bahnfahrt München → Garmisch", "summary": "Mit dem RB6.", "outbound_journey": journey}
+
+    steps: list[Callable[[list[ModelMessage]], Step]] = [
+        lambda _: ("find_train_connections", args),
+        lambda _: ("answer_user", {"message": "Die Verbindungen siehst Du unten."}),
+        # Folgenachricht ohne neue Abfrage: Verweis auf "unten" und erfundene Verbindung gehen zurück an das Modell
+        lambda _: ("answer_user", {"message": "Die Details siehst Du unten."}),
+        lambda _: ("final_train_trip", trip(JOURNEY)),
+        lambda messages: ("final_train_trip", trip(chosen(messages))),
+    ]
+    calls = iter(steps)
+
+    async def send(message: str) -> list[dict[str, Any]]:
+        response = await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": message})
+        return parse_sse(response.text)
+
+    with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
+        first = await send("Zug morgen")
+        second = await send("Plan für Verbindung 1")
+
+    assert first[-2]["type"] == "answer" and "🚆 München → Garmisch-Partenkirchen" in first[-2]["content"]
+    assert [e["type"] for e in second][-2:] == ["plan", "done"], second
+    plan = second[-2]["plan"]
+    assert plan["kind"] == "train_trip"
+    assert plan["outbound_journey"]["legs"][0]["line"] == "RB74"  # erste gefundene, nicht die erfundene Verbindung
+
+    stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
+    assert stored["status"] == "planned" and stored["title"] == "Bahnfahrt München → Garmisch"
+    assert stored["plan"]["kind"] == "train_trip"
+    for export in ("pdf", "gpx"):
+        response = await client.get(f"/api/adventures/{adventure['id']}/{export}", headers=user_headers)
+        assert response.status_code == 409
+
+
 async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     seen_history: list[int] = []

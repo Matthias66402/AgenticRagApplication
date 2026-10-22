@@ -64,3 +64,15 @@ export function JourneyCard({ label, journey }: { label: string; journey: Journe
     </div>
   );
 }
+
+export function TransitNote() {
+  return (
+    <p className="muted small">
+      Fahrplandaten:{" "}
+      <a href="https://transitous.org" target="_blank" rel="noreferrer">
+        Transitous
+      </a>{" "}
+      · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise in der Fahrplanauskunft prüfen.
+    </p>
+  );
+}

@@ -76,6 +76,8 @@ export interface Attribution {
 }
 
 export interface AdventurePlan {
+  /** Fehlt bei älteren Plänen */
+  kind?: "tour";
   title: string;
   summary: string;
   transport: TransportMode;
@@ -97,6 +99,17 @@ export interface AdventurePlan {
   /** Namensnennung für genutzte Wissensbasis-Inhalte (z. B. Wikivoyage, CC BY-SA); fehlt bei alten Plänen */
   attributions?: Attribution[];
 }
+
+/** Reisekarte für eine reine Bahnfahrt ohne Tour (keine Etappen, kein PDF/GPX) */
+export interface TrainTripPlan {
+  kind: "train_trip";
+  title: string;
+  summary: string;
+  outbound_journey: Journey;
+  return_journey?: Journey | null;
+}
+
+export type StoredPlan = AdventurePlan | TrainTripPlan;
 
 export interface ToolCall {
   id: string;
@@ -123,7 +136,7 @@ export interface AdventureSummary {
 }
 
 export interface Adventure extends AdventureSummary {
-  plan: AdventurePlan | null;
+  plan: StoredPlan | null;
   messages: ChatMessage[];
 }
 
@@ -141,6 +154,6 @@ export type ChatEvent =
   | { type: "tool_result"; id: string; result: string; failed: boolean }
   | { type: "question"; question: string; missing_fields: string[] }
   | { type: "answer"; content: string }
-  | { type: "plan"; plan: AdventurePlan }
+  | { type: "plan"; plan: StoredPlan }
   | { type: "error"; message: string }
   | { type: "done" };

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from app.agent.deps import AgentDeps
+from app.agent.plan_schema import PLAN_KIND_TOUR, PLAN_KIND_TRAIN_TRIP, TrainTripPlan
 from app.agent.runner import RunOutcome, run_planner
 from app.api.adventures import get_owned_adventure
 from app.auth.deps import CurrentUser, SessionDep
@@ -28,14 +29,20 @@ def sse(event: dict[str, Any]) -> str:
 def build_stored_plan(
     outcome: RunOutcome, deps: AgentDeps, previous: dict[str, Any] | None, attributions: list[dict[str, Any]] | None = None
 ) -> dict[str, Any]:
-    """Plan + Routengeometrien für die Karte + Quellenangaben. Geometrien und Quellen früherer Läufe bleiben erhalten."""
+    """Plan + Routengeometrien für die Karte + Quellenangaben. Geometrien und Quellen früherer Läufe bleiben erhalten.
+
+    `kind` unterscheidet Touren von Reisekarten reiner Bahnfahrten (ältere Pläne ohne `kind` sind Touren).
+    """
     assert outcome.plan is not None
+    if isinstance(outcome.plan, TrainTripPlan):
+        return outcome.plan.model_dump(mode="json") | {"kind": PLAN_KIND_TRAIN_TRIP}
     known_routes = (previous or {}).get("routes", {}) | deps.routes
     route_ids = [rid for rid in outcome.plan.route_ids if rid in known_routes]
     if not route_ids and deps.routes:
         # Modell hat route_ids vergessen → die zuletzt berechnete Route ist in der Regel die finale
         route_ids = [list(deps.routes)[-1]]
     return outcome.plan.model_dump(mode="json") | {
+        "kind": PLAN_KIND_TOUR,
         "route_ids": route_ids,
         "routes": {rid: known_routes[rid] for rid in route_ids},
         "attributions": merge_attributions((previous or {}).get("attributions", []), attributions or []),
