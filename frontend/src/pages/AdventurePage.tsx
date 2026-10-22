@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import { Link, useParams } from "react-router-dom";
 import { api, json, streamChat } from "../api/client";
 import type { Adventure, AdventurePlan, ChatEvent, ToolCall } from "../api/types";
+import { LinkedText } from "../components/LinkedText";
 import { PlanCard } from "../components/PlanCard";
 import { ToolCallBadge } from "../components/ToolCallBadge";
 
@@ -157,7 +158,7 @@ export function AdventurePage() {
           {messages.map((m) =>
             m.role === "user" ? (
               <div key={m.id} className="msg user">
-                {m.content}
+                <LinkedText text={m.content} />
               </div>
             ) : (
               <div key={m.id} className="msg assistant">
@@ -169,17 +170,27 @@ export function AdventurePage() {
                     ))}
                   </details>
                 )}
-                <div className="msg-text">{m.content}</div>
+                <div className="msg-text">
+                  <LinkedText text={m.content} />
+                </div>
               </div>
             ),
           )}
-          {pendingUser && <div className="msg user">{pendingUser}</div>}
+          {pendingUser && (
+            <div className="msg user">
+              <LinkedText text={pendingUser} />
+            </div>
+          )}
           {live && (
             <div className="msg assistant live">
               {live.tool_calls.map((c) => (
                 <ToolCallBadge key={c.id} call={c} />
               ))}
-              {live.content && <div className="msg-text">{live.content}</div>}
+              {live.content && (
+                <div className="msg-text">
+                  <LinkedText text={live.content} />
+                </div>
+              )}
               {live.error && <p className="error">{live.error}</p>}
               {!live.content && !live.error && (
                 <div className="muted small thinking">

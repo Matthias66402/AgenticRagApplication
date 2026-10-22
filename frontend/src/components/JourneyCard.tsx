@@ -1,5 +1,6 @@
 import type { Journey } from "../api/types";
 import { formatDate } from "../lib/labels";
+import { LinkedText } from "./LinkedText";
 
 // Zeiten kommen als Ortszeit ohne Zeitzone ("2026-10-24T07:36") und werden nicht umgerechnet
 const time = (iso: string) => iso.slice(11, 16);
@@ -55,7 +56,11 @@ export function JourneyCard({ label, journey }: { label: string; journey: Journe
           );
         })}
       </ol>
-      {journey.notes && <p className="small">{journey.notes}</p>}
+      {journey.notes && (
+        <p className="small">
+          <LinkedText text={journey.notes} />
+        </p>
+      )}
     </div>
   );
 }

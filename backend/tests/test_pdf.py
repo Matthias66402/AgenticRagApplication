@@ -107,16 +107,39 @@ def test_pdf_without_route_and_with_optional_sections() -> None:
     assert "„Rhein (Fluss)“ – Wikivoyage, Version vom 02.01.2026" in text
     assert "zusammengefasst und bearbeitet" in text
     assert "CC BY-SA 4.0" in text
-    links = {
-        annotation.get_object()["/A"]["/URI"]
-        for page in PdfReader(io.BytesIO(content)).pages
-        for annotation in page.get("/Annots", [])
-    }
     assert {
         "https://de.wikivoyage.org/wiki/Rhein_(Fluss)",
         "https://de.wikivoyage.org/wiki/Rhein_%28Fluss%29?action=history",
         "https://creativecommons.org/licenses/by-sa/4.0/deed.de",
-    } <= links
+    } <= pdf_links(content)
+
+
+def pdf_links(content: bytes) -> set[str]:
+    return {
+        annotation.get_object()["/A"]["/URI"]
+        for page in PdfReader(io.BytesIO(content)).pages
+        for annotation in page.get("/Annots", [])
+    }
+
+
+def test_pdf_turns_urls_in_plan_texts_into_links() -> None:
+    stage = PLAN["stages"][0] | {"notes": "Fähre ab Bensersiel (https://www.siw-spiekeroog.de/fahrplan)."}
+    plan = PLAN | {
+        "stages": [stage, *PLAN["stages"][1:]],
+        "packing_tips": ["Packliste: [Rad-Checkliste](https://example.org/liste_(rad)) -- **nicht** vergessen"],
+        "safety_notes": ["Gezeiten: www.bsh.de/gezeiten prüfen"],
+        "sources": ["Fahrplan Langeoog https://www.schiffahrt-langeoog.de"],
+    }
+    content = build_pdf(plan)
+    text = pdf_text(content)
+    assert "https://www.siw-spiekeroog.de/fahrplan)." in text.replace("\n", "")
+    assert "Rad-Checkliste -- **nicht** vergessen" in text
+    assert {
+        "https://www.siw-spiekeroog.de/fahrplan",
+        "https://example.org/liste_%28rad%29",
+        "https://www.bsh.de/gezeiten",
+        "https://www.schiffahrt-langeoog.de",
+    } <= pdf_links(content)
 
 
 def test_pdf_handles_long_plans_across_pages() -> None:

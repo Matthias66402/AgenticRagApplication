@@ -2,6 +2,7 @@
 
 import datetime as dt
 import math
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -41,6 +42,12 @@ DAY_COLUMN = 30.0
 EARTH_RADIUS_KM = 6371.0
 JOURNEYS = [("Anreise", "outbound_journey"), ("Rückreise", "return_journey")]
 TRANSIT_NOTE = "Fahrplandaten: Transitous (transitous.org) · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise prüfen."
+# Links im Fließtext des LLM: Markdown-Link [Text](URL) oder nackte URL (auch ohne Schema ab „www.“)
+LINK_PATTERN = re.compile(
+    r"\[(?P<label>[^\][\n]+)\]\((?P<href>https?://[^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\)"
+    r"|(?P<url>\b(?:https?://|www\.)[^\s<>\"\]]+)"
+)
+MARKDOWN_MARKERS = re.compile(r"(\*\*|__|~~|--)")
 
 
 def _num(value: float, unit: str) -> str:
@@ -97,6 +104,35 @@ def _markdown_url(url: str) -> str:
     return url.replace("(", "%28").replace(")", "%29")
 
 
+def _markdown_escape(text: str) -> str:
+    """Hervorhebungsmarker (**, __, ~~, --) im Fließtext wörtlich ausgeben statt als Formatierung."""
+    return MARKDOWN_MARKERS.sub(r"\\\1", text)
+
+
+def _bare_url(match: str) -> tuple[str, str]:
+    """Satzzeichen und unpaarige Klammer am Ende gehören nicht zur URL, z. B. „(siehe https://a.de/x).“"""
+    url = match.rstrip(".,;:!?'\"")
+    while url.endswith(")") and url.count(")") > url.count("("):
+        url = url[:-1].rstrip(".,;:!?'\"")
+    return url, match[len(url) :]
+
+
+def _with_links(text: str) -> str:
+    """Fließtext des LLM als fpdf2-Markdown: URLs und Markdown-Links werden klickbar, sonst bleibt alles wörtlich."""
+    parts, position = [], 0
+    for match in LINK_PATTERN.finditer(text):
+        parts.append(_markdown_escape(text[position : match.start()]))
+        if match["label"]:
+            label, href, rest = match["label"], match["href"], ""
+        else:
+            label, rest = _bare_url(match["url"])
+            href = label if "://" in label else f"https://{label}"
+        parts.append(f"[{label}]({_markdown_url(href)}){_markdown_escape(rest)}")
+        position = match.end()
+    parts.append(_markdown_escape(text[position:]))
+    return "".join(parts)
+
+
 def _nice_scale_km(max_km: float) -> float:
     candidates = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]
     return max((c for c in candidates if c <= max_km), default=candidates[0])
@@ -134,8 +170,13 @@ class PlanPdf(FPDF):
         if self.get_y() + height > self.page_break_trigger:
             self.add_page()
 
-    def paragraph(self, text: str, size: float = 10, color: tuple[int, int, int] = TEXT, **kwargs: Any) -> None:
+    def paragraph(
+        self, text: str, size: float = 10, color: tuple[int, int, int] = TEXT, links: bool = False, **kwargs: Any
+    ) -> None:
+        """`links`: URLs im Text klickbar machen (für Fließtext des LLM)."""
         self.style(size, color=color)
+        if links:
+            text, kwargs = _with_links(text), kwargs | {"markdown": True}
         self.multi_cell(0, size * 0.5, text, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT, **kwargs)
 
     def heading(self, text: str) -> None:
@@ -152,7 +193,7 @@ class PlanPdf(FPDF):
         for item in items:
             self.style(size, color=color)
             self.cell(5, size * 0.5, "•")
-            self.multi_cell(0, size * 0.5, item, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            self.multi_cell(0, size * 0.5, _with_links(item), markdown=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             self.ln(1)
 
     # --- Inhalte -------------------------------------------------------------------------------------------------
@@ -177,7 +218,7 @@ class PlanPdf(FPDF):
         self.paragraph(" · ".join(f for f in facts if f), size=9.5, color=MUTED)
         self.paragraph(f"{_short(plan['start']['name'])} → {_short(plan['destination']['name'])}", size=9.5, color=MUTED)
         self.ln(3)
-        self.paragraph(plan.get("summary", ""))
+        self.paragraph(plan.get("summary", ""), links=True)
 
     def route_map(self) -> None:
         """Übersichtskarte: OSM-Hintergrund (falls geladen), darüber Track bzw. Luftlinie und Marker als Vektoren."""
@@ -353,7 +394,7 @@ class PlanPdf(FPDF):
             if stage.get("notes"):
                 self.set_xy(right, self.get_y() + 1)
                 self.style(9.5)
-                self.multi_cell(width, 5, stage["notes"], align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
+                self.multi_cell(width, 5, _with_links(stage["notes"]), markdown=True, align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
             # Bei einem Seitenumbruch in der rechten Spalte gilt left_bottom nur für die vorige Seite
             bottom = max(self.get_y(), left_bottom) if self.page == page else self.get_y()
             self.set_xy(self.l_margin, bottom + 3)
@@ -395,7 +436,7 @@ class PlanPdf(FPDF):
                 )  # fmt: skip
             if journey.get("notes"):
                 self.ln(1)
-                self.paragraph(journey["notes"], size=9.5)
+                self.paragraph(journey["notes"], size=9.5, links=True)
             self.ln(3)
         self.paragraph(TRANSIT_NOTE, size=8, color=MUTED)
 
@@ -403,7 +444,7 @@ class PlanPdf(FPDF):
         plan = self.plan
         if plan.get("weather_summary"):
             self.heading("Wetter")
-            self.paragraph(plan["weather_summary"])
+            self.paragraph(plan["weather_summary"], links=True)
         if plan.get("packing_tips"):
             self.heading("Packliste & Tipps")
             self.bullets(plan["packing_tips"])

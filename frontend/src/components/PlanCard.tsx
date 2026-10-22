@@ -5,6 +5,7 @@ import { ACCOMMODATION_LABELS, TRANSPORT_LABELS, formatDate, shortPlace } from "
 import { ElevationProfile, buildProfile } from "./ElevationProfile";
 import type { ProfilePoint } from "./ElevationProfile";
 import { JourneyCard } from "./JourneyCard";
+import { LinkedText } from "./LinkedText";
 import { RouteMap } from "./RouteMap";
 
 const num = (value: number | null | undefined, unit: string) =>
@@ -84,7 +85,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <span className="chip">↔ {num(totalKm, "km")}</span>
           {totalAscent > 0 && <span className="chip">↗ {num(totalAscent, "Hm")}</span>}
         </div>
-        <p>{plan.summary}</p>
+        <p>
+          <LinkedText text={plan.summary} />
+        </p>
       </header>
 
       <RouteMap plan={plan} highlight={hovered && [hovered.lat, hovered.lon]} />
@@ -131,7 +134,11 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
                     )}
                   </div>
                 )}
-                {s.notes && <p className="small">{s.notes}</p>}
+                {s.notes && (
+                  <p className="small">
+                    <LinkedText text={s.notes} />
+                  </p>
+                )}
               </div>
             </li>
           ))}
@@ -158,7 +165,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
       {plan.weather_summary && (
         <section>
           <h3>Wetter</h3>
-          <p>{plan.weather_summary}</p>
+          <p>
+            <LinkedText text={plan.weather_summary} />
+          </p>
         </section>
       )}
       {plan.packing_tips.length > 0 && (
@@ -166,7 +175,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <h3>Packliste & Tipps</h3>
           <ul>
             {plan.packing_tips.map((t, i) => (
-              <li key={i}>{t}</li>
+              <li key={i}>
+                <LinkedText text={t} />
+              </li>
             ))}
           </ul>
         </section>
@@ -176,7 +187,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <h3>Sicherheit & Regeln</h3>
           <ul>
             {plan.safety_notes.map((t, i) => (
-              <li key={i}>{t}</li>
+              <li key={i}>
+                <LinkedText text={t} />
+              </li>
             ))}
           </ul>
         </section>
@@ -186,7 +199,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <h3>Quellen</h3>
           <ul className="muted small">
             {plan.sources.map((t, i) => (
-              <li key={i}>{t}</li>
+              <li key={i}>
+                <LinkedText text={t} />
+              </li>
             ))}
           </ul>
           {attributions.length > 0 && (
