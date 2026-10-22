@@ -229,6 +229,9 @@ async def test_train_trip_card_for_chosen_connection(client: httpx.AsyncClient, 
             if isinstance(part, ToolReturnPart) and part.tool_name == "find_train_connections"
         )
 
+    def without_lines(journey: dict[str, Any]) -> dict[str, Any]:
+        return journey | {"legs": [leg | {"line": "?"} for leg in journey["legs"]]}
+
     def trip(journey: dict[str, Any]) -> dict[str, Any]:
         return {"title": "Bahnfahrt München → Garmisch", "summary": "Mit dem RB6.", "outbound_journey": journey}
 
@@ -238,7 +241,8 @@ async def test_train_trip_card_for_chosen_connection(client: httpx.AsyncClient, 
         # Folgenachricht ohne neue Abfrage: Verweis auf "unten" und erfundene Verbindung gehen zurück an das Modell
         lambda _: ("answer_user", {"message": "Die Details siehst Du unten."}),
         lambda _: ("final_train_trip", trip(JOURNEY)),
-        lambda messages: ("final_train_trip", trip(chosen(messages))),
+        # Teilstrecken ohne Linie: Die Reisekarte übernimmt sie unverändert aus dem Fahrplanergebnis
+        lambda messages: ("final_train_trip", trip(without_lines(chosen(messages)))),
     ]
     calls = iter(steps)
 

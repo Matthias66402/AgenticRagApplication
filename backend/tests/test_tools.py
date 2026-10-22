@@ -14,7 +14,7 @@ from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.routing import BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
-from app.agent.tools.transit import find_train_connections
+from app.agent.tools.transit import _line, find_train_connections
 from app.agent.tools.weather import ARCHIVE_URL, FORECAST_URL, get_weather
 from app.config import get_settings
 from app.db import SessionLocal
@@ -408,6 +408,16 @@ async def test_train_connections_repeated_query_is_not_sent_again(ctx) -> None:
     assert again["connections"] == first["connections"]
     assert "bereits ausgeführt" in again["hint"]
     assert "hint" not in first
+
+
+def test_local_lines_name_their_mode() -> None:
+    assert _line({"mode": "BUS", "displayName": "24"}) == "Bus 24"
+    assert _line({"mode": "TRAM", "displayName": "1"}) == "Tram 1"
+    assert _line({"mode": "BUS", "routeShortName": "303E"}) == "Bus 303E"
+    assert _line({"mode": "SUBWAY", "displayName": "U3"}) == "U3"
+    assert _line({"mode": "TRAM", "displayName": "STR 4"}) == "STR 4"
+    assert _line({"mode": "LONG_DISTANCE", "displayName": "IC 2035"}) == "IC 2035"
+    assert _line({"mode": "BUS"}) == "Bus"
 
 
 @respx.mock

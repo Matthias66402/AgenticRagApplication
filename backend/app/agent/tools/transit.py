@@ -18,6 +18,11 @@ MAX_CONNECTIONS = 3
 LOCAL_MODES = {"WALK", "BUS", "TRAM", "SUBWAY", "FERRY", "FUNICULAR", "AERIAL_LIFT", "AREAL_LIFT", "CABLE_CAR"}
 TRACK_PREFIX = re.compile(r"^(Gl(eis)?|Bstg)\.?\s*", re.IGNORECASE)  # manche Feeds liefern "Gl4" statt "4"
 ATTRIBUTION = "Fahrplandaten: Transitous (transitous.org)"
+# Nahverkehrsfeeds liefern oft nur die Nummer ("24"); ohne Verkehrsmittel ist unklar, ob Bus oder Straßenbahn
+MODE_LABELS = {
+    "BUS": "Bus", "TRAM": "Tram", "SUBWAY": "U-Bahn", "FERRY": "Fähre", "FUNICULAR": "Standseilbahn",
+    "AERIAL_LIFT": "Seilbahn", "AREAL_LIFT": "Seilbahn", "CABLE_CAR": "Seilbahn",
+}  # fmt: skip
 
 
 def _local(timestamp: str, tz: str | None) -> str:
@@ -36,10 +41,19 @@ def _same_place(a: str, b: str) -> bool:
     return a.replace(" ", "").casefold() == b.replace(" ", "").casefold()
 
 
+def _line(leg: dict[str, Any]) -> str:
+    """Linienbezeichnung, bei reinen Nummern mit Verkehrsmittel: "Bus 24", "Tram 1"; "ICE 595", "U3" bleiben."""
+    name = (leg.get("displayName") or leg.get("routeShortName") or "").strip()
+    label = MODE_LABELS.get(leg["mode"])
+    if not name:
+        return label or leg["mode"]
+    return f"{label} {name}" if label and name[0].isdigit() else name
+
+
 def _leg(leg: dict[str, Any], from_name: str, to_name: str) -> dict[str, Any] | None:
     origin, destination = leg["from"], leg["to"]
     result: dict[str, Any] = {
-        "line": leg.get("displayName") or leg.get("routeShortName") or leg["mode"],
+        "line": _line(leg),
         "from_stop": _stop_name(origin, from_name),
         "to_stop": _stop_name(destination, to_name),
         "departure": _local(leg["startTime"], origin.get("tz")),

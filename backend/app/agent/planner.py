@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 from pydantic_ai import (
     Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, ToolReturnPart,
@@ -8,7 +9,9 @@ from pydantic_ai.profiles.openai import openai_model_profile
 from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
-from app.agent.plan_schema import MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
+from app.agent.plan_schema import (
+    MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, Journey, TextAnswer, TrainTripPlan,
+)  # fmt: skip
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.knowledge import search_knowledge
@@ -159,10 +162,10 @@ def check_default_transport(ctx: RunContext[AgentDeps], output: PlannerOutput) -
         )
 
 
-def found_connections(ctx: RunContext[AgentDeps]) -> set[tuple[str, str]]:
-    """Abfahrt und Ankunft aller Verbindungen aus `find_train_connections` im Verlauf (inkl. früherer Nachrichten)."""
+def found_connections(ctx: RunContext[AgentDeps]) -> dict[tuple[str, str], dict[str, Any]]:
+    """Verbindungen aus `find_train_connections` im Verlauf (inkl. früherer Nachrichten) nach Abfahrt und Ankunft."""
     return {
-        (connection["departure"], connection["arrival"])
+        (connection["departure"], connection["arrival"]): connection
         for message in ctx.messages
         if isinstance(message, ModelRequest)
         for part in message.parts
@@ -172,7 +175,14 @@ def found_connections(ctx: RunContext[AgentDeps]) -> set[tuple[str, str]]:
     }  # fmt: skip
 
 
-def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> None:
+def as_found(journey: Journey | None, known: dict[tuple[str, str], dict[str, Any]]) -> Journey | None:
+    """Teilstrecken unverändert aus dem Fahrplanergebnis, damit keine Linie (z. B. "Bus 24") verloren geht."""
+    if journey is None or (connection := known.get((journey.departure, journey.arrival))) is None:
+        return journey
+    return Journey.model_validate(connection | {"notes": journey.notes})
+
+
+def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> TrainTripPlan:
     """Die Reisekarte zeigt nur Verbindungen, die die Fahrplanauskunft tatsächlich geliefert hat."""
     known = found_connections(ctx)
     for label, journey in (("Hinfahrt", output.outbound_journey), ("Rückfahrt", output.return_journey)):
@@ -185,6 +195,12 @@ def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> None:
             )
         if journey.departure[:10] < ctx.deps.today.isoformat():
             raise ModelRetry(f"Die {label} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+    return output.model_copy(
+        update={
+            "outbound_journey": as_found(output.outbound_journey, known),
+            "return_journey": as_found(output.return_journey, known),
+        }
+    )
 
 
 def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:
@@ -258,7 +274,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         if isinstance(output, TextAnswer):
             check_connections_shown(ctx, output)
         if isinstance(output, TrainTripPlan):
-            check_train_trip(ctx, output)
+            return check_train_trip(ctx, output)
         if not isinstance(output, AdventurePlan):
             return output
         if not used_tool(ctx, "search_knowledge"):
@@ -273,6 +289,13 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
                 "An- und Rückreise nur mit Verbindungen aus `find_train_connections` angeben. "
                 "Rufe das Tool auf oder lass outbound_journey/return_journey leer."
             )
+        known = found_connections(ctx)
+        output = output.model_copy(
+            update={
+                "outbound_journey": as_found(output.outbound_journey, known),
+                "return_journey": as_found(output.return_journey, known),
+            }
+        )
         limit = MAX_STAGE_KM[output.transport]
         too_long = [s for s in output.stages if s.distance_km > limit]
         if too_long:
