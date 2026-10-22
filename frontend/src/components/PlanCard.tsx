@@ -19,7 +19,7 @@ interface DownloadButtonProps {
   title: string;
 }
 
-function DownloadButton({ path, fallbackName, label, busyLabel, title }: DownloadButtonProps) {
+export function DownloadButton({ path, fallbackName, label, busyLabel, title }: DownloadButtonProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

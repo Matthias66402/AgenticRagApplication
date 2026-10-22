@@ -13,6 +13,7 @@ from PIL import Image
 
 from app.export.basemap import ATTRIBUTION, Viewport, fit_viewport
 from app.export.gpx import ACCOMMODATION_LABELS
+from app.export.trip import is_train_trip
 
 # Wird im Dockerfile installiert (fonts-dejavu-core); die PDF-Standardschriften können nur Latin-1
 FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
@@ -41,6 +42,9 @@ PROFILE_HEIGHT = 38.0
 DAY_COLUMN = 30.0
 EARTH_RADIUS_KM = 6371.0
 JOURNEYS = [("Anreise", "outbound_journey"), ("Rückreise", "return_journey")]
+# Reisekarte (siehe app.export.trip): die Bahnfahrt ist die Reise selbst, die Etappe der Weg zum Bahnhof
+TRAIN_TRIP_JOURNEYS = [("Hinfahrt", "outbound_journey"), ("Rückfahrt", "return_journey")]
+ACCESS_LABELS = {"cycling": "Rad", "hiking": "Zu Fuß"}
 TRANSIT_NOTE = "Fahrplandaten: Transitous (transitous.org) · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise prüfen."
 # Links im Fließtext des LLM: Markdown-Link [Text](URL) oder nackte URL (auch ohne Schema ab „www.“)
 LINK_PATTERN = re.compile(
@@ -204,19 +208,26 @@ class PlanPdf(FPDF):
         total_km = sum(s["distance_km"] for s in stages)
         total_ascent = sum(s.get("ascent_m") or 0 for s in stages)
         days = plan["duration_days"]
+        train_trip = is_train_trip(plan)
+        if train_trip:
+            transport = f"{ACCESS_LABELS[plan['transport']]} + Bahn" if stages else "Bahnfahrt"
+        else:
+            transport = TRANSPORT_LABELS.get(plan["transport"], plan["transport"])
         facts = [
-            TRANSPORT_LABELS.get(plan["transport"], plan["transport"]),
+            transport,
             _date(plan["start_date"]) + (f" – {_date(stages[-1]['date'])}" if days > 1 else ""),
-            f"{days} {'Tag' if days == 1 else 'Tage'}",
+            "" if train_trip else f"{days} {'Tag' if days == 1 else 'Tage'}",
             ACCOMMODATION_LABELS.get(plan.get("accommodation_type") or "", ""),
-            _num(total_km, "km"),
+            _num(total_km, "km") if stages else "",
             f"↗ {_num(total_ascent, 'Hm')}" if total_ascent else "",
         ]
         self.style(20, bold=True)
         self.multi_cell(0, 9, plan["title"], align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.ln(1)
         self.paragraph(" · ".join(f for f in facts if f), size=9.5, color=MUTED)
-        self.paragraph(f"{_short(plan['start']['name'])} → {_short(plan['destination']['name'])}", size=9.5, color=MUTED)
+        if plan.get("start"):
+            start, destination = _short(plan["start"]["name"]), _short(plan["destination"]["name"])
+            self.paragraph(f"{start} → {destination}", size=9.5, color=MUTED)
         self.ln(3)
         self.paragraph(plan.get("summary", ""), links=True)
 
@@ -263,7 +274,7 @@ class PlanPdf(FPDF):
         self.rect(x0, y0, width, height)
 
         self.set_y(y0 + height + 2)
-        legend = [(START_COLOR, "Start"), (PRIMARY, "Etappenziel (Tag)")]
+        legend = [(START_COLOR, "Start"), (PRIMARY, "Bahnhof" if is_train_trip(plan) else "Etappenziel (Tag)")]
         if accommodations:
             legend.append((ACCOMMODATION_COLOR, "Unterkunft"))
         x = x0
@@ -355,7 +366,7 @@ class PlanPdf(FPDF):
         self.set_y(y0 + height + 6)
 
     def stages(self) -> None:
-        self.heading("Etappen")
+        self.heading("Weg zum Bahnhof" if is_train_trip(self.plan) else "Etappen")
         right = self.l_margin + DAY_COLUMN
         for index, stage in enumerate(self.plan["stages"]):
             self.ensure_space(22)
@@ -366,7 +377,7 @@ class PlanPdf(FPDF):
                 self.ln(2.5)
             y0, page = self.get_y(), self.page
             self.style(10.5, bold=True)
-            self.cell(DAY_COLUMN, 5.5, f"Tag {stage['day']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            self.cell(DAY_COLUMN, 5.5, stage.get("label") or f"Tag {stage['day']}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
             self.style(8.5, color=MUTED)
             self.cell(DAY_COLUMN, 4.5, _date(stage["date"]))
             left_bottom = self.get_y() + 4.5
@@ -401,10 +412,12 @@ class PlanPdf(FPDF):
 
     def journeys(self) -> None:
         """An- und Rückreise mit Bahn/ÖPNV: Überblick und Teilstrecken mit Zeiten, Linie und Gleis."""
-        journeys = [(label, self.plan.get(key)) for label, key in JOURNEYS if self.plan.get(key)]
+        labels = TRAIN_TRIP_JOURNEYS if is_train_trip(self.plan) else JOURNEYS
+        journeys = [(label, self.plan.get(key)) for label, key in labels if self.plan.get(key)]
         if not journeys:
             return
-        self.heading("An- und Abreise")
+        self.ensure_space(45)  # Überschrift mit dem Anfang der ersten Verbindung zusammenhalten
+        self.heading("Bahnfahrt" if is_train_trip(self.plan) else "An- und Abreise")
         for label, journey in journeys:
             self.ensure_space(25)
             legs = journey["legs"]
@@ -495,9 +508,10 @@ def build_pdf(plan: dict[str, Any], basemap: Image.Image | None = None) -> bytes
     pdf = PlanPdf(plan, basemap)
     pdf.add_page()
     pdf.title_block()
-    pdf.route_map()
-    pdf.elevation_profile()
-    pdf.stages()
+    if plan["stages"]:  # Reisekarten ohne Weg zum Bahnhof haben weder Etappen noch Koordinaten
+        pdf.route_map()
+        pdf.elevation_profile()
+        pdf.stages()
     pdf.journeys()
     pdf.lists()
     return bytes(pdf.output())

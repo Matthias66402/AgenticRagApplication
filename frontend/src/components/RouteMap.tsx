@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from "react";
 import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap } from "react-leaflet";
 import type { LatLngTuple } from "leaflet";
-import type { AdventurePlan } from "../api/types";
+import type { AdventurePlan, Stage } from "../api/types";
 import { shortPlace } from "../lib/labels";
 
 function FitBounds({ points }: { points: LatLngTuple[] }) {
@@ -13,8 +13,13 @@ function FitBounds({ points }: { points: LatLngTuple[] }) {
   return null;
 }
 
+/** Was die Karte braucht; die Reisekarte nutzt sie auch für den Weg zum Bahnhof (`label` statt "Tag n") */
+export type MapPlan = Pick<AdventurePlan, "route_ids" | "routes" | "start"> & {
+  stages: (Pick<Stage, "day" | "end" | "accommodation"> & { label?: string })[];
+};
+
 /** `highlight`: Position aus dem Höhenprofil, die auf der Route markiert wird */
-export function RouteMap({ plan, highlight }: { plan: AdventurePlan; highlight?: LatLngTuple | null }) {
+export function RouteMap({ plan, highlight }: { plan: MapPlan; highlight?: LatLngTuple | null }) {
   const routes = useMemo(
     () => plan.route_ids.map((id) => plan.routes?.[id]).filter((r): r is [number, number][] => Boolean(r)),
     [plan],
@@ -51,9 +56,7 @@ export function RouteMap({ plan, highlight }: { plan: AdventurePlan; highlight?:
           radius={7}
           pathOptions={{ color: "#fff", weight: 2, fillColor: "#2563eb", fillOpacity: 1 }}
         >
-          <Tooltip>
-            Tag {stage.day}: {shortPlace(stage.end.name)}
-          </Tooltip>
+          <Tooltip>{stage.label ?? `Tag ${stage.day}: ${shortPlace(stage.end.name)}`}</Tooltip>
         </CircleMarker>
       ))}
       {plan.stages

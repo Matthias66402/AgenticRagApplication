@@ -2,7 +2,7 @@
 
 import datetime as dt
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -138,8 +138,21 @@ PLAN_KIND_TOUR = "tour"
 PLAN_KIND_TRAIN_TRIP = "train_trip"
 
 
+class AccessRoute(BaseModel):
+    """Weg zum Abfahrtsbahnhof mit dem Rad oder zu Fuß; Strecke aus plan_route."""
+
+    transport: Literal["cycling", "hiking"]
+    start: Place
+    end: Place = Field(description="Abfahrtsbahnhof")
+    departure: str = local_time("Losfahren, Ortszeit YYYY-MM-DDTHH:MM: Zugabfahrt minus Fahrzeit und Puffer")
+    distance_km: float = Field(ge=0)
+    duration_hours: float = Field(ge=0, description="Fahr- bzw. Gehzeit aus plan_route")
+    route_id: str = Field(description="route_id aus plan_route")
+
+
 class TrainTripPlan(BaseModel):
-    """Reisekarte für eine reine Bahnfahrt ohne Tour, z. B. die vom Nutzer gewählte Verbindung einer Bahnauskunft."""
+    """Reisekarte für eine Bahnfahrt ohne Tour, z. B. die vom Nutzer gewählte Verbindung einer Bahnauskunft,
+    optional mit dem Weg zum Bahnhof per Rad oder zu Fuß."""
 
     title: str = Field(max_length=200, description='z. B. "Bahnfahrt Oldenburg → Bremen"')
     summary: str = Field(
@@ -148,6 +161,9 @@ class TrainTripPlan(BaseModel):
     )
     outbound_journey: Journey = Field(description="Gewählte Hinfahrt, unverändert aus find_train_connections")
     return_journey: Journey | None = Field(default=None, description="Rückfahrt, nur wenn gesucht und gewünscht")
+    access: AccessRoute | None = Field(
+        default=None, description="Weg zum Abfahrtsbahnhof, wenn der Nutzer mit Rad oder zu Fuß dorthin möchte"
+    )
 
 
 class TextAnswer(BaseModel):

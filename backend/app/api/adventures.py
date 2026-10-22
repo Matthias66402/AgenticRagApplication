@@ -1,13 +1,15 @@
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.agent.plan_schema import PLAN_KIND_TRAIN_TRIP
 from app.auth.deps import CurrentUser, SessionDep
 from app.export.filename import export_filename
-from app.export.gpx import build_gpx, has_track
 from app.export.basemap import render_basemap
+from app.export.gpx import build_gpx, has_track
 from app.export.pdf import build_pdf, map_viewport
+from app.export.trip import exportable_plan
 from app.models import Adventure
 from app.schemas.adventure import AdventureCreate, AdventureRead, AdventureSummary, AdventureUpdate
 
@@ -26,16 +28,12 @@ async def get_owned_adventure(session: SessionDep, adventure_id: int, user_id: i
     return adventure
 
 
-async def get_planned_adventure(session: SessionDep, adventure_id: int, user_id: int) -> Adventure:
-    """Abenteuer mit Tourplan für die Exporte; Reisekarten reiner Bahnfahrten haben weder Route noch Etappen."""
+async def get_export_plan(session: SessionDep, adventure_id: int, user_id: int) -> tuple[Adventure, dict[str, Any]]:
+    """Abenteuer und Plan in Tourform für die Exporte (Reisekarten siehe app.export.trip)."""
     adventure = await get_owned_adventure(session, adventure_id, user_id)
     if not adventure.plan:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Abenteuer gibt es noch keinen Plan")
-    if adventure.plan.get("kind") == PLAN_KIND_TRAIN_TRIP:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Für Bahnfahrten gibt es keinen PDF- oder GPX-Export"
-        )
-    return adventure
+    return adventure, exportable_plan(adventure.plan)
 
 
 @router.get("", response_model=list[AdventureSummary])
@@ -60,13 +58,18 @@ async def read_adventure(adventure_id: int, user: CurrentUser, session: SessionD
 @router.get("/{adventure_id}/gpx", response_class=Response, responses={200: {"content": {GPX_MEDIA_TYPE: {}}}})
 async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep) -> Response:
     """GPX-Datei mit Track (falls eine Route berechnet wurde) und Wegpunkten für Start, Etappen und Unterkünfte."""
-    adventure = await get_planned_adventure(session, adventure_id, user.id)
+    adventure, plan = await get_export_plan(session, adventure_id, user.id)
+    if not plan["stages"]:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="GPX gibt es für Bahnfahrten nur mit Weg zum Bahnhof; Verbindungen haben keine Koordinaten",
+        )
     return Response(
-        content=build_gpx(adventure.plan),
+        content=build_gpx(plan),
         media_type=GPX_MEDIA_TYPE,
         headers={
             "Content-Disposition": f'attachment; filename="{export_filename(adventure.title, "gpx")}"',
-            "X-Gpx-Has-Track": "true" if has_track(adventure.plan) else "false",
+            "X-Gpx-Has-Track": "true" if has_track(plan) else "false",
         },
     )
 
@@ -74,11 +77,11 @@ async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep
 @router.get("/{adventure_id}/pdf", response_class=Response, responses={200: {"content": {"application/pdf": {}}}})
 async def download_pdf(adventure_id: int, user: CurrentUser, session: SessionDep) -> Response:
     """Druckbarer Plan als PDF mit Karte, Höhenprofil, Etappen, Packliste und Sicherheitshinweisen."""
-    adventure = await get_planned_adventure(session, adventure_id, user.id)
-    # Ohne erreichbaren Tile-Server enthält das PDF Route und Marker ohne Kartenhintergrund
-    basemap = await render_basemap(map_viewport(adventure.plan))
+    adventure, plan = await get_export_plan(session, adventure_id, user.id)
+    # Ohne erreichbaren Tile-Server enthält das PDF Route und Marker ohne Kartenhintergrund; ohne Etappen keine Karte
+    basemap = await render_basemap(map_viewport(plan)) if plan["stages"] else None
     return Response(
-        content=build_pdf(adventure.plan, basemap),
+        content=build_pdf(plan, basemap),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{export_filename(adventure.title, "pdf")}"'},
     )

@@ -1,3 +1,4 @@
+import datetime as dt
 import re
 from typing import Any
 
@@ -10,7 +11,7 @@ from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import (
-    MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, Journey, TextAnswer, TrainTripPlan,
+    MAX_STAGE_KM, AccessRoute, AdventurePlan, ClarificationQuestion, Journey, TextAnswer, TrainTripPlan,
 )  # fmt: skip
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
@@ -75,7 +76,14 @@ Uhrzeit, Rückfahrt, Reisekarte zu einer Verbindung, eine Tour am Zielort), kein
 Fahrradmitnahme.
 Wählt der Nutzer eine Verbindung aus oder möchte er einen Plan bzw. eine Übersicht seiner Bahnfahrt, gib eine
 Reisekarte über `final_train_trip` aus: die gewählte Verbindung unverändert aus dem `find_train_connections`-Ergebnis
-(auch aus früheren Nachrichten) übernehmen, eine Rückfahrt nur, wenn sie gesucht wurde und gewünscht ist.
+(auch aus früheren Nachrichten) übernehmen, eine Rückfahrt nur, wenn sie gesucht wurde und gewünscht ist. Bittet er
+schon in der ersten Nachricht um einen Plan, wähle selbst die passendste Verbindung (bei einer gewünschten
+Ankunftszeit die späteste, die rechtzeitig ankommt) und frage nicht nach.
+Möchte der Nutzer mit dem Rad oder zu Fuß zum Bahnhof und dann mit dem Zug weiter (ohne Tour am Ziel), gehört dieser
+Weg in die Reisekarte (`access`): `geocode` für Wohnadresse bzw. Start und Bahnhof, `plan_route` dorthin
+(transport cycling bzw. hiking), `find_train_connections` ab dem Bahnhof, dann `final_train_trip`. Losfahren
+(`access.departure`) = Abfahrt der Verbindung minus Fahr- bzw. Gehzeit minus Puffer (Rad abstellen: 10 Minuten,
+zu Fuß: 5 Minuten).
 
 ## Vorgehen, sobald alles bekannt ist
 Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig.
@@ -195,12 +203,30 @@ def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> Train
             )
         if journey.departure[:10] < ctx.deps.today.isoformat():
             raise ModelRetry(f"Die {label} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+    if output.access is not None:
+        check_access(ctx, output.access, output.outbound_journey)
     return output.model_copy(
         update={
             "outbound_journey": as_found(output.outbound_journey, known),
             "return_journey": as_found(output.return_journey, known),
         }
     )
+
+
+def check_access(ctx: RunContext[AgentDeps], access: AccessRoute, journey: Journey) -> None:
+    """Der Weg zum Bahnhof braucht eine berechnete Route und muss vor Abfahrt der Verbindung enden."""
+    if access.route_id not in ctx.deps.routes:
+        raise ModelRetry(
+            f"Die route_id {access.route_id!r} stammt aus keinem `plan_route`-Ergebnis. Berechne den Weg zum Bahnhof "
+            "mit `plan_route` und übernimm dessen route_id, Distanz und Dauer."
+        )
+    arrival = dt.datetime.fromisoformat(access.departure) + dt.timedelta(hours=access.duration_hours)
+    if arrival > dt.datetime.fromisoformat(journey.departure):
+        raise ModelRetry(
+            f"Mit Losfahren um {access.departure[11:]} und {access.duration_hours:g} h Fahrzeit ist der Nutzer erst "
+            f"{arrival:%H:%M} am Bahnhof, die Verbindung fährt aber {journey.departure[11:]} ab. Rechne "
+            "`access.departure` neu (Abfahrt minus Fahrzeit minus Puffer)."
+        )
 
 
 def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:

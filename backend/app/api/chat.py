@@ -34,9 +34,12 @@ def build_stored_plan(
     `kind` unterscheidet Touren von Reisekarten reiner Bahnfahrten (ältere Pläne ohne `kind` sind Touren).
     """
     assert outcome.plan is not None
-    if isinstance(outcome.plan, TrainTripPlan):
-        return outcome.plan.model_dump(mode="json") | {"kind": PLAN_KIND_TRAIN_TRIP}
     known_routes = (previous or {}).get("routes", {}) | deps.routes
+    if isinstance(outcome.plan, TrainTripPlan):
+        # Geometrie des Wegs zum Bahnhof für die Karte
+        access = outcome.plan.access
+        routes = {access.route_id: known_routes[access.route_id]} if access and access.route_id in known_routes else {}
+        return outcome.plan.model_dump(mode="json") | {"kind": PLAN_KIND_TRAIN_TRIP, "routes": routes}
     route_ids = [rid for rid in outcome.plan.route_ids if rid in known_routes]
     if not route_ids and deps.routes:
         # Modell hat route_ids vergessen → die zuletzt berechnete Route ist in der Regel die finale

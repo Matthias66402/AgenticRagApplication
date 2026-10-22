@@ -3,6 +3,8 @@
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from app.export.trip import is_train_trip
+
 GPX_NS = "http://www.topografix.com/GPX/1/1"
 ACCOMMODATION_LABELS = {"hut": "Hütte", "camping": "Camping", "hotel": "Hotel", "hostel": "Hostel", "bivouac": "Biwak"}
 
@@ -53,8 +55,9 @@ def build_gpx(plan: dict[str, Any]) -> str:
             details.append(f"↗ {stage['ascent_m']:g} Hm")
         if stage.get("descent_m"):
             details.append(f"↘ {stage['descent_m']:g} Hm")
+        label = "Bahnhof" if is_train_trip(plan) else f"Tag {stage['day']}"
         _add_waypoint(
-            gpx, end["lat"], end["lon"], f"Tag {stage['day']}: {_short(end['name'])}",
+            gpx, end["lat"], end["lon"], f"{label}: {_short(end['name'])}",
             f"{stage['date']} · {', '.join(details)}", "Flag, Blue",
         )  # fmt: skip
         if acc := stage.get("accommodation"):

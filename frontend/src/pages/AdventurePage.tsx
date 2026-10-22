@@ -221,7 +221,7 @@ export function AdventurePage() {
 
       <section className="plan-pane">
         {plan?.kind === "train_trip" ? (
-          <TrainTripCard plan={plan} />
+          <TrainTripCard plan={plan} adventureId={id} />
         ) : plan ? (
           <PlanCard plan={plan} adventureId={id} />
         ) : (

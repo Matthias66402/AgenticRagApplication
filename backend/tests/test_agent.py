@@ -263,9 +263,70 @@ async def test_train_trip_card_for_chosen_connection(client: httpx.AsyncClient, 
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
     assert stored["status"] == "planned" and stored["title"] == "Bahnfahrt München → Garmisch"
     assert stored["plan"]["kind"] == "train_trip"
-    for export in ("pdf", "gpx"):
-        response = await client.get(f"/api/adventures/{adventure['id']}/{export}", headers=user_headers)
-        assert response.status_code == 409
+    # Ohne Weg zum Bahnhof: PDF mit der Verbindung, aber kein GPX (Verbindungen haben keine Koordinaten)
+    pdf = await client.get(f"/api/adventures/{adventure['id']}/pdf", headers=user_headers)
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    gpx = await client.get(f"/api/adventures/{adventure['id']}/gpx", headers=user_headers)
+    assert gpx.status_code == 409
+
+
+@respx.mock
+async def test_train_trip_with_bike_to_station(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Mit dem Rad zum Bahnhof, dann Zug: Reisekarte mit berechneter Route, die vor der Abfahrt ankommt."""
+    respx.post(ORS_URL.format(profile="cycling-regular")).respond(status_code=503)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    args = {
+        "from_name": "Oldenburg Hbf", "from_lat": 53.14, "from_lon": 8.22,
+        "to_name": "Bremen", "to_lat": 53.08, "to_lon": 8.88, "date": TOMORROW.isoformat(),
+    }  # fmt: skip
+
+    def tool_result(messages: list[ModelMessage], tool: str) -> Any:
+        return next(
+            part.content
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == tool
+        )
+
+    def trip(messages: list[ModelMessage], minutes_before: int, route_id: str | None = None) -> dict[str, Any]:
+        journey = tool_result(messages, "find_train_connections")["connections"][0]
+        leave = dt.datetime.fromisoformat(journey["departure"]) - dt.timedelta(minutes=minutes_before)
+        access = {
+            "transport": "cycling", "start": START.model_dump() | {"name": "Zuhause"},
+            "end": END.model_dump() | {"name": "Oldenburg Hbf"}, "departure": leave.strftime("%Y-%m-%dT%H:%M"),
+            "distance_km": 2.1, "duration_hours": 0.25,
+            "route_id": route_id or tool_result(messages, "plan_route")["route_id"],
+        }  # fmt: skip
+        return {"title": "Rad und Zug nach Bremen", "summary": "Mit dem Rad zum Bahnhof.", "outbound_journey": journey,
+                "access": access}  # fmt: skip
+
+    steps: list[Callable[[list[ModelMessage]], Step]] = [
+        lambda _: ("plan_route", {"waypoints": [START.model_dump(), END.model_dump()], "transport": "cycling"}),
+        lambda _: ("find_train_connections", args),
+        lambda messages: ("final_train_trip", trip(messages, 30, route_id="r-erfunden")),  # keine berechnete Route
+        lambda messages: ("final_train_trip", trip(messages, 10)),  # 15 min Fahrzeit → zu spät am Bahnhof
+        lambda messages: ("final_train_trip", trip(messages, 25)),
+    ]
+    calls = iter(steps)
+    with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Mit dem Rad zum Bahnhof, dann Zug"}
+        )
+    events = parse_sse(response.text)
+    assert [e["type"] for e in events][-2:] == ["plan", "done"], events
+    plan = events[-2]["plan"]
+    assert plan["kind"] == "train_trip"
+    assert plan["access"]["transport"] == "cycling"
+    assert list(plan["routes"]) == [plan["access"]["route_id"]] and plan["routes"][plan["access"]["route_id"]]
+
+    respx.get(url__startswith=get_settings().map_tile_url.split("{")[0]).respond(status_code=503)
+    pdf = await client.get(f"/api/adventures/{adventure['id']}/pdf", headers=user_headers)
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    gpx = await client.get(f"/api/adventures/{adventure['id']}/gpx", headers=user_headers)
+    assert gpx.status_code == 200 and gpx.headers["x-gpx-has-track"] == "true"
+    assert "<name>Start: Zuhause</name>" in gpx.text and "<name>Bahnhof: Oldenburg Hbf</name>" in gpx.text
 
 
 async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

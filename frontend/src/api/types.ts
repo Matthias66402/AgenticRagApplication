@@ -100,13 +100,27 @@ export interface AdventurePlan {
   attributions?: Attribution[];
 }
 
-/** Reisekarte für eine reine Bahnfahrt ohne Tour (keine Etappen, kein PDF/GPX) */
+/** Weg zum Abfahrtsbahnhof mit dem Rad oder zu Fuß */
+export interface AccessRoute {
+  transport: "cycling" | "hiking";
+  start: Place;
+  end: Place;
+  /** Losfahren, Ortszeit ohne Zeitzone */
+  departure: string;
+  distance_km: number;
+  duration_hours: number;
+  route_id: string;
+}
+
+/** Reisekarte für eine Bahnfahrt ohne Tour (keine Etappen, kein PDF/GPX), optional mit Weg zum Bahnhof */
 export interface TrainTripPlan {
   kind: "train_trip";
   title: string;
   summary: string;
   outbound_journey: Journey;
   return_journey?: Journey | null;
+  access?: AccessRoute | null;
+  routes?: Record<string, ([number, number] | [number, number, number])[]>;
 }
 
 export type StoredPlan = AdventurePlan | TrainTripPlan;

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
-import type { AdventurePlan } from "../api/types";
+import type { MapPlan } from "./RouteMap";
 
 export interface ProfilePoint {
   lat: number;
@@ -24,7 +24,7 @@ function distanceKm(a: ProfilePoint | { lat: number; lon: number }, b: { lat: nu
 }
 
 /** Track mit Höhe und kumulierter Distanz; null, wenn die Route keine Höhendaten hat. */
-export function buildProfile(plan: AdventurePlan): ProfilePoint[] | null {
+export function buildProfile(plan: MapPlan): ProfilePoint[] | null {
   const track = plan.route_ids.flatMap((id) => plan.routes?.[id] ?? []);
   if (track.length < 2 || track.some((p) => p.length < 3)) return null;
   const points: ProfilePoint[] = [];
@@ -58,7 +58,7 @@ function useWidth<T extends HTMLElement>() {
 }
 
 interface Props {
-  plan: AdventurePlan;
+  plan: MapPlan;
   points: ProfilePoint[];
   /** Position unter dem Fadenkreuz, z. B. für einen Marker auf der Karte */
   onHover: (point: ProfilePoint | null) => void;
