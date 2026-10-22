@@ -73,15 +73,24 @@ def _leg(leg: dict[str, Any], from_name: str, to_name: str) -> dict[str, Any] | 
     return result
 
 
-def _distinct(itineraries: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Je Zugfolge nur die Variante mit den wenigsten Umstiegen bzw. der kürzesten Dauer."""
-    best: dict[tuple[str, ...], dict[str, Any]] = {}
+def _distinct(itineraries: list[dict[str, Any]], arrive_by: bool) -> list[dict[str, Any]]:
+    """Je Zugfolge nur die Variante mit den wenigsten Umstiegen bzw. der kürzesten Dauer; davon die Verbindungen,
+    die der gewünschten Zeit am nächsten liegen (bei `arrive_by` die spätesten Ankünfte, sonst die frühesten
+    Abfahrten)."""
+    best: dict[tuple[tuple[str, str], ...], dict[str, Any]] = {}
     for itinerary in sorted(itineraries, key=lambda it: (it["transfers"], it["duration"])):
+        # Zug = Linie + Abfahrtszeit, sonst fielen z. B. alle RS30-Fahrten eines Morgens zusammen
         trains = tuple(
-            leg.get("displayName") or leg.get("routeShortName") or "" for leg in itinerary["legs"] if leg["mode"] not in LOCAL_MODES
+            (leg.get("displayName") or leg.get("routeShortName") or "", leg["startTime"])
+            for leg in itinerary["legs"]
+            if leg["mode"] not in LOCAL_MODES
         )
         best.setdefault(trains, itinerary)
-    return list(best.values())[:MAX_CONNECTIONS]
+    if arrive_by:
+        closest = sorted(best.values(), key=lambda it: it["endTime"], reverse=True)
+    else:
+        closest = sorted(best.values(), key=lambda it: it["startTime"])
+    return closest[:MAX_CONNECTIONS]
 
 
 def _connection(itinerary: dict[str, Any], from_name: str, to_name: str) -> dict[str, Any]:
@@ -172,7 +181,7 @@ async def find_train_connections(
         return tool_error(
             f"Keine Verbindung {from_name} → {to_name} gefunden. Nächstgelegenen Bahnhof oder andere Uhrzeit versuchen."
         )
-    connections = [_connection(it, from_name, to_name) for it in _distinct(itineraries)]
+    connections = [_connection(it, from_name, to_name) for it in _distinct(itineraries, arrive_by)]
     connections.sort(key=lambda c: c["departure"])
     result = {
         "connections": connections,

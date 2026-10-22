@@ -410,6 +410,29 @@ async def test_train_connections_repeated_query_is_not_sent_again(ctx) -> None:
     assert "hint" not in first
 
 
+def hourly_rs30(hours: range) -> list[dict]:
+    """Stündliche RS30-Fahrten Oldenburg → Bremen (UTC), alle mit gleicher Dauer und gleichem Liniennamen."""
+    return [
+        {
+            "startTime": f"2026-10-24T{h:02d}:02:00Z", "endTime": f"2026-10-24T{h:02d}:29:00Z", "duration": 1620,
+            "transfers": 0,
+            "legs": [transit_leg("METRO", transit_place("Oldenburg(Oldb) Hbf"), transit_place("Bremen Hbf"),
+                                 f"2026-10-24T{h:02d}:02:00Z", f"2026-10-24T{h:02d}:29:00Z", displayName="RS30")],
+        }
+        for h in hours
+    ]  # fmt: skip
+
+
+@respx.mock
+async def test_train_connections_closest_to_requested_time(ctx) -> None:
+    """Fahrten derselben Linie bleiben getrennt; bei arrive_by die spätesten Ankünfte, sonst die frühesten Abfahrten."""
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": hourly_rs30(range(3, 9))})
+    arrive = await find_train_connections(ctx, **TRANSIT_ARGS, time=dt.time(11, 0), arrive_by=True)
+    assert [c["arrival"][11:] for c in arrive["connections"]] == ["08:29", "09:29", "10:29"]
+    depart = await find_train_connections(ctx, **TRANSIT_ARGS, time=dt.time(5, 0))
+    assert [c["departure"][11:] for c in depart["connections"]] == ["05:02", "06:02", "07:02"]
+
+
 def test_local_lines_name_their_mode() -> None:
     assert _line({"mode": "BUS", "displayName": "24"}) == "Bus 24"
     assert _line({"mode": "TRAM", "displayName": "1"}) == "Tram 1"
