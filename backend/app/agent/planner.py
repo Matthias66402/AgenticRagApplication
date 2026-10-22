@@ -46,16 +46,18 @@ Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig.
 3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart. Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
 4. `get_weather` für Ort und Zeitraum.
-5. `search_knowledge` (Pflicht vor jedem Plan) für relevante Regeln und Tipps, z. B. Hüttenregeln, Camping und
-   Wildcampen im jeweiligen Land, Ausrüstung für die Fortbewegungsart, Gewitter. Baue die Erkenntnisse in
-   `packing_tips` und `safety_notes` ein.
+5. `search_knowledge` (Pflicht vor jedem Plan), 2-3 kurze Suchen mit je einem Thema statt einer Sammelanfrage:
+   - immer eine zu Region bzw. Route mit Ortsnamen, z. B. "Radrouten rund um Oldenburg" oder "Wandern im Harz",
+   - dazu die wichtigsten Regeln und Tipps, z. B. Hüttenregeln, Wildcampen im jeweiligen Land, Ausrüstung für
+     die Fortbewegungsart, Gewitter.
+   Baue die Erkenntnisse in `packing_tips` und `safety_notes` ein, Hinweise zur Region auch in die Etappen-Notizen.
 6. Bei Wanderungen `estimate_hiking_time` je Etappe; bei langen Etappen `sun_times`.
 7. Möchte der Nutzer mit Bahn bzw. öffentlichen Verkehrsmitteln an- oder abreisen, `find_train_connections`:
    Anreise vom Wohn- bzw. Abfahrtsort zum Tourstart am ersten Tag (`arrive_by`, Ankunft mit genug Zeit für die
    erste Etappe), Rückreise vom Tourziel am letzten Tag (Abfahrt nach dem geschätzten Etappenende). Übernimm je eine
    passende Verbindung in `outbound_journey` bzw. `return_journey` und berücksichtige die Ankunftszeit bei der
    ersten Etappe. Fehlt der Abfahrtsort, frage danach. Bei Rad- und MTB-Touren mit `search_knowledge` nach Regeln
-   zur Fahrradmitnahme suchen und darauf hinweisen.
+   zur Fahrradmitnahme suchen (zählt zu den Suchen aus Schritt 5) und darauf hinweisen.
 
 ## Regeln
 - Verwende nur Fakten aus Tool-Ergebnissen. Unterkünfte ausschließlich aus `find_accommodation`; wurde keine

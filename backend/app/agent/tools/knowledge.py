@@ -11,12 +11,12 @@ from app.rag.retrieve import search_chunks
 async def search_knowledge(ctx: RunContext[AgentDeps], query: str) -> list[dict[str, Any]] | dict[str, Any]:
     """Durchsucht die Wissensbasis (RAG) nach Regeln, Tipps und Hintergrundwissen.
 
-    Beispiele: Hüttenregeln und Reservierung, Wildcampen-Regeln je Land, Ausrüstungslisten,
-    Sicherheit bei Gewitter, Tipps für Radreisen oder Kanutouren.
-    Mehrere gezielte Suchen sind besser als eine sehr allgemeine.
+    Beispiele: Radrouten in einer Region, Hüttenregeln und Reservierung, Wildcampen-Regeln je Land,
+    Ausrüstungslisten, Sicherheit bei Gewitter, Tipps für Radreisen oder Kanutouren.
+    Eine Suche je Thema: Sammelanfragen mit vielen Stichworten finden nur allgemeine Tipps.
 
     Args:
-        query: Konkrete Suchanfrage in natürlicher Sprache.
+        query: Kurze Suchanfrage zu genau einem Thema, z. B. "Radrouten rund um Oldenburg".
     """
     try:
         async with ctx.deps.session_factory() as session:
