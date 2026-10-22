@@ -25,6 +25,9 @@ class Adventure(Base):
     plan: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # Vollständiger PydanticAI-Nachrichtenverlauf, damit der Agent Folgeeingaben im Kontext versteht
     agent_history: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Routengeometrien aus Läufen ohne Plan (z. B. Route berechnet, dann Rückfrage): route_id -> [[lat, lon, ele], ...].
+    # Der nächste Plan kann sich auf sie beziehen; mit dem Plan werden sie übernommen und hier geleert.
+    pending_routes: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

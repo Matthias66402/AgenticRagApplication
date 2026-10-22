@@ -67,6 +67,8 @@ async def save_outcome(adventure_id: int, user_message: str, outcome: RunOutcome
         )
         if outcome.history_json is not None:
             adventure.agent_history = outcome.history_json
+        # deps.routes enthält auch die vorher offenen Routen (siehe chat); ohne Plan bleiben alle für den nächsten Lauf
+        adventure.pending_routes = {} if outcome.plan is not None else deps.routes
         if outcome.plan is not None:
             attributions = await knowledge_attributions(session, adventure.agent_history or [])
             adventure.plan = build_stored_plan(outcome, deps, adventure.plan, attributions)
@@ -85,6 +87,8 @@ async def chat(
     """
     adventure = await get_owned_adventure(session, adventure_id, user.id)
     history = list(adventure.agent_history or [])
+    # Routen aus früheren Läufen ohne Plan: Der Agent verweist im Plan oft auf eine schon berechnete route_id
+    pending_routes = dict(adventure.pending_routes or {})
     user_name = user.display_name
     # Die Request-Session wird nicht in den Stream mitgenommen; Tools und Speichern öffnen eigene Sessions.
     await session.close()
@@ -93,7 +97,9 @@ async def chat(
         settings = get_settings()
         outcome = RunOutcome()
         async with httpx.AsyncClient(timeout=settings.http_timeout_seconds) as http:
-            deps = AgentDeps(settings=settings, http=http, session_factory=SessionLocal, user_name=user_name)
+            deps = AgentDeps(
+                settings=settings, http=http, session_factory=SessionLocal, user_name=user_name, routes=pending_routes
+            )
             async with aclosing(run_planner(data.message, history, deps, outcome)) as events:
                 async for event in events:
                     if await request.is_disconnected():

@@ -9,13 +9,14 @@ import httpx
 import pytest
 import respx
 from pydantic import ValidationError
-from pydantic_ai import ModelMessage
+from pydantic_ai import ModelMessage, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
 from app.agent.planner import planner_agent
+from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.config import get_settings
-from tests.test_tools import TRANSIT_OK
+from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
 
@@ -217,6 +218,39 @@ async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: d
             await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": text})
     # Der zweite Lauf sieht den Verlauf des ersten
     assert seen_history[1] > seen_history[0]
+
+
+@respx.mock
+async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Route berechnet, dann Rückfrage; der Plan im nächsten Lauf verweist auf diese route_id und zeigt ihre Geometrie."""
+    respx.post(ORS_URL.format(profile="foot-hiking")).respond(status_code=503)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+
+    def route_id(messages: list[ModelMessage]) -> str:
+        return next(
+            part.content["route_id"]
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "plan_route"
+        )
+
+    steps: list[Callable[[list[ModelMessage]], Step]] = [
+        lambda _: ("plan_route", {"waypoints": [START.model_dump(), END.model_dump()], "transport": "hiking"}),
+        lambda _: ("ask_user", {"question": "Wann möchtest Du los?"}),
+        lambda _: ("search_knowledge", {"query": "Tageswanderung Ausrüstung"}),
+        lambda messages: ("final_plan", make_plan() | {"route_ids": [route_id(messages)]}),
+    ]
+    calls = iter(steps)
+    with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
+        for text in ["Wanderung morgen", "Um 9 Uhr"]:
+            response = await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": text})
+
+    plan = parse_sse(response.text)[-2]["plan"]
+    assert len(plan["route_ids"]) == 1
+    assert [p[:2] for p in plan["routes"][plan["route_ids"][0]]] == [[53.1, 8.2], [52.9, 8.2]]
+    stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
+    assert stored["plan"]["routes"] == plan["routes"]
 
 
 async def test_cannot_chat_in_foreign_adventure(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
