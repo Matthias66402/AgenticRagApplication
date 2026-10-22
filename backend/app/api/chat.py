@@ -14,6 +14,7 @@ from app.auth.deps import CurrentUser, SessionDep
 from app.config import get_settings
 from app.db import SessionLocal
 from app.models import Adventure, AdventureStatus, ChatMessage
+from app.observability import chat_turn, register_home_address
 from app.rag.attribution import knowledge_attributions, merge_attributions
 from app.schemas.adventure import ChatRequest
 
@@ -49,6 +50,13 @@ def assistant_text(outcome: RunOutcome) -> str:
     if outcome.plan:
         return outcome.text.strip() or f"Hier ist Dein Plan „{outcome.plan.title}“. {outcome.plan.summary}"
     return outcome.error or outcome.text.strip() or "Keine Antwort erhalten."
+
+
+def outcome_kind(outcome: RunOutcome) -> str:
+    """Art des Ergebnisses, z. B. zum Filtern der Traces in Langfuse."""
+    if outcome.error:
+        return "error"
+    return "plan" if outcome.plan else "question" if outcome.question else "answer" if outcome.answer else "none"
 
 
 async def save_outcome(adventure_id: int, user_message: str, outcome: RunOutcome, deps: AgentDeps) -> None:
@@ -90,8 +98,10 @@ async def chat(
     # Routen aus früheren Läufen ohne Plan: Der Agent verweist im Plan oft auf eine schon berechnete route_id
     pending_routes = dict(adventure.pending_routes or {})
     user_name = user.display_name
+    user_id = user.id
     home = ", ".join(part for part in (user.home_address, user.home_city) if part) or None
     default_transport = user.default_transport
+    register_home_address(user.home_address)
     # Die Request-Session wird nicht in den Stream mitgenommen; Tools und Speichern öffnen eigene Sessions.
     await session.close()
 
@@ -103,11 +113,17 @@ async def chat(
                 settings=settings, http=http, session_factory=SessionLocal, user_name=user_name, routes=pending_routes,
                 home=home, default_transport=default_transport,
             )  # fmt: skip
-            async with aclosing(run_planner(data.message, history, deps, outcome)) as events:
-                async for event in events:
-                    if await request.is_disconnected():
-                        break
-                    yield sse(event)
+            with chat_turn(message=data.message, user_id=user_id, adventure_id=adventure_id) as trace:
+                async with aclosing(run_planner(data.message, history, deps, outcome)) as events:
+                    async for event in events:
+                        if await request.is_disconnected():
+                            break
+                        yield sse(event)
+                trace.update(
+                    output=assistant_text(outcome),
+                    metadata={"outcome": outcome_kind(outcome), "tool_calls": len(outcome.tool_calls)},
+                    **({"level": "ERROR", "status_message": outcome.error} if outcome.error else {}),
+                )
 
         await save_outcome(adventure_id, data.message, outcome, deps)
         if outcome.plan is not None:

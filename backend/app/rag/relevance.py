@@ -57,6 +57,7 @@ def get_relevance_agent() -> Agent[None, RelevanceResult]:
     """In Tests: ``with get_relevance_agent().override(model=FunctionModel(...))``."""
     return Agent(
         get_settings().relevance_model or None,
+        name="relevance-grader",  # Name des Agent-Spans im Tracing
         output_type=ToolOutput(RelevanceResult, name="bewertung", strict=True),
         instructions=INSTRUCTIONS,
         model_settings={"max_tokens": MAX_OUTPUT_TOKENS, "timeout": TIMEOUT_SECONDS, "max_retries": 0},

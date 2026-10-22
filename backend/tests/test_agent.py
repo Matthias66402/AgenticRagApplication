@@ -13,7 +13,7 @@ from pydantic_ai import ModelMessage, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
-from app.agent.planner import planner_agent
+from app.agent.planner import model_settings, planner_agent
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.config import get_settings
 from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK
@@ -68,6 +68,12 @@ def scripted_model(*steps: Step) -> FunctionModel:
     """Jeder Modellaufruf liefert den nächsten Schritt."""
     calls = iter(steps)
     return streaming_model(lambda _: next(calls))
+
+
+def test_reasoning_summary_only_for_reasoning_models() -> None:
+    assert model_settings("openai:gpt-5-mini")["openai_reasoning_summary"] == "detailed"  # type: ignore[typeddict-item]
+    assert "openai_reasoning_summary" not in model_settings("openai:gpt-4.1-mini")
+    assert "openai_reasoning_summary" not in model_settings("test")
 
 
 def test_multi_day_requires_accommodation() -> None:

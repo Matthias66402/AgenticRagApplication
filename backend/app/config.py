@@ -42,6 +42,11 @@ class Settings(BaseSettings):
 
     cors_origins: str = "http://localhost:5180"
 
+    # Tracing mit Langfuse (siehe app/observability.py); ohne Keys aus
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_tracing_enabled: bool = True
+
     @property
     def overpass_url_list(self) -> list[str]:
         return [u.strip() for u in self.overpass_urls.split(",") if u.strip()]

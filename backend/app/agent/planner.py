@@ -3,6 +3,8 @@ import re
 from pydantic_ai import (
     Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, UserPromptPart,
 )  # fmt: skip
+from pydantic_ai.profiles.openai import openai_model_profile
+from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import MAX_STAGE_KM, AdventurePlan, ClarificationQuestion, TextAnswer
@@ -29,6 +31,16 @@ PUBLIC_TRANSPORT_WORDS = re.compile(
 # die JSON-Argumente an und braucht dafür Minuten. Das Tokenlimit fängt solche Ausreißer zusätzlich ab
 # (ein normaler Plan inkl. Reasoning braucht 2.000-5.000 Tokens).
 MAX_OUTPUT_TOKENS = 12_000
+
+
+def model_settings(model: str) -> ModelSettings:
+    settings: ModelSettings = {"max_tokens": MAX_OUTPUT_TOKENS}
+    provider, _, name = model.partition(":")
+    # Ohne angeforderte Zusammenfassung liefern OpenAI-Reasoning-Modelle leere Thinking-Teile; mit ihr ist im Tracing
+    # nachvollziehbar, warum der Agent ein Tool aufruft. Nicht-Reasoning-Modelle lehnen den Parameter ab.
+    if provider.startswith("openai") and openai_model_profile(name).get("openai_supports_reasoning"):
+        settings["openai_reasoning_summary"] = "detailed"  # type: ignore[typeddict-unknown-key]
+    return settings
 
 INSTRUCTIONS = """\
 Du bist ein erfahrener Outdoor-Tourenplaner für Deutschland, Österreich, die Schweiz und das übrige Europa.
@@ -141,6 +153,7 @@ def check_default_transport(ctx: RunContext[AgentDeps], output: PlannerOutput) -
 def build_agent() -> Agent[AgentDeps, PlannerOutput]:
     agent = Agent(
         get_settings().llm_model,
+        name="adventure-planner",  # Name des Agent-Spans im Tracing
         deps_type=AgentDeps,
         output_type=[
             ToolOutput(AdventurePlan, name="final_plan", description="Fertigen Abenteuerplan ausgeben", strict=True),
@@ -154,7 +167,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
                 strict=True,
             ),
         ],
-        model_settings={"max_tokens": MAX_OUTPUT_TOKENS},
+        model_settings=model_settings(get_settings().llm_model),
         instructions=INSTRUCTIONS,
         tools=[
             Tool(geocode),

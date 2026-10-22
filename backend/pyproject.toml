@@ -13,6 +13,7 @@ dependencies = [
     "pydantic[email]>=2.14",
     "pydantic-settings>=2.16",
     "pydantic-ai-slim[openai]>=2.58",
+    "langfuse>=5.0.4",
     "pwdlib[argon2]>=0.3",
     "pyjwt>=2.15",
     "httpx>=0.28",

@@ -4,6 +4,8 @@ import os
 os.environ["DATABASE_URL"] = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://adventure:adventure@localhost:5440/adventure_test"
 )
+# Keine Traces aus Tests nach Langfuse senden, auch wenn .env Keys enthält
+os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 
 from collections.abc import AsyncIterator, Iterator  # noqa: E402
 

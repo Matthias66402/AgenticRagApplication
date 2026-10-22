@@ -17,6 +17,7 @@ Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage H
 | Backend | FastAPI, SQLAlchemy 2 (async), Alembic, JWT-Auth |
 | Agent | PydanticAI (anbieter-agnostisch, Modell per `.env`) |
 | RAG | pgvector (HNSW, Kosinus), Embeddings über PydanticAI `Embedder`, Relevanzprüfung der Treffer durch ein kleines LLM |
+| Tracing | Langfuse (optional, OpenTelemetry über die PydanticAI-Instrumentierung) |
 | Export | fpdf2 (PDF), Pillow (Kartenhintergrund aus OSM-Kacheln), GPX 1.1 |
 | Datenquellen | Nominatim (Geocoding, Unterkünfte), OpenRouteService + BRouter (Routing), Open-Meteo (Wetter), Transitous (Bahnverbindungen), OpenStreetMap-Kacheln (PDF-Karte), Overpass als Ersatz |
 
@@ -124,6 +125,17 @@ Die Testfragen wurden mit Kenntnis der Dokumente geschrieben und die Wissensbasi
 
 Beide Downloads gibt es als Schaltflächen in der Planansicht.
 
+## Tracing mit Langfuse
+
+`backend/app/observability.py` – optional. Mit `LANGFUSE_PUBLIC_KEY` und `LANGFUSE_SECRET_KEY` in der `.env` (Projekt anlegen auf [cloud.langfuse.com](https://cloud.langfuse.com), Keys unter *Settings → API Keys*) und einem Neustart des Backends (`docker compose up -d backend`) landet jede Chat-Nachricht als Trace in Langfuse:
+
+- **Ein Trace je Nachricht** mit der Wurzel `chat-turn`: Eingabe ist die Nutzernachricht, Ausgabe die Antwort bzw. der Plantext, Metadaten enthalten das Ergebnis (`plan`, `question`, `answer`, `error`) und die Zahl der Tool-Aufrufe. Fehlgeschlagene Läufe sind als `ERROR` markiert.
+- **Darunter:** der Agent `adventure-planner` mit jedem Modellaufruf als Generation (Modell, Tokens, Kosten, Reasoning-Zusammenfassung), die Tool-Aufrufe, die Wissenssuche `retrieve-knowledge` (Anfrage, Treffer mit Ähnlichkeit, Embedding) und die Relevanzprüfung `relevance-grader`.
+- **Sessions und Nutzer:** Alle Nachrichten eines Abenteuers bilden die Session `adventure-<id>`; als Nutzer wird die numerische ID übertragen, nicht die E-Mail.
+- **Maskierte Wohnadresse:** Straße und Hausnummer aus dem Profil werden vor dem Export durch `[Adresse]` bzw. `[Straße]` ersetzt (auch in Tool-Argumenten, Geocoding-Ergebnissen und Reasoning). Ort und Koordinaten bleiben sichtbar, abgekürzte Schreibweisen wie „Nelkenstr.“ werden nicht erkannt.
+
+Tests senden nie Traces. Evaluation und Seed-Skripte werden nicht getraced.
+
 ## Konfiguration (`.env`)
 
 | Variable | Bedeutung |
@@ -135,6 +147,8 @@ Beide Downloads gibt es als Schaltflächen in der Planansicht.
 | `NOMINATIM_USER_AGENT` | User-Agent mit Kontaktangabe für Nominatim, OSM-Kacheln und Transitous; deren Nutzungsrichtlinien verlangen ihn |
 | `OVERPASS_URLS` | Kommagetrennte Overpass-Instanzen; nur Ersatz, falls die Unterkunftssuche über Nominatim scheitert |
 | `TRANSIT_API_URL` | Fahrplanauskunft für An- und Abreise mit Bahn/ÖPNV. Standard ist die offene MOTIS-Instanz von [Transitous](https://transitous.org) (ohne Key; verlangt einen aussagekräftigen User-Agent, dafür wird `NOMINATIM_USER_AGENT` mitgeschickt); jede andere MOTIS-Instanz funktioniert ebenso. Leer = aus. |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Optional, aktivieren das Tracing mit Langfuse (siehe oben). `LANGFUSE_TRACING_ENABLED=false` schaltet es trotz Keys ab. |
+| `LANGFUSE_BASE_URL` / `LANGFUSE_TRACING_ENVIRONMENT` | Langfuse-Instanz (Standard EU-Cloud `https://cloud.langfuse.com`) und Umgebung der Traces, z. B. `development` oder `production` |
 | `MAP_TILE_URL` | Kartenkacheln für den PDF-Export (Standard: OpenStreetMap, Tile-Policy beachten). Leer = PDF ohne Kartenhintergrund. |
 
 Hinweis zu OpenAI: Ein Projekt mit niedrigem Ratenlimit (z. B. 5 Anfragen pro Minute) bremst den Agenten spürbar, weil jeder Tool-Schritt eine LLM-Anfrage ist und jede Wissenssuche eine weitere für die Relevanzprüfung kostet.
@@ -150,6 +164,7 @@ backend/app/
   evaluation/  retrieval.py + retrieval_cases.json (Messung der Suchqualität)
   export/      pdf.py, gpx.py, basemap.py (OSM-Kartenhintergrund), filename.py
   api/         auth, users, adventures (inkl. PDF/GPX), chat (SSE), documents
+  observability.py  Tracing mit Langfuse (inkl. Maskierung der Wohnadresse)
   seed/        Admin-Seed, Wikivoyage-Import, Beispieldokumente (documents/*.md)
 frontend/src/
   pages/       Login/Registrierung, Abenteuerliste, Planer, Profil, Admin (Nutzer, Wissensbasis)
