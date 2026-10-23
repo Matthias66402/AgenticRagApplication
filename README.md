@@ -48,7 +48,7 @@ docker compose exec backend pytest -q
 
 Die Tests laufen gegen die Datenbank `adventure_test`. Sie verwenden ein geskriptetes Modell (`FunctionModel`), Fake-Embeddings und eine Relevanzprüfung ohne LLM, rufen also kein echtes LLM auf. HTTP-Aufrufe der Tools (Routing, Wetter, Fahrplan, Kartenkacheln usw.) werden mit `respx` gemockt.
 
-GitHub Actions führt die Tests bei jedem Push in Docker aus (`.github/workflows/docker.yml`): Image bauen, `docker compose up` mit `.env.example` als `.env`, beide Datenbanken migrieren, `/api/health` abfragen, `pytest`. So fällt auch auf, wenn Dockerfile, Compose-Datei oder Migrationen nicht mehr zusammenpassen.
+GitHub Actions führt die Tests bei jedem Push in Docker aus (`.github/workflows/docker.yml`): Image bauen, `docker compose up` mit `.env.example` als `.env`, beide Datenbanken migrieren, `/api/health` abfragen, `pytest`. So fällt auch auf, wenn Dockerfile, Compose-Datei oder Migrationen nicht mehr zusammenpassen. Das Frontend baut `.github/workflows/frontend.yml` mit `npm ci && npm run build` (Typprüfung mit `tsc` und Vite-Build).
 
 Für die Test-DB-Migration (einmalig):
 
