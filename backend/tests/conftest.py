@@ -29,7 +29,7 @@ PASSWORD = "secret-pass-123"
 @pytest.fixture(autouse=True)
 async def clean_db() -> AsyncIterator[None]:
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE users, adventures, chat_messages, documents, chunks RESTART IDENTITY CASCADE"))
+        await conn.execute(text("TRUNCATE users, adventures, chat_messages, documents, chunks, long_distance_routes RESTART IDENTITY CASCADE"))
     yield
 
 

@@ -19,7 +19,7 @@ from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
 from app.config import get_settings
-from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, one_trip
+from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, add_test_route, one_trip
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
 
@@ -544,6 +544,48 @@ async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient,
     assert [p[:2] for p in plan["routes"][plan["route_ids"][0]]] == [[53.1, 8.2], [52.9, 8.2]]
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
     assert stored["plan"]["routes"] == plan["routes"]
+
+
+@respx.mock
+async def test_plan_must_use_route_along_long_distance_route(
+    client: httpx.AsyncClient, user_headers: dict[str, str]
+) -> None:
+    """Ist eine Route entlang des Fernwegs berechnet, weicht der Plan nicht auf eine ältere Route ohne Fernweg aus."""
+    await add_test_route()
+    respx.post(url__startswith="https://api.openrouteservice.org/").respond(status_code=503)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    waypoints = [START.model_dump(), END.model_dump()]
+    route_ids: list[str] = []
+    retries: list[str] = []
+
+    def plan(messages: list[ModelMessage], route_id: int) -> Step:
+        route_ids[:] = [
+            part.content["route_id"]
+            for message in messages
+            for part in message.parts
+            if isinstance(part, ToolReturnPart) and part.tool_name == "plan_route"
+        ]
+        retries.extend(
+            part.model_response() for message in messages for part in message.parts if part.part_kind == "retry-prompt"
+        )
+        return "final_plan", make_plan() | {"transport": "cycling", "route_ids": [route_ids[route_id]]}
+
+    steps: list[Callable[[list[ModelMessage]], Step]] = [
+        lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling"}),
+        lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling", "route_name": "Testweg"}),
+        lambda _: ("search_knowledge", {"query": "Ausrüstung Radtour"}),
+        lambda messages: plan(messages, 0),  # ältere Route ohne Fernweg
+        lambda messages: plan(messages, 1),
+    ]
+    calls = iter(steps)
+    with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Auf dem Testweg radeln"}
+        )
+
+    assert parse_sse(response.text)[-2]["plan"]["route_ids"] == [route_ids[1]]
+    assert any("ältere Route statt der Route entlang Testweg" in text for text in retries), retries
 
 
 async def test_cannot_chat_in_foreign_adventure(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

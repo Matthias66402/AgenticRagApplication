@@ -30,6 +30,7 @@ cp .env.example .env            # OPENAI_API_KEY, JWT_SECRET, optional ORS_API_K
 docker compose up -d --build    # Postgres/pgvector (Port 5440) + Backend (Port 8010, Hot-Reload)
 docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.seed      # Admin-Konto + Beispieldokumente einlesen
+docker compose exec backend python -m app.seed.long_distance_routes  # Fernwege aus OSM (einige Minuten)
 
 cd frontend && npm install && npm run dev            # http://localhost:5180
 ```
@@ -80,6 +81,18 @@ Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-
 4. **Relevanzprüfung** (`relevance.py`): Ein kleines LLM (`RELEVANCE_MODEL`) bewertet in einem Aufruf jede Fundstelle: Beantwortet sie die Anfrage, oder ist sie nur thematisch ähnlich? Nur relevante Abschnitte erreichen den Agenten. Bleibt nichts übrig, erfährt der Agent, dass die Wissensbasis dazu nichts enthält. Fällt die Prüfung aus (Zeitlimit 10 s, z. B. bei einem Ratenlimit), gehen die Treffer ungeprüft weiter.
 
 Schwelle und Relevanzprüfung sind mit der Evaluation unten begründet. 
+
+## Fernwege
+
+Soll eine Tour einem ausgeschilderten Fernweg folgen (z. B. „auf dem Ostseeküsten-Radweg“), routet der Agent entlang dessen Verlauf aus OpenStreetMap. Die Fernwege aus `backend/app/seed/long_distance_routes.json` (Name, weitere Namen, OSM-Relationen) werden dafür vorab importiert, weil Live-Abfragen bei Overpass oft ein bis zwei Minuten dauern. Andere Fernwege fragt die App live ab.
+
+```bash
+docker compose exec backend python -m app.seed.long_distance_routes --list                 # Katalog und Importstand
+docker compose exec backend python -m app.seed.long_distance_routes "Elberadweg"           # einzelne importieren
+docker compose exec backend python -m app.seed.long_distance_routes --force                # neu importieren (aktueller OSM-Stand)
+```
+
+Neue Fernwege: Eintrag mit der Relations-ID (bei mehrteiligen Fernwegen die Superroute, zu finden z. B. auf openstreetmap.org) in die JSON-Datei aufnehmen und importieren. Die Daten stehen unter der ODbL; die Quellenangabe „© OpenStreetMap-Mitwirkende“ erscheint im Plan.
 
 ## Wissensbasis erweitern
 
@@ -207,7 +220,7 @@ backend/app/
   api/         auth, users, adventures (inkl. PDF/GPX), chat (SSE), documents
   observability.py  Tracing mit Langfuse (inkl. Maskierung der Wohnadresse)
   check_config.py   Prüft .env.example gegen config.py (läuft in GitHub Actions)
-  seed/        Admin-Seed, Wikivoyage-Import, Beispieldokumente (documents/*.md)
+  seed/        Admin-Seed, Wikivoyage-Import, Fernweg-Import, Beispieldokumente (documents/*.md)
 frontend/src/
   pages/       Login/Registrierung, Abenteuerliste, Planer, Profil, Admin (Nutzer, Wissensbasis)
   components/  PlanCard, RouteMap (Leaflet), ElevationProfile, JourneyCard, ToolCallBadge, ConfirmButton

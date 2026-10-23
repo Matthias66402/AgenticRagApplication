@@ -114,8 +114,13 @@ def build_query(accommodation_type: AccommodationType, lat: float, lon: float, r
     return f"[out:json][timeout:25][bbox:{south:.5f},{west:.5f},{north:.5f},{east:.5f}];\n(\n{selectors}\n);\nout center tags 80;"
 
 
-async def query_overpass(ctx: RunContext[AgentDeps], query: str) -> dict[str, Any]:
-    """Probiert die konfigurierten Overpass-Instanzen der Reihe nach durch."""
+async def query_overpass(
+    ctx: RunContext[AgentDeps], query: str, timeout: float = REQUEST_TIMEOUT, cache: bool = True
+) -> dict[str, Any]:
+    """Probiert die konfigurierten Overpass-Instanzen der Reihe nach durch.
+
+    `cache=False` für große Antworten, die der Aufrufer selbst (aufbereitet) zwischenspeichert.
+    """
     global _unavailable_until
     async with _overpass_lock:
         if query in _cache:
@@ -129,11 +134,13 @@ async def query_overpass(ctx: RunContext[AgentDeps], query: str) -> dict[str, An
                     url,
                     data={"data": query},
                     headers={"User-Agent": ctx.deps.settings.nominatim_user_agent},
-                    timeout=REQUEST_TIMEOUT,
+                    timeout=timeout,
                 )
                 response.raise_for_status()
-                _cache[query] = response.json()
-                return _cache[query]
+                data = response.json()
+                if cache:
+                    _cache[query] = data
+                return data
             except httpx.HTTPStatusError as exc:
                 last_error = exc
                 if exc.response.status_code not in RETRYABLE_STATUS:

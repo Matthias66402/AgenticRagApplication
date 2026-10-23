@@ -104,6 +104,10 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
 2. `plan_route` für die Gesamtstrecke. Bei mehrtägigen Touren die Strecke in sinnvolle Tagesetappen teilen.
    Richtwerte pro Tag: Wandern 10-25 km bzw. max. ~1200 Hm, Rad 40-100 km, MTB 25-60 km, Kanu 15-30 km,
    Auto max. ~500 km.
+   Soll die Tour einem ausgeschilderten Fernweg folgen (z. B. "auf dem Ostseeküsten-Radweg"), übergib dessen Namen
+   bei jedem `plan_route` dieser Tour als `route_name` und wähle Etappenorte und Unterkünfte nahe am Fernweg
+   (max. 5 km). Findet das Tool den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der
+   Plan nutzt dann diese Route; passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
 3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart. Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
 4. `get_weather` für Ort und Zeitraum.
@@ -249,6 +253,33 @@ def check_access(ctx: RunContext[AgentDeps], access: AccessRoute, journey: Journ
         )
 
 
+def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Wurde eine Route entlang eines Fernwegs berechnet, darf der Plan keine ältere Route nutzen.
+
+    Sonst weicht das Modell gern auf eine kürzere Route ohne Fernweg aus, wenn die Strecke nicht in die Tage passt.
+    """
+    results = [
+        part.content
+        for message in ctx.messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "plan_route"
+        and isinstance(part.content, dict) and "route_id" in part.content
+    ]  # fmt: skip
+    order = {result["route_id"]: index for index, result in enumerate(results)}
+    named = [index for index, result in enumerate(results) if "named_route" in result]
+    used = [order[route_id] for route_id in output.route_ids if route_id in order]
+    if not named or not used or max(used) >= named[-1]:
+        return
+    latest = results[named[-1]]
+    raise ModelRetry(
+        f"Der Plan nutzt eine ältere Route statt der Route entlang {', '.join(latest['named_route']['routes'])} "
+        f"(route_id {latest['route_id']}, {latest['distance_km']:g} km). Übernimm diese route_id und die Etappenwerte "
+        "aus ihren segments. Passt die Strecke nicht in die gewünschten Tage, kürze nicht über eine andere Route ab, "
+        "sondern frage mit `ask_user` nach mehr Tagen oder einem näheren Ziel."
+    )
+
+
 def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:
     """Verbindungen hängt das Backend nur an, wenn sie in diesem Lauf abgefragt wurden (siehe runner)."""
     if not ctx.deps.train_queries and SHOWN_BELOW.search(output.message):
@@ -330,6 +361,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             )
         if output.start_date < ctx.deps.today:
             raise ModelRetry(f"Das Startdatum {output.start_date} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+        check_named_route_used(ctx, output)
         if (output.outbound_journey or output.return_journey) and not used_tool(ctx, "find_train_connections"):
             raise ModelRetry(
                 "An- und Rückreise nur mit Verbindungen aus `find_train_connections` angeben. "

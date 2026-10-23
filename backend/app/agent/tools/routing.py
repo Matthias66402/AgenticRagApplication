@@ -1,5 +1,6 @@
 """Routing über OpenRouteService (mit API-Key) und BRouter (ohne Key) mit gegenseitigem Fallback."""
 
+import asyncio
 import math
 import time
 import uuid
@@ -13,6 +14,7 @@ from pydantic_ai import RunContext
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import TransportMode
 from app.agent.tools.common import haversine_km, http_error_message, tool_error
+from app.agent.tools.named_route import MAX_SNAP_KM, ROUTE_TYPES, Guide, guide, load_route_graph
 
 ORS_URL = "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
 BROUTER_URL = "https://brouter.de/brouter"
@@ -34,6 +36,9 @@ ORS_TIMEOUT_SECONDS = 8
 ORS_ATTEMPTS_PER_PROFILE = 2
 BROUTER_TIMEOUT_SECONDS = 20
 SLOW_PROFILE_COOLDOWN_SECONDS = 600
+# Entlang eines Fernwegs: dichte Stützpunkte in Teilanfragen (ORS erlaubt max. 50 Wegpunkte), wenige gleichzeitig
+GUIDED_CHUNK_WAYPOINTS = 40
+GUIDED_CONCURRENCY = 3
 # Höhen-Hysterese für selbst berechnete Höhenmeter (filtert Messrauschen der Höhendaten)
 ELEVATION_HYSTERESIS_M = 10.0
 
@@ -243,8 +248,67 @@ async def _route_brouter(ctx: RunContext[AgentDeps], profile: str, waypoints: li
 ROUTERS = {"ors": _route_ors, "brouter": _route_brouter}
 
 
+async def _route_chain(
+    ctx: RunContext[AgentDeps], chain: list[tuple[str, str]], waypoints: list[Coordinate]
+) -> tuple[RouteData | None, str, list[str]]:
+    """Probiert die Anbieter der Reihe nach; (Route oder None, Anbieter und Profil, Fehlermeldungen)."""
+    now = time.monotonic()
+    available = [entry for entry in chain if _slow_until.get(":".join(entry), 0) < now] or chain
+    problems: list[str] = []
+    for provider, profile in available:
+        label = f"{PROVIDER_NAMES[provider]} {profile}"
+        try:
+            return await ROUTERS[provider](ctx, profile, waypoints), label, problems
+        except httpx.HTTPError as exc:
+            # Jeder Fehler (Überlast, ungültiger Key, Distanzlimit, nicht routbarer Punkt) → nächster Eintrag
+            problems.append(f"{label}: {http_error_message(PROVIDER_NAMES[provider], exc)}")
+            if isinstance(exc, httpx.TimeoutException):
+                # Hing bei jedem Versuch → eine Weile überspringen
+                _slow_until[f"{provider}:{profile}"] = time.monotonic() + SLOW_PROFILE_COOLDOWN_SECONDS
+        except (KeyError, IndexError, ValueError) as exc:  # unerwartetes Antwortformat
+            problems.append(f"{label}: unerwartete Antwort ({exc})")
+    return None, "", problems
+
+
+async def _route_guided(
+    ctx: RunContext[AgentDeps], chain: list[tuple[str, str]], route_guide: Guide, waypoints: list[Coordinate]
+) -> tuple[RouteData | None, str, list[str]]:
+    """Route über die dichten Stützpunkte eines Fernwegs in Teilanfragen; Werte je Etappe aus der Gesamtgeometrie."""
+    dense = [Coordinate(lat=lat, lon=lon) for lat, lon in route_guide.waypoints]
+    step = GUIDED_CHUNK_WAYPOINTS - 1  # aufeinanderfolgende Teilanfragen teilen sich einen Anschlusspunkt
+    chunks = [dense[i : i + GUIDED_CHUNK_WAYPOINTS] for i in range(0, len(dense) - 1, step)]
+    semaphore = asyncio.Semaphore(GUIDED_CONCURRENCY)
+
+    async def route_chunk(chunk: list[Coordinate]) -> tuple[RouteData | None, str, list[str]]:
+        async with semaphore:
+            return await _route_chain(ctx, chain, chunk)
+
+    results = await asyncio.gather(*(route_chunk(chunk) for chunk in chunks))
+    problems = [problem for _, _, chunk_problems in results for problem in chunk_problems]
+    routes = [route for route, _, _ in results if route is not None]
+    if len(routes) < len(results):
+        return None, "", problems
+    geometry: list[list[float]] = []
+    for route in routes:
+        geometry += route.geometry[1:] if geometry else route.geometry
+    duration = sum(route.duration_s for route in routes)
+    ascent, descent = elevation_gain(geometry)
+    combined = RouteData(
+        geometry=geometry,
+        distance_m=sum(route.distance_m for route in routes),
+        duration_s=duration,
+        ascent_m=ascent,
+        descent_m=descent,
+        segments=split_segments(geometry, waypoints, duration),
+    )
+    return combined, " / ".join(dict.fromkeys(label for _, label, _ in results)), problems
+
+
 async def plan_route(
-    ctx: RunContext[AgentDeps], waypoints: list[Coordinate], transport: TransportMode
+    ctx: RunContext[AgentDeps],
+    waypoints: list[Coordinate],
+    transport: TransportMode,
+    route_name: str | None = None,
 ) -> dict[str, Any]:
     """Berechnet eine Route über die angegebenen Wegpunkte (OpenRouteService, Ersatz: BRouter).
 
@@ -254,9 +318,13 @@ async def plan_route(
     Args:
         waypoints: Mindestens 2 Koordinaten in Reihenfolge: Start, optionale Zwischenpunkte, Ziel.
         transport: Fortbewegungsart.
+        route_name: Ausgeschilderter Fernweg, dem die Route folgen soll (Rad, MTB, Wandern), z. B.
+            "Ostseeküsten-Radweg", "Elberadweg", "Rennsteig". Verlauf aus OpenStreetMap; der erste Aufruf für eine
+            Region kann ein bis zwei Minuten dauern. Passt kein Name, nennt der Fehler die Routen in der Nähe.
 
     Returns:
-        route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments.
+        route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments;
+        mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon).
     """
     if len(waypoints) < 2:
         return tool_error("Mindestens Start und Ziel als Wegpunkte angeben.")
@@ -269,32 +337,56 @@ async def plan_route(
     if not ctx.deps.settings.ors_api_key:
         chain = [(provider, profile) for provider, profile in chain if provider != "ors"]
 
-    now = time.monotonic()
-    available = [entry for entry in chain if _slow_until.get(":".join(entry), 0) < now] or chain
-    problems: list[str] = []
     route: RouteData | None = None
-    for provider, profile in available:
-        label = f"{PROVIDER_NAMES[provider]} {profile}"
+    label = ""
+    problems: list[str] = []
+    notes: list[str] = []
+    named_route: dict[str, Any] | None = None
+    if route_name and transport not in ROUTE_TYPES:
+        notes.append("route_name gilt nur für Rad, MTB und Wandern; normal geroutet.")
+    elif route_name:
+        points = [(w.lat, w.lon) for w in waypoints]
         try:
-            route = await ROUTERS[provider](ctx, profile, waypoints)
-            break
+            graph = await load_route_graph(ctx, route_name, transport, points)
         except httpx.HTTPError as exc:
-            # Jeder Fehler (Überlast, ungültiger Key, Distanzlimit, nicht routbarer Punkt) → nächster Eintrag
-            problems.append(f"{label}: {http_error_message(PROVIDER_NAMES[provider], exc)}")
-            if isinstance(exc, httpx.TimeoutException):
-                # Hing bei jedem Versuch → eine Weile überspringen
-                _slow_until[f"{provider}:{profile}"] = time.monotonic() + SLOW_PROFILE_COOLDOWN_SECONDS
-        except (KeyError, IndexError, ValueError) as exc:  # unerwartetes Antwortformat
-            problems.append(f"{label}: unerwartete Antwort ({exc})")
+            graph = None
+            notes.append(
+                f"Verlauf von „{route_name}“ nicht abrufbar ({http_error_message('Overpass API', exc)}) – "
+                "normal geroutet, die Strecke kann vom Fernweg abweichen."
+            )
+        if isinstance(graph, str):
+            return tool_error(graph)
+        if graph is not None:
+            route_guide = guide(graph, points)
+            # BRouter zuerst: viele Teilanfragen, ORS hat ein knappes Tageskontingent
+            guided_chain = sorted(chain, key=lambda entry: entry[0] != "brouter")
+            route, label, problems = await _route_guided(ctx, guided_chain, route_guide, waypoints)
+            if route is None:
+                notes.append(f"Routing entlang „{route_name}“ fehlgeschlagen – normal geroutet.")
+            else:
+                label += f" entlang {', '.join(graph.names)} (Verlauf: © OpenStreetMap-Mitwirkende)"
+                named_route = {
+                    "routes": graph.names,
+                    "on_route_km": round(route_guide.on_route_km, 1),
+                    "off_route_legs": route_guide.off_route_legs,
+                }
+                if route_guide.off_route_legs:
+                    notes.append(
+                        f"Teilstück(e) {', '.join(map(str, route_guide.off_route_legs))} folgen nicht dem Fernweg "
+                        f"(Wegpunkt weiter als {MAX_SNAP_KM:g} km entfernt oder keine Verbindung auf dem Fernweg)."
+                    )
+    if route is None:
+        route, label, chain_problems = await _route_chain(ctx, chain, waypoints)
+        problems += chain_problems
     if route is None:
         # Schätzung statt Abbruch, damit der Agent weiterplanen kann
-        return _estimate(waypoints, transport, " ".join(problems))
+        return _estimate(waypoints, transport, " ".join(notes + problems))
 
     route_id = f"r-{uuid.uuid4().hex[:8]}"
     ctx.deps.routes[route_id] = simplify_track(
         [[round(p[0], 6), round(p[1], 6), *[round(e, 1) for e in p[2:3]]] for p in route.geometry]
     )
-    return {
+    result: dict[str, Any] = {
         "route_id": route_id,
         "estimated": False,
         "source": label,
@@ -312,6 +404,11 @@ async def plan_route(
             for s in route.segments
         ],
     }
+    if named_route:
+        result["named_route"] = named_route
+    if notes:
+        result["note"] = " ".join(notes)
+    return result
 
 
 def estimate_hiking_time(distance_km: float, ascent_m: float = 0, descent_m: float = 0) -> dict[str, Any]:

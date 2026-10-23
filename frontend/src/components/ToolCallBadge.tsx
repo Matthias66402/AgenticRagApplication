@@ -12,7 +12,10 @@ function describeArgs(call: ToolCall): string {
     case "find_accommodation":
       return `${a.accommodation_type}, ${a.radius_km ?? 5} km`;
     case "plan_route":
-      return `${Array.isArray(a.waypoints) ? a.waypoints.length : "?"} Wegpunkte, ${a.transport}`;
+      return (
+        `${Array.isArray(a.waypoints) ? a.waypoints.length : "?"} Wegpunkte, ${a.transport}` +
+        (a.route_name ? `, entlang „${a.route_name}“` : "")
+      );
     case "get_weather":
       return `ab ${a.start_date}, ${a.days ?? 1} Tag(e)`;
     case "estimate_hiking_time":

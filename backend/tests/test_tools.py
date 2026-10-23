@@ -8,9 +8,10 @@ import respx
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AccommodationType, TransportMode
-from app.agent.tools import accommodation, routing
+from app.agent.tools import accommodation, named_route, routing
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.accommodation import find_accommodation
+from app.agent.tools.common import haversine_km
 from app.agent.tools.geocode import geocode
 from app.agent.tools.routing import BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
@@ -25,6 +26,7 @@ from app.agent.tools.transit import (
 from app.agent.tools.weather import ARCHIVE_URL, FORECAST_URL, get_weather
 from app.config import get_settings
 from app.db import SessionLocal
+from app.models import LongDistanceRoute
 
 TODAY = dt.date(2026, 7, 1)
 
@@ -34,6 +36,8 @@ def reset_overpass_state(monkeypatch) -> None:
     monkeypatch.setattr(accommodation, "_cache", {})
     monkeypatch.setattr(accommodation, "_unavailable_until", 0.0)
     monkeypatch.setattr(routing, "_slow_until", {})
+    monkeypatch.setattr(named_route, "_graphs", {})
+    monkeypatch.setattr(named_route, "_catalog_graphs", {})
     monkeypatch.setattr(geocode_module, "_last_request", 0.0)
 
     async def no_throttle() -> None:
@@ -189,6 +193,135 @@ async def test_route_estimate_for_canoe(ctx) -> None:
     result = await plan_route(ctx, [Coordinate(lat=53.0, lon=13.0), Coordinate(lat=53.1, lon=13.0)], TransportMode.canoe)
     assert result["estimated"] is True
     assert result["distance_km"] > 11
+
+
+# Fernweg als Bogen nach Norden: zwei Wege mit ~45 m Lücke zwischen 8.30 und der Fortsetzung
+COAST_START, COAST_VIA, COAST_END = (
+    Coordinate(lat=53.10, lon=8.20), Coordinate(lat=53.15, lon=8.30), Coordinate(lat=53.10, lon=8.40)
+)
+COAST_RELATIONS = {"elements": [
+    {"type": "relation", "id": 1, "tags": {"name": "D2 Testküsten-Radweg - Abschnitt Nord", "network": "ncn"}},
+    {"type": "relation", "id": 2, "tags": {"name": "Nord-Testküsten-Weg", "network": "rcn"}},
+    {"type": "relation", "id": 3, "tags": {"name": "Moortour", "network": "lcn"}},
+]}
+COAST_WAYS = {"elements": [
+    {"type": "way", "id": 10, "nodes": [1, 2, 3],
+     "geometry": [{"lat": 53.10, "lon": 8.20}, {"lat": 53.15, "lon": 8.25}, {"lat": 53.15, "lon": 8.30}]},
+    {"type": "way", "id": 11, "nodes": [4, 5, 6],
+     "geometry": [{"lat": 53.1504, "lon": 8.30}, {"lat": 53.15, "lon": 8.35}, {"lat": 53.10, "lon": 8.40}]},
+]}  # fmt: skip
+
+
+def overpass_coast(request: httpx.Request) -> httpx.Response:
+    query = request.content.decode()
+    return httpx.Response(200, json=COAST_RELATIONS if "rel%28bw%29" in query else COAST_WAYS)
+
+
+def brouter_echo(request: httpx.Request) -> httpx.Response:
+    """BRouter-Antwort mit geraden Linien zwischen den übergebenen Punkten."""
+    points = [[float(v) for v in p.split(",")] for p in request.url.params["lonlats"].split("|")]
+    meters = sum(haversine_km(a[1], a[0], b[1], b[0]) for a, b in zip(points, points[1:])) * 1000
+    return httpx.Response(200, json={"features": [{
+        "geometry": {"coordinates": [[lon, lat, 10.0] for lon, lat in points]},
+        "properties": {"track-length": str(meters), "total-time": str(meters / 5)},
+    }]})  # fmt: skip
+
+
+def test_named_route_matching() -> None:
+    assert named_route.matches("Ostseeküsten-Radweg", {"name": "D2 Ostseeküsten-Radweg - Abschnitt SH-Ost"})
+    assert named_route.matches("ostseekuesten radweg", {"name": "EV10 Ostseeküsten-Radweg"})
+    assert named_route.matches("EV10", {"name": "EuroVelo", "ref": "EV10"})
+    # Kein beliebiger Teilstring: "Ostseeradweg" ist nicht der Nord-Ostsee-Radweg
+    assert not named_route.matches("Ostseeradweg", {"name": "Nord-Ostsee-Radweg"})
+
+
+@respx.mock
+async def test_route_follows_named_route(ctx) -> None:
+    overpass = respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
+    brouter = respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    result = await plan_route(ctx, [COAST_START, COAST_VIA, COAST_END], TransportMode.cycling, "Testküsten-Radweg")
+
+    assert overpass.call_count == 2  # Relationen nahe den Wegpunkten, dann deren Wege
+    assert "rel(id:1)" in httpx.QueryParams(overpass.calls[1].request.content.decode())["data"]
+    # BRouter zuerst (viele Teilanfragen); der Bogen nach Norden kommt als Stützpunkt mit
+    assert "8.250000,53.150000" in brouter.calls[0].request.url.params["lonlats"]
+    assert result["source"].startswith("BRouter trekking entlang D2 Testküsten-Radweg")
+    assert "OpenStreetMap" in result["source"]
+    assert result["named_route"]["routes"] == ["D2 Testküsten-Radweg"]
+    assert result["named_route"]["off_route_legs"] == []
+    # Lücke zwischen den Wegen überbrückt: beide Teilstücke liegen auf dem Fernweg
+    assert result["named_route"]["on_route_km"] == pytest.approx(19.8, abs=0.5)
+    assert len(result["segments"]) == 2
+    assert result["distance_km"] == pytest.approx(19.8, abs=0.5)
+
+    # Weitere Aufrufe derselben Tour nutzen den gespeicherten Graphen
+    await plan_route(ctx, [COAST_START, COAST_END], TransportMode.cycling, "Testküsten-Radweg")
+    assert overpass.call_count == 2
+
+
+async def add_test_route() -> None:
+    """Katalogeintrag "Testweg" als leichter Bogen nach Osten zwischen START und END."""
+    async with SessionLocal() as session:
+        session.add(LongDistanceRoute(
+            name="Testweg", aliases=["Testradweg", "T1"], route_type="bicycle", relation_ids=[99],
+            ways=[[[1, 2, 3], [[53.10, 8.20], [53.00, 8.25], [52.90, 8.20]]]], length_km=23.2,
+        ))  # fmt: skip
+        await session.commit()
+
+
+def test_catalog_matching() -> None:
+    names = ["Ostseeküsten-Radweg", "Ostseeradweg", "D2", "EV10"]
+    assert named_route.catalog_matches("Ostseeradweg", names)
+    assert named_route.catalog_matches("EV10 Ostseeküsten-Radweg", names)  # Kürzel davor
+    assert named_route.catalog_matches("Ostseeküsten", names)  # Namensanfang
+    assert not named_route.catalog_matches("D", names)
+    assert not named_route.catalog_matches("D1", ["Elberadweg", "D10"])  # Kürzel nur exakt
+
+
+@respx.mock
+async def test_named_route_from_catalog_without_overpass(ctx) -> None:
+    await add_test_route()
+    overpass = respx.post(url__startswith="https://overpass").respond(status_code=503)
+    brouter = respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testradweg")
+
+    assert overpass.call_count == 0
+    assert "8.250000,53.000000" in brouter.calls[0].request.url.params["lonlats"]
+    assert result["named_route"] == {"routes": ["Testweg"], "on_route_km": 23.2, "off_route_legs": []}
+    assert result["source"] == "BRouter trekking entlang Testweg (Verlauf: © OpenStreetMap-Mitwirkende)"
+    # Wandern sucht nur Wanderwege im Katalog → live über Overpass (hier nicht erreichbar)
+    respx.post(url__startswith="https://api.openrouteservice.org/").respond(status_code=503)
+    result = await plan_route(ctx, [START, END], TransportMode.hiking, "Testradweg")
+    assert "named_route" not in result and overpass.call_count > 0
+
+
+@respx.mock
+async def test_named_route_unknown_name_lists_routes_nearby(ctx) -> None:
+    respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
+    result = await plan_route(ctx, [COAST_START, COAST_END], TransportMode.cycling, "Küstenradweg")
+    # Fernwege zuerst, Abschnittsangaben gekürzt
+    assert "„D2 Testküsten-Radweg“, „Nord-Testküsten-Weg“, „Moortour“" in result["error"]
+
+
+@respx.mock
+async def test_named_route_far_waypoint_is_routed_normally(ctx) -> None:
+    respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
+    respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    inland = Coordinate(lat=53.00, lon=8.40)  # ~11 km vom Fernweg
+    result = await plan_route(ctx, [COAST_START, COAST_END, inland], TransportMode.cycling, "Testküsten-Radweg")
+    assert result["named_route"]["off_route_legs"] == [2]
+    assert "Teilstück(e) 2 folgen nicht dem Fernweg" in result["note"]
+
+
+@respx.mock
+async def test_named_route_without_overpass_routes_normally(ctx) -> None:
+    ctx.deps.settings = ctx.deps.settings.model_copy(update={"ors_api_key": ""})
+    respx.post(url__startswith="https://overpass").respond(status_code=400)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testküsten-Radweg")
+    assert result["source"] == "BRouter trekking"
+    assert "named_route" not in result
+    assert "nicht abrufbar" in result["note"]
 
 
 @respx.mock
