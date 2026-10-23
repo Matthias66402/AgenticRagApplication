@@ -237,31 +237,44 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
 
 @respx.mock
 async def test_plan_links_bahn_search_without_timetable(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
-    """Nach dem Fahrplanwechsel ohne Fahrplandaten hängt das Backend den bahn.de-Link an den Plan, nicht das LLM."""
+    """Nach dem Fahrplanwechsel ohne Fahrplandaten hängt das Backend den bahn.de-Link an den Plan, nicht das LLM; auch
+    wenn der Agent die Bahn in einer früheren Nachricht abgefragt hat oder nur antwortet."""
     respx.get(get_settings().transit_api_url).respond(json={"itineraries": []})
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
-    date = next_timetable_change(dt.date.today()) + dt.timedelta(days=7)
-    connection_args = {
+    start = next_timetable_change(dt.date.today()) + dt.timedelta(days=7)
+    plan = make_plan() | {"start_date": start.isoformat()}
+    plan["stages"][0]["date"] = start.isoformat()
+    route = {
         "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
-        "to_name": "Garmisch", "to_lat": 47.49, "to_lon": 11.09, "date": date.isoformat(), "time": "06:00",
+        "to_name": "Garmisch", "to_lat": 47.49, "to_lon": 11.09,
     }  # fmt: skip
-    model = scripted_model(
-        ("search_knowledge", {"query": "Anreise Bahn"}),
-        ("find_train_connections", connection_args),
-        ("final_plan", make_plan()),
-    )
-    with planner_agent.override(model=model):
-        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Anreise ab München"})
-    with planner_agent.override(model=scripted_model(("final_plan", make_plan() | {"title": "Geändert"}))):
-        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Anderer Titel"})
 
-    stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
-    assert stored["title"] == "Geändert"
-    # ohne neue Abfrage bleibt der Link aus dem vorigen Lauf
-    [link] = stored["plan"]["timetable_links"]
-    assert link["label"] == f"München → Garmisch · {WEEKDAYS[date.weekday()]} {date:%d.%m.%Y}, ab 06:00"
+    async def send(message: str, *steps: Step) -> None:
+        with planner_agent.override(model=scripted_model(*steps)):
+            await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": message})
+
+    async def links() -> list[dict[str, Any]]:
+        stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
+        return stored["plan"]["timetable_links"]
+
+    # Abfrage, dann Rückfrage; der Plan folgt erst mit der nächsten Nachricht ohne neue Abfrage
+    outside = route | {"date": (start + dt.timedelta(days=30)).isoformat()}  # gehört nicht zur Tour
+    await send(
+        "Anreise ab München",
+        ("find_train_connections", route | {"date": start.isoformat(), "time": "06:00"}),
+        ("find_train_connections", outside),
+        ("ask_user", {"question": "Wie lange?"}),
+    )
+    await send("Einen Tag", ("search_knowledge", {"query": "Anreise Bahn"}), ("final_plan", plan))
+    [link] = await links()
+    assert link["label"] == f"München → Garmisch · {WEEKDAYS[start.weekday()]} {start:%d.%m.%Y}, ab 06:00"
     assert link["url"].startswith("https://www.bahn.de/buchung/fahrplan/suche#")
     assert link["missing"] is True
+
+    # Rückreise abgefragt, aber nur geantwortet: Link kommt trotzdem in den Plan
+    back = {**route, "from_name": "Garmisch", "to_name": "München", "date": (start + dt.timedelta(days=1)).isoformat()}
+    await send("Und zurück?", ("find_train_connections", back), ("answer_user", {"message": "Noch kein Fahrplan."}))
+    assert [link["label"][:18] for link in await links()] == ["München → Garmisch", "Garmisch → München"]
 
 
 @respx.mock

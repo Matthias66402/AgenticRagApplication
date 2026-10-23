@@ -1,3 +1,4 @@
+import datetime as dt
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -10,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import PLAN_KIND_TOUR, PLAN_KIND_TRAIN_TRIP, TrainTripPlan
 from app.agent.runner import RunOutcome, run_planner
-from app.agent.tools.transit import timetable_links
+from app.agent.tools.transit import history_timetable_links
 from app.api.adventures import get_owned_adventure
 from app.auth.deps import CurrentUser, SessionDep
 from app.config import get_settings
@@ -28,13 +29,16 @@ def sse(event: dict[str, Any]) -> str:
 
 
 def build_stored_plan(
-    outcome: RunOutcome, deps: AgentDeps, previous: dict[str, Any] | None, attributions: list[dict[str, Any]] | None = None
+    outcome: RunOutcome,
+    deps: AgentDeps,
+    previous: dict[str, Any] | None,
+    attributions: list[dict[str, Any]] | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Plan + Routengeometrien für die Karte + Quellenangaben. Geometrien und Quellen früherer Läufe bleiben erhalten.
 
     `kind` unterscheidet Touren von Reisekarten reiner Bahnfahrten (ältere Pläne ohne `kind` sind Touren).
-    `timetable_links`: bahn.de-Links für Bahnabfragen ohne (sichere) Fahrplandaten; ohne neue Abfrage bleiben die
-    bisherigen.
+    `timetable_links`: bahn.de-Links für Bahnabfragen ohne (sichere) Fahrplandaten, siehe `plan_timetable_links`.
     """
     assert outcome.plan is not None
     known_routes = (previous or {}).get("routes", {}) | deps.routes
@@ -52,12 +56,16 @@ def build_stored_plan(
         "route_ids": route_ids,
         "routes": {rid: known_routes[rid] for rid in route_ids},
         "attributions": merge_attributions((previous or {}).get("attributions", []), attributions or []),
-        "timetable_links": (
-            timetable_links(list(deps.train_queries.values()))
-            if deps.train_queries
-            else (previous or {}).get("timetable_links", [])
-        ),
+        "timetable_links": plan_timetable_links(outcome.plan.model_dump(mode="json"), history or []),
     }
+
+
+def plan_timetable_links(plan: dict[str, Any], history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """bahn.de-Links der Bahnabfragen im Verlauf, die zur Tour passen: vom Tag vor dem Start bis zum Tag nach dem Ende
+    (Anreise am Vortag, Rückreise am Tag nach der letzten Etappe)."""
+    start = dt.date.fromisoformat(plan["start_date"])
+    last_day = start + dt.timedelta(days=plan["duration_days"])
+    return history_timetable_links(history, start - dt.timedelta(days=1), last_day)
 
 
 def assistant_text(outcome: RunOutcome) -> str:
@@ -97,9 +105,13 @@ async def save_outcome(adventure_id: int, user_message: str, outcome: RunOutcome
         adventure.pending_routes = {} if outcome.plan is not None else deps.routes
         if outcome.plan is not None:
             attributions = await knowledge_attributions(session, adventure.agent_history or [])
-            adventure.plan = build_stored_plan(outcome, deps, adventure.plan, attributions)
+            adventure.plan = build_stored_plan(outcome, deps, adventure.plan, attributions, adventure.agent_history)
             adventure.title = outcome.plan.title
             adventure.status = AdventureStatus.planned
+        elif deps.train_queries and adventure.plan and adventure.plan.get("kind", PLAN_KIND_TOUR) == PLAN_KIND_TOUR:
+            # Bahn für die bestehende Tour abgefragt, aber nur geantwortet: Links trotzdem in den Plan
+            links = plan_timetable_links(adventure.plan, adventure.agent_history or [])
+            adventure.plan = adventure.plan | {"timetable_links": links}
         await session.commit()
 
 

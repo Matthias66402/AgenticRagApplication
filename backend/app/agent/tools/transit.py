@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import re
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -229,7 +230,8 @@ async def find_train_connections(
             "error": f"Für {date:%d.%m.%Y} (nach dem Fahrplanwechsel am {change:%d.%m.%Y}) liegen noch keine "
             "Bahnfahrpläne vor. Keine Verbindung angeben oder erfinden. Ein Link zur Verbindungssuche bei bahn.de "
             "erscheint automatisch unter der Antwort bzw. im Plan unter An- und Abreise; nur kurz darauf hinweisen, "
-            "die URL nicht in `sources` oder Notizen kopieren.",
+            "die URL nicht in `sources` oder Notizen kopieren. Gehört die Fahrt zu einer Tour, gib den Plan trotzdem "
+            "mit `final_plan` aus (ohne diese Verbindung).",
             "bahn_url": bahn_url,
         }
     elif not connections:
@@ -280,6 +282,39 @@ def timetable_links(queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for query in queries
         if (url := query["result"].get("bahn_url"))
     ]
+
+
+def history_timetable_links(
+    history: list[dict[str, Any]], first_day: dt.date, last_day: dt.date
+) -> list[dict[str, Any]]:
+    """bahn.de-Links aller Bahnabfragen im Verlauf (auch früherer Nachrichten) mit Reisedatum im Zeitraum; der Agent
+    fragt die Bahn oft in einer Nachricht ab und gibt den Plan erst in einer späteren aus. Gleiche Strecke und Tag:
+    die neueste Abfrage."""
+    calls: dict[str, dict[str, Any]] = {}
+    links: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for message in history:
+        for part in message.get("parts", []):
+            if part.get("tool_name") != "find_train_connections":
+                continue
+            if part.get("part_kind") == "tool-call":
+                args = part.get("args")
+                calls[part.get("tool_call_id", "")] = json.loads(args) if isinstance(args, str) else args or {}
+            elif part.get("part_kind") == "tool-return" and isinstance(result := part.get("content"), dict):
+                args = calls.get(part.get("tool_call_id", ""), {})
+                try:
+                    query = {
+                        "from_name": args["from_name"], "to_name": args["to_name"],
+                        "date": dt.date.fromisoformat(args["date"]),
+                        "time": dt.time.fromisoformat(args.get("time", "08:00")),
+                        "arrive_by": args.get("arrive_by", False), "result": result,
+                    }  # fmt: skip
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if first_day <= query["date"] <= last_day and (found := timetable_links([query])):
+                    key = (query["from_name"], query["to_name"], args["date"])
+                    links.pop(key, None)  # neueste Abfrage ans Ende
+                    links[key] = found[0]
+    return list(links.values())
 
 
 def format_train_queries(queries: list[dict[str, Any]]) -> str:
