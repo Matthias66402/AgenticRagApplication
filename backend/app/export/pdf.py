@@ -414,7 +414,8 @@ class PlanPdf(FPDF):
         """An- und Rückreise mit Bahn/ÖPNV: Überblick und Teilstrecken mit Zeiten, Linie und Gleis."""
         labels = TRAIN_TRIP_JOURNEYS if is_train_trip(self.plan) else JOURNEYS
         journeys = [(label, self.plan.get(key)) for label, key in labels if self.plan.get(key)]
-        if not journeys:
+        links = self.plan.get("timetable_links", [])  # bahn.de-Suche, wenn Fahrplandaten fehlen
+        if not journeys and not links:
             return
         self.ensure_space(45)  # Überschrift mit dem Anfang der ersten Verbindung zusammenhalten
         self.heading("Bahnfahrt" if is_train_trip(self.plan) else "An- und Abreise")
@@ -451,7 +452,12 @@ class PlanPdf(FPDF):
                 self.ln(1)
                 self.paragraph(journey["notes"], size=9.5, links=True)
             self.ln(3)
-        self.paragraph(TRANSIT_NOTE, size=8, color=MUTED)
+        for link in links:
+            status = "noch kein Fahrplan verfügbar" if link["missing"] else "Fahrplan evtl. unvollständig"
+            self.paragraph(f"{link['label']}: {status} – [Verbindungen bei bahn.de]({link['url']})", size=9.5, links=True)
+            self.ln(1)
+        if journeys:
+            self.paragraph(TRANSIT_NOTE, size=8, color=MUTED)
 
     def lists(self) -> None:
         plan = self.plan

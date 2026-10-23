@@ -14,7 +14,14 @@ from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.routing import BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
-from app.agent.tools.transit import _line, find_train_connections
+from app.agent.tools.transit import (
+    _line,
+    bahn_search_url,
+    find_train_connections,
+    format_train_queries,
+    next_timetable_change,
+    timetable_change,
+)
 from app.agent.tools.weather import ARCHIVE_URL, FORECAST_URL, get_weather
 from app.config import get_settings
 from app.db import SessionLocal
@@ -452,3 +459,74 @@ async def test_train_connections_merge_variants_with_same_trains(ctx) -> None:
     respx.get(get_settings().transit_api_url).respond(json={"itineraries": [with_bus, *TRANSIT_OK["itineraries"]]})
     result = await find_train_connections(ctx, **TRANSIT_ARGS)
     assert [c["transfers"] for c in result["connections"]] == [1, 0]
+
+
+def test_timetable_change_is_second_sunday_in_december() -> None:
+    assert [timetable_change(year) for year in (2025, 2026, 2027)] == [
+        dt.date(2025, 12, 14), dt.date(2026, 12, 13), dt.date(2027, 12, 12),
+    ]  # fmt: skip
+    assert next_timetable_change(dt.date(2026, 12, 12)) == dt.date(2026, 12, 13)
+    assert next_timetable_change(dt.date(2026, 12, 13)) == dt.date(2027, 12, 12)
+
+
+def test_bahn_search_url() -> None:
+    moment = dt.datetime(2026, 12, 20, 12, 0)
+    url = bahn_search_url("Oldenburg", 53.1435, 8.2146, "Hannover", 52.3767, 9.741, moment, arrive_by=True)
+    assert url.startswith("https://www.bahn.de/buchung/fahrplan/suche#sts=true&so=Oldenburg&zo=Hannover&")
+    assert "soid=A%3D2%40O%3DOldenburg%40X%3D8214600%40Y%3D53143500%40" in url
+    assert "hd=2026-12-20T12%3A00%3A00&hza=A" in url
+
+
+def one_trip(start: str, end: str, mode: str = "REGIONAL_RAIL") -> dict:
+    """Eine Verbindung ohne Umstieg (Zeiten in UTC)."""
+    leg = transit_leg(mode, transit_place("München Hbf"), transit_place("Garmisch-Partenkirchen"), start, end,
+                      displayName="RB6")  # fmt: skip
+    return {"startTime": start, "endTime": end, "duration": leg["duration"], "transfers": 0, "legs": [leg]}
+
+
+AFTER_CHANGE = TRANSIT_ARGS | {"date": dt.date(2026, 12, 20), "time": dt.time(9, 0)}
+
+
+@respx.mock
+async def test_train_connections_missing_timetable_after_change(ctx) -> None:
+    """Nach dem Fahrplanwechsel liefert Transitous nur Verbindungen weit ab der Wunschzeit: Daten fehlen noch."""
+    trip = one_trip("2026-12-20T19:31:00Z", "2026-12-20T21:00:00Z")
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": [trip]})
+    result = await find_train_connections(ctx, **AFTER_CHANGE)
+
+    assert result["connections"] == []
+    assert "Fahrplanwechsel am 13.12.2026" in result["error"]
+    assert "hd=2026-12-20T09%3A00%3A00&hza=D" in result["bahn_url"]
+    shown = format_train_queries(list(ctx.deps.train_queries.values()))
+    assert f"[Verbindungen bei bahn.de]({result['bahn_url']})" in shown
+
+
+@respx.mock
+async def test_train_connections_after_change_with_data(ctx) -> None:
+    trip = one_trip("2026-12-20T08:28:00Z", "2026-12-20T09:52:00Z")
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": [trip]})
+    result = await find_train_connections(ctx, **AFTER_CHANGE)
+
+    assert [c["departure"] for c in result["connections"]] == ["2026-12-20T09:28"]
+    assert "unvollständig" in result["note"]
+    shown = format_train_queries(list(ctx.deps.train_queries.values()))
+    assert "09:28 RB6" in shown
+    assert f"[bei bahn.de prüfen]({result['bahn_url']})" in shown
+
+
+@respx.mock
+async def test_train_connections_before_change_far_from_time_is_kept(ctx) -> None:
+    """Vor dem Fahrplanwechsel sind große Lücken echt (z. B. nachts, auf dem Land) und kein Datenproblem."""
+    trip = one_trip("2026-10-24T17:00:00Z", "2026-10-24T18:00:00Z")
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": [trip]})
+    result = await find_train_connections(ctx, **TRANSIT_ARGS)
+    assert [c["departure"] for c in result["connections"]] == ["2026-10-24T19:00"]
+    assert "bahn_url" not in result
+
+
+@respx.mock
+async def test_train_connections_none_found_links_bahn(ctx) -> None:
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": []})
+    result = await find_train_connections(ctx, **TRANSIT_ARGS)
+    assert "https://www.bahn.de/buchung/fahrplan/suche#" in result["error"]
+    assert not ctx.deps.train_queries

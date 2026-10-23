@@ -1,6 +1,7 @@
 import datetime as dt
 import re
 from typing import Any
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -18,11 +19,51 @@ MAX_CONNECTIONS = 3
 LOCAL_MODES = {"WALK", "BUS", "TRAM", "SUBWAY", "FERRY", "FUNICULAR", "AERIAL_LIFT", "AREAL_LIFT", "CABLE_CAR"}
 TRACK_PREFIX = re.compile(r"^(Gl(eis)?|Bstg)\.?\s*", re.IGNORECASE)  # manche Feeds liefern "Gl4" statt "4"
 ATTRIBUTION = "Fahrplandaten: Transitous (transitous.org)"
+# Liegt die nächste Verbindung weiter von der Wunschzeit entfernt, fehlen nach dem Fahrplanwechsel vermutlich Daten
+MAX_GAP_HOURS = 3
+BAHN_SEARCH_URL = "https://www.bahn.de/buchung/fahrplan/suche"
 # Nahverkehrsfeeds liefern oft nur die Nummer ("24"); ohne Verkehrsmittel ist unklar, ob Bus oder Straßenbahn
 MODE_LABELS = {
     "BUS": "Bus", "TRAM": "Tram", "SUBWAY": "U-Bahn", "FERRY": "Fähre", "FUNICULAR": "Standseilbahn",
     "AERIAL_LIFT": "Seilbahn", "AREAL_LIFT": "Seilbahn", "CABLE_CAR": "Seilbahn",
 }  # fmt: skip
+
+
+def timetable_change(year: int) -> dt.date:
+    """Fahrplanwechsel in Europa: in der Nacht zum zweiten Sonntag im Dezember."""
+    first = dt.date(year, 12, 1)
+    return first + dt.timedelta(days=(6 - first.weekday()) % 7 + 7)
+
+
+def next_timetable_change(today: dt.date) -> dt.date:
+    change = timetable_change(today.year)
+    return change if today < change else timetable_change(today.year + 1)
+
+
+def bahn_search_url(
+    from_name: str, from_lat: float, from_lon: float, to_name: str, to_lat: float, to_lon: float,
+    moment: dt.datetime, arrive_by: bool,
+) -> str:
+    """Vorausgefüllte Verbindungssuche auf bahn.de; Orte als Koordinaten, damit kein Bahnhofs-ID nötig ist."""
+
+    def location(name: str, lat: float, lon: float) -> str:
+        return f"A=2@O={name}@X={round(lon * 1_000_000)}@Y={round(lat * 1_000_000)}@"
+
+    params = {
+        "sts": "true", "so": from_name, "zo": to_name,
+        "soid": location(from_name, from_lat, from_lon), "zoid": location(to_name, to_lat, to_lon),
+        "hd": f"{moment:%Y-%m-%dT%H:%M:%S}", "hza": "A" if arrive_by else "D", "kl": "2",
+    }  # fmt: skip
+    return f"{BAHN_SEARCH_URL}#{urlencode(params, quote_via=quote)}"
+
+
+def _gap_hours(connections: list[dict[str, Any]], moment: dt.datetime, arrive_by: bool) -> float:
+    """Abstand der zeitlich nächsten Verbindung zur Wunschzeit (Abfahrt bzw. bei arrive_by Ankunft)."""
+    wanted = moment.replace(tzinfo=None)
+    return min(
+        abs((dt.datetime.fromisoformat(c["arrival" if arrive_by else "departure"]) - wanted).total_seconds()) / 3600
+        for c in connections
+    )
 
 
 def _local(timestamp: str, tz: str | None) -> str:
@@ -177,17 +218,37 @@ async def find_train_connections(
     except httpx.HTTPError as exc:
         return tool_error(http_error_message("Transitous", exc))
 
-    if not itineraries:
-        return tool_error(
-            f"Keine Verbindung {from_name} → {to_name} gefunden. Nächstgelegenen Bahnhof oder andere Uhrzeit versuchen."
-        )
     connections = [_connection(it, from_name, to_name) for it in _distinct(itineraries, arrive_by)]
     connections.sort(key=lambda c: c["departure"])
-    result = {
-        "connections": connections,
-        "note": "Fahrplan ohne Gewähr, ohne Preise und Echtzeitdaten. Vor Reiseantritt bei der Bahn prüfen.",
-        "source": ATTRIBUTION,
-    }
+    bahn_url = bahn_search_url(from_name, from_lat, from_lon, to_name, to_lat, to_lon, moment, arrive_by)
+    change = next_timetable_change(ctx.deps.today)
+    if date >= change and (not connections or _gap_hours(connections, moment, arrive_by) > MAX_GAP_HOURS):
+        # Transitous lädt den neuen Jahresfahrplan der DB erst um den Fahrplanwechsel; bis dahin fehlen die Züge
+        result = {
+            "connections": [],
+            "error": f"Für {date:%d.%m.%Y} (nach dem Fahrplanwechsel am {change:%d.%m.%Y}) liegen noch keine "
+            "Bahnfahrpläne vor. Keine Verbindung angeben oder erfinden. Ein Link zur Verbindungssuche bei bahn.de "
+            "erscheint automatisch unter der Antwort bzw. im Plan unter An- und Abreise; nur kurz darauf hinweisen, "
+            "die URL nicht in `sources` oder Notizen kopieren.",
+            "bahn_url": bahn_url,
+        }
+    elif not connections:
+        return tool_error(
+            f"Keine Verbindung {from_name} → {to_name} gefunden. Nächstgelegenen Bahnhof oder andere Uhrzeit "
+            f"versuchen oder auf die Verbindungssuche bei bahn.de verweisen: {bahn_url}"
+        )
+    else:
+        result = {
+            "connections": connections,
+            "note": "Fahrplan ohne Gewähr, ohne Preise und Echtzeitdaten. Vor Reiseantritt bei der Bahn prüfen.",
+            "source": ATTRIBUTION,
+        }
+        if date >= change:
+            result |= {
+                "note": f"Nach dem Fahrplanwechsel am {change:%d.%m.%Y}: Fahrplandaten können noch unvollständig "
+                "sein. Ein Link zum Prüfen bei bahn.de erscheint automatisch unter der Antwort bzw. im Plan.",
+                "bahn_url": bahn_url,
+            }
     ctx.deps.train_queries[key] = {
         "from_name": from_name, "to_name": to_name, "date": date, "time": time, "arrive_by": arrive_by, "result": result,
     }  # fmt: skip
@@ -201,16 +262,31 @@ def _duration(minutes: int) -> str:
     return f"{minutes // 60}:{minutes % 60:02d} h"
 
 
+def _query_label(query: dict[str, Any]) -> str:
+    """z. B. "Oldenburg → Kiel · So. 21.02.2027, ab 06:00"."""
+    date: dt.date = query["date"]
+    mode = "an" if query["arrive_by"] else "ab"
+    return (
+        f"{query['from_name']} → {query['to_name']} · {WEEKDAYS[date.weekday()]} {date:%d.%m.%Y}, "
+        f"{mode} {query['time']:%H:%M}"
+    )
+
+
+def timetable_links(queries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Links zur Verbindungssuche bei bahn.de für Abfragen nach dem Fahrplanwechsel (fehlende bzw. unsichere Daten);
+    das Backend hängt sie an den Plan, damit das LLM keine URLs abschreiben muss."""
+    return [
+        {"label": _query_label(query), "url": url, "missing": not query["result"]["connections"]}
+        for query in queries
+        if (url := query["result"].get("bahn_url"))
+    ]
+
+
 def format_train_queries(queries: list[dict[str, Any]]) -> str:
     """Verbindungen als lesbarer Text für die Chat-Antwort; das LLM muss sie so nicht selbst wiedergeben."""
     blocks = []
     for query in queries:
-        date: dt.date = query["date"]
-        mode = "an" if query["arrive_by"] else "ab"
-        lines = [
-            f"🚆 {query['from_name']} → {query['to_name']} · {WEEKDAYS[date.weekday()]} {date:%d.%m.%Y}, "
-            f"{mode} {query['time']:%H:%M}"
-        ]
+        lines = [f"🚆 {_query_label(query)}"]
         for number, connection in enumerate(query["result"]["connections"], start=1):
             transfers = connection["transfers"]
             lines.append(
@@ -228,6 +304,11 @@ def format_train_queries(queries: list[dict[str, Any]]) -> str:
                     f"   {leg['departure'][11:]} {leg['line']}: {leg['from_stop']}{track} → "
                     f"{leg['to_stop']} {leg['arrival'][11:]}{cancelled}"
                 )
+        if bahn_url := query["result"].get("bahn_url"):
+            if query["result"]["connections"]:
+                lines.append(f"\nNach dem Fahrplanwechsel evtl. unvollständig: [bei bahn.de prüfen]({bahn_url})")
+            else:
+                lines.append(f"\nFür diesen Tag noch keine Fahrpläne: [Verbindungen bei bahn.de]({bahn_url})")
         blocks.append("\n".join(lines))
     blocks.append(f"{ATTRIBUTION} · ohne Gewähr, ohne Echtzeit und Preise.")
     return "\n\n".join(blocks)

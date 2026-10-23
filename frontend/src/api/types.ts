@@ -75,6 +75,14 @@ export interface Attribution {
   license_url: string;
 }
 
+/** Link zur Verbindungssuche bei bahn.de, wenn Transitous nach dem Fahrplanwechsel keine (sicheren) Daten hat */
+export interface TimetableLink {
+  label: string;
+  url: string;
+  /** true = keine Fahrplandaten, false = Verbindungen evtl. unvollständig */
+  missing: boolean;
+}
+
 export interface AdventurePlan {
   /** Fehlt bei älteren Plänen */
   kind?: "tour";
@@ -98,6 +106,8 @@ export interface AdventurePlan {
   sources: string[];
   /** Namensnennung für genutzte Wissensbasis-Inhalte (z. B. Wikivoyage, CC BY-SA); fehlt bei alten Plänen */
   attributions?: Attribution[];
+  /** fehlt bei alten Plänen */
+  timetable_links?: TimetableLink[];
 }
 
 /** Weg zum Abfahrtsbahnhof mit dem Rad oder zu Fuß */

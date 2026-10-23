@@ -203,19 +203,26 @@ def as_found(journey: Journey | None, known: dict[tuple[str, str], dict[str, Any
     return Journey.model_validate(connection | {"notes": journey.notes})
 
 
-def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> TrainTripPlan:
-    """Die Reisekarte zeigt nur Verbindungen, die die Fahrplanauskunft tatsächlich geliefert hat."""
-    known = found_connections(ctx)
-    for label, journey in (("Hinfahrt", output.outbound_journey), ("Rückfahrt", output.return_journey)):
+def check_journeys_found(
+    ctx: RunContext[AgentDeps], known: dict[tuple[str, str], dict[str, Any]], journeys: dict[str, Journey | None]
+) -> None:
+    """Plan und Reisekarte zeigen nur Verbindungen, die die Fahrplanauskunft tatsächlich geliefert hat."""
+    for label, journey in journeys.items():
         if journey is None:
             continue
         if (journey.departure, journey.arrival) not in known:
             raise ModelRetry(
                 f"Die {label} ({journey.departure} → {journey.arrival}) stammt aus keinem `find_train_connections`-"
-                "Ergebnis. Übernimm eine gefundene Verbindung unverändert oder frage die Verbindung neu ab."
+                "Ergebnis. Übernimm eine gefundene Verbindung unverändert, frage die Verbindung neu ab oder lass sie leer, "
+                "wenn keine gefunden wurde."
             )
         if journey.departure[:10] < ctx.deps.today.isoformat():
             raise ModelRetry(f"Die {label} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+
+
+def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> TrainTripPlan:
+    known = found_connections(ctx)
+    check_journeys_found(ctx, known, {"Hinfahrt": output.outbound_journey, "Rückfahrt": output.return_journey})
     if output.access is not None:
         check_access(ctx, output.access, output.outbound_journey)
     return output.model_copy(
@@ -329,6 +336,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
                 "Rufe das Tool auf oder lass outbound_journey/return_journey leer."
             )
         known = found_connections(ctx)
+        check_journeys_found(ctx, known, {"Anreise": output.outbound_journey, "Rückreise": output.return_journey})
         output = output.model_copy(
             update={
                 "outbound_journey": as_found(output.outbound_journey, known),

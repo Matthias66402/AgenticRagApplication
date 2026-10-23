@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import PLAN_KIND_TOUR, PLAN_KIND_TRAIN_TRIP, TrainTripPlan
 from app.agent.runner import RunOutcome, run_planner
+from app.agent.tools.transit import timetable_links
 from app.api.adventures import get_owned_adventure
 from app.auth.deps import CurrentUser, SessionDep
 from app.config import get_settings
@@ -32,6 +33,8 @@ def build_stored_plan(
     """Plan + Routengeometrien für die Karte + Quellenangaben. Geometrien und Quellen früherer Läufe bleiben erhalten.
 
     `kind` unterscheidet Touren von Reisekarten reiner Bahnfahrten (ältere Pläne ohne `kind` sind Touren).
+    `timetable_links`: bahn.de-Links für Bahnabfragen ohne (sichere) Fahrplandaten; ohne neue Abfrage bleiben die
+    bisherigen.
     """
     assert outcome.plan is not None
     known_routes = (previous or {}).get("routes", {}) | deps.routes
@@ -49,6 +52,11 @@ def build_stored_plan(
         "route_ids": route_ids,
         "routes": {rid: known_routes[rid] for rid in route_ids},
         "attributions": merge_attributions((previous or {}).get("attributions", []), attributions or []),
+        "timetable_links": (
+            timetable_links(list(deps.train_queries.values()))
+            if deps.train_queries
+            else (previous or {}).get("timetable_links", [])
+        ),
     }
 
 

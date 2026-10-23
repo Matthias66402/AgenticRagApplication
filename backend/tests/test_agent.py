@@ -4,6 +4,7 @@ import datetime as dt
 import json
 from collections.abc import AsyncIterator, Callable
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -16,8 +17,9 @@ from app.agent.plan_schema import AdventurePlan
 from app.agent.planner import build_model, model_settings, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
+from app.agent.tools.transit import WEEKDAYS, next_timetable_change
 from app.config import get_settings
-from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK
+from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, one_trip
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
 
@@ -197,9 +199,16 @@ def test_journey_times_are_local_without_timezone() -> None:
         AdventurePlan.model_validate(plan | {"return_journey": JOURNEY | {"departure": f"{TOMORROW}T05:12:00Z"}})
 
 
+def utc(local: str) -> str:
+    """Ortszeit in Berlin → UTC-Zeitstempel wie bei der MOTIS-API."""
+    moment = dt.datetime.fromisoformat(local).replace(tzinfo=ZoneInfo("Europe/Berlin"))
+    return moment.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:00Z")
+
+
 @respx.mock
 async def test_journey_only_from_train_connections(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
-    respx.get(get_settings().transit_api_url).respond(json={"itineraries": []})
+    trip = one_trip(utc(JOURNEY["departure"]), utc(JOURNEY["arrival"]))
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": [trip]})
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     plan = make_plan() | {"outbound_journey": JOURNEY}
     connection_args = {
@@ -210,6 +219,8 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
         ("search_knowledge", {"query": "Anreise Bahn"}),
         ("final_plan", plan),  # Verbindung ohne Fahrplanabfrage → Validator verlangt find_train_connections
         ("find_train_connections", connection_args),
+        # nicht gefundene Verbindung → Validator verlangt eine gefundene
+        ("final_plan", plan | {"return_journey": JOURNEY | {"departure": f"{TOMORROW}T08:00"}}),
         ("final_plan", plan),
     )
     with planner_agent.override(model=model):
@@ -222,6 +233,35 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
     assert events[-2]["plan"]["return_journey"] is None
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
     assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["search_knowledge", "find_train_connections"]
+
+
+@respx.mock
+async def test_plan_links_bahn_search_without_timetable(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Nach dem Fahrplanwechsel ohne Fahrplandaten hängt das Backend den bahn.de-Link an den Plan, nicht das LLM."""
+    respx.get(get_settings().transit_api_url).respond(json={"itineraries": []})
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    date = next_timetable_change(dt.date.today()) + dt.timedelta(days=7)
+    connection_args = {
+        "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
+        "to_name": "Garmisch", "to_lat": 47.49, "to_lon": 11.09, "date": date.isoformat(), "time": "06:00",
+    }  # fmt: skip
+    model = scripted_model(
+        ("search_knowledge", {"query": "Anreise Bahn"}),
+        ("find_train_connections", connection_args),
+        ("final_plan", make_plan()),
+    )
+    with planner_agent.override(model=model):
+        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Anreise ab München"})
+    with planner_agent.override(model=scripted_model(("final_plan", make_plan() | {"title": "Geändert"}))):
+        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Anderer Titel"})
+
+    stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
+    assert stored["title"] == "Geändert"
+    # ohne neue Abfrage bleibt der Link aus dem vorigen Lauf
+    [link] = stored["plan"]["timetable_links"]
+    assert link["label"] == f"München → Garmisch · {WEEKDAYS[date.weekday()]} {date:%d.%m.%Y}, ab 06:00"
+    assert link["url"].startswith("https://www.bahn.de/buchung/fahrplan/suche#")
+    assert link["missing"] is True
 
 
 @respx.mock

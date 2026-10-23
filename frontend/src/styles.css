@@ -254,6 +254,8 @@ td.actions { text-align: right; white-space: nowrap; }
 }
 
 /* Quellenangaben (Wikivoyage u. a.) */
+.timetable-links { margin: 8px 0 0; padding-left: 0; list-style: none; }
+.timetable-links li { margin-bottom: 4px; }
 .journeys { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .journey { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; min-width: 0; }
 .journey-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }

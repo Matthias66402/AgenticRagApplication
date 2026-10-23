@@ -52,6 +52,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
   const profile = useMemo(() => buildProfile(plan), [plan]);
   const [hovered, setHovered] = useState<ProfilePoint | null>(null);
   const attributions = plan.attributions ?? [];
+  const timetableLinks = plan.timetable_links ?? [];
 
   return (
     <article className="plan">
@@ -145,14 +146,30 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
         </ol>
       </section>
 
-      {(plan.outbound_journey || plan.return_journey) && (
+      {(plan.outbound_journey || plan.return_journey || timetableLinks.length > 0) && (
         <section>
           <h3>An- und Abreise</h3>
-          <div className="journeys">
-            {plan.outbound_journey && <JourneyCard label="🚆 Anreise" journey={plan.outbound_journey} />}
-            {plan.return_journey && <JourneyCard label="🚆 Rückreise" journey={plan.return_journey} />}
-          </div>
-          <TransitNote />
+          {(plan.outbound_journey || plan.return_journey) && (
+            <div className="journeys">
+              {plan.outbound_journey && <JourneyCard label="🚆 Anreise" journey={plan.outbound_journey} />}
+              {plan.return_journey && <JourneyCard label="🚆 Rückreise" journey={plan.return_journey} />}
+            </div>
+          )}
+          {timetableLinks.length > 0 && (
+            <ul className="timetable-links">
+              {timetableLinks.map((link) => (
+                <li key={link.url}>
+                  🚆 {link.label}:{" "}
+                  {link.missing ? "noch kein Fahrplan verfügbar" : "Fahrplan nach dem Fahrplanwechsel evtl. unvollständig"}{" "}
+                  –{" "}
+                  <a href={link.url} target="_blank" rel="noreferrer">
+                    Verbindungen bei bahn.de
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+          {(plan.outbound_journey || plan.return_journey) && <TransitNote />}
         </section>
       )}
 

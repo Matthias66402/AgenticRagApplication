@@ -187,3 +187,14 @@ def test_pdf_with_train_journeys() -> None:
 
 def test_pdf_without_journeys_has_no_travel_section() -> None:
     assert "An- und Abreise" not in pdf_text(build_pdf(PLAN))
+
+
+def test_pdf_links_bahn_search_without_timetable() -> None:
+    url = "https://www.bahn.de/buchung/fahrplan/suche#sts=true&so=Oldenburg&zo=Kiel&hd=2027-02-21T06%3A00%3A00&hza=D"
+    link = {"label": "Oldenburg → Kiel · So. 21.02.2027, ab 06:00", "url": url, "missing": True}
+    content = build_pdf(PLAN | {"timetable_links": [link]})
+    text = pdf_text(content)
+    assert "An- und Abreise" in text
+    assert "noch kein Fahrplan verfügbar" in text
+    assert "Fahrplandaten: Transitous" not in text  # keine Verbindung von Transitous im Plan
+    assert url in pdf_links(content)
