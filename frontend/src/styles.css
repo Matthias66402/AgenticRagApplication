@@ -127,7 +127,8 @@ button.link:hover { color: var(--text); }
 .topbar nav { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
 .topbar nav a { color: var(--muted); font-weight: 500; }
 .topbar nav a.active { color: var(--text); }
-.brand { font-weight: 700; color: var(--text) !important; font-size: 1.05rem; }
+.brand { font-weight: 700; color: var(--text) !important; font-size: 1.05rem; display: inline-flex; align-items: center; gap: 8px; }
+.brand-icon { width: 1.4em; height: 1.4em; flex: none; }
 .brand.big { font-size: 1.2rem; margin-bottom: 12px; }
 .page { max-width: 1100px; margin: 0 auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
 .page.narrow { max-width: 520px; }

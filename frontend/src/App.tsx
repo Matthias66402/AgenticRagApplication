@@ -14,7 +14,7 @@ function Layout() {
     <div className="app">
       <header className="topbar">
         <NavLink to="/" className="brand">
-          <span aria-hidden>⛰️</span> Abenteuerplaner
+          <img src="/favicon.svg" alt="" className="brand-icon" /> Abenteuerplaner
         </NavLink>
         <nav>
           <NavLink to="/" end>

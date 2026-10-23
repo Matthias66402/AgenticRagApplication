@@ -7,7 +7,7 @@ function AuthShell({ title, children }: { title: string; children: React.ReactNo
     <div className="auth-shell">
       <div className="card auth-card">
         <div className="brand big">
-          <span aria-hidden>⛰️</span> Abenteuerplaner
+          <img src="/favicon.svg" alt="" className="brand-icon" /> Abenteuerplaner
         </div>
         <h1>{title}</h1>
         {children}
