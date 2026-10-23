@@ -79,7 +79,7 @@ Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-
 3. **Mindestähnlichkeit 0,5:** Treffer darunter fallen weg.
 4. **Relevanzprüfung** (`relevance.py`): Ein kleines LLM (`RELEVANCE_MODEL`) bewertet in einem Aufruf jede Fundstelle: Beantwortet sie die Anfrage, oder ist sie nur thematisch ähnlich? Nur relevante Abschnitte erreichen den Agenten. Bleibt nichts übrig, erfährt der Agent, dass die Wissensbasis dazu nichts enthält. Fällt die Prüfung aus (Zeitlimit 10 s, z. B. bei einem Ratenlimit), gehen die Treffer ungeprüft weiter.
 
-Schwelle und Relevanzprüfung sind mit der Evaluation unten begründet.
+Schwelle und Relevanzprüfung sind mit der Evaluation unten begründet. 
 
 ## Wissensbasis erweitern
 
