@@ -1,0 +1,21 @@
+name: Konfiguration
+
+# Prüft, ob .env.example zu den Einstellungen in backend/app/config.py passt (siehe app/check_config.py)
+on:
+  push:
+  pull_request:
+
+jobs:
+  env-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      # app/config.py braucht nur diese beiden; das ganze Projekt zu installieren würde nur Zeit kosten
+      - name: Abhängigkeiten installieren
+        run: pip install "pydantic-settings>=2.16" python-dotenv
+      - name: .env.example prüfen
+        working-directory: backend
+        run: python -m app.check_config

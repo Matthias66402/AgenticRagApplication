@@ -165,6 +165,14 @@ Tests senden nie Traces. Evaluation und Seed-Skripte werden nicht getraced.
 
 ## Konfiguration (`.env`)
 
+Vorlage ist `.env.example`. Sie muss jede Einstellung aus `backend/app/config.py` enthalten und darf keine unbekannten Variablen enthalten, außerdem müssen sich ihre Werte einlesen lassen. Das prüft GitHub Actions bei jedem Push (`.github/workflows/config.yml`). Lokal geht das mit:
+
+```bash
+cd backend && python -m app.check_config
+```
+
+Wer eine Einstellung in `config.py` ergänzt, trägt sie also auch in `.env.example` ein. Variablen, die nicht über `config.py` gelesen werden (z. B. `OPENAI_API_KEY`), stehen in `EXTERNAL_VARIABLES` in `app/check_config.py`.
+
 | Variable | Bedeutung |
 |---|---|
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
@@ -196,6 +204,7 @@ backend/app/
   export/      pdf.py, gpx.py, basemap.py (OSM-Kartenhintergrund), filename.py
   api/         auth, users, adventures (inkl. PDF/GPX), chat (SSE), documents
   observability.py  Tracing mit Langfuse (inkl. Maskierung der Wohnadresse)
+  check_config.py   Prüft .env.example gegen config.py (läuft in GitHub Actions)
   seed/        Admin-Seed, Wikivoyage-Import, Beispieldokumente (documents/*.md)
 frontend/src/
   pages/       Login/Registrierung, Abenteuerliste, Planer, Profil, Admin (Nutzer, Wissensbasis)
