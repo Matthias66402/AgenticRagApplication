@@ -4,7 +4,14 @@ name: Docker
 # Die Tests rufen kein echtes LLM auf, ein API-Key ist daher nicht nötig.
 on:
   push:
+    paths: &paths
+      - backend/**
+      - docker/**
+      - docker-compose.yml
+      - .env.example
+      - .github/workflows/docker.yml
   pull_request:
+    paths: *paths
 
 jobs:
   compose:

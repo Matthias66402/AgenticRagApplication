@@ -48,7 +48,7 @@ docker compose exec backend pytest -q
 
 Die Tests laufen gegen die Datenbank `adventure_test`. Sie verwenden ein geskriptetes Modell (`FunctionModel`), Fake-Embeddings und eine Relevanzprüfung ohne LLM, rufen also kein echtes LLM auf. HTTP-Aufrufe der Tools (Routing, Wetter, Fahrplan, Kartenkacheln usw.) werden mit `respx` gemockt.
 
-GitHub Actions führt die Tests bei jedem Push in Docker aus (`.github/workflows/docker.yml`): Image bauen, `docker compose up` mit `.env.example` als `.env`, beide Datenbanken migrieren, `/api/health` abfragen, `pytest`. So fällt auch auf, wenn Dockerfile, Compose-Datei oder Migrationen nicht mehr zusammenpassen. Das Frontend baut `.github/workflows/frontend.yml` mit `npm ci && npm run build` (Typprüfung mit `tsc` und Vite-Build).
+GitHub Actions führt die Tests bei jeder Änderung an Backend, Docker-Dateien oder `.env.example` in Docker aus (`.github/workflows/docker.yml`): Image bauen, `docker compose up` mit `.env.example` als `.env`, beide Datenbanken migrieren, `/api/health` abfragen, `pytest`. So fällt auch auf, wenn Dockerfile, Compose-Datei oder Migrationen nicht mehr zusammenpassen. Das Frontend baut `.github/workflows/frontend.yml` mit `npm ci && npm run build` (Typprüfung mit `tsc` und Vite-Build), sobald sich etwas in `frontend/` ändert. Jeder Workflow läuft außerdem, wenn sich seine eigene Datei ändert; reine Doku-Änderungen starten keinen Lauf.
 
 Für die Test-DB-Migration (einmalig):
 
@@ -167,7 +167,7 @@ Tests senden nie Traces. Evaluation und Seed-Skripte werden nicht getraced.
 
 ## Konfiguration (`.env`)
 
-Vorlage ist `.env.example`. Sie muss jede Einstellung aus `backend/app/config.py` enthalten und darf keine unbekannten Variablen enthalten, außerdem müssen sich ihre Werte einlesen lassen. Das prüft GitHub Actions bei jedem Push (`.github/workflows/config.yml`). Lokal geht das mit:
+Vorlage ist `.env.example`. Sie muss jede Einstellung aus `backend/app/config.py` enthalten und darf keine unbekannten Variablen enthalten, außerdem müssen sich ihre Werte einlesen lassen. Das prüft GitHub Actions, sobald sich eine dieser Dateien ändert (`.github/workflows/config.yml`). Lokal geht das mit:
 
 ```bash
 cd backend && python -m app.check_config

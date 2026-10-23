@@ -5,7 +5,8 @@
   auf, weil `Settings` unbekannte Variablen ignoriert).
 - Die Werte lassen sich als `Settings` einlesen (z. B. Zahlen bei Zahlenfeldern).
 
-Aufruf: python -m app.check_config [Datei]; Exit-Code 1 bei Fehlern. Läuft in GitHub Actions bei jedem Push.
+Aufruf: python -m app.check_config [Datei]; Exit-Code 1 bei Fehlern. Läuft in GitHub Actions, wenn sich .env.example,
+config.py oder dieses Skript ändern.
 """
 
 import argparse

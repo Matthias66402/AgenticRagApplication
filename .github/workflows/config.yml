@@ -3,7 +3,13 @@ name: Konfiguration
 # Prüft, ob .env.example zu den Einstellungen in backend/app/config.py passt (siehe app/check_config.py)
 on:
   push:
+    paths: &paths
+      - .env.example
+      - backend/app/config.py
+      - backend/app/check_config.py
+      - .github/workflows/config.yml
   pull_request:
+    paths: *paths
 
 jobs:
   env-example:

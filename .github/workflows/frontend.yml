@@ -3,7 +3,11 @@ name: Frontend
 # Installiert die Abhängigkeiten exakt nach package-lock.json und baut das Frontend (Typprüfung mit tsc + Vite-Build)
 on:
   push:
+    paths: &paths
+      - frontend/**
+      - .github/workflows/frontend.yml
   pull_request:
+    paths: *paths
 
 jobs:
   build:
