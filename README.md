@@ -118,6 +118,33 @@ Stand 21.10.2026 (35 beantwortbare, 6 nicht beantwortbare Fragen; 10 Dokumente, 
 
 Die Testfragen wurden mit Kenntnis der Dokumente geschrieben und die Wissensbasis ist klein. Die Trefferwerte sind daher eher optimistisch. Bei nur 6 Fragen ohne Antwort entspricht eine einzelne Frage knapp 17 Prozentpunkten Fehlkontext.
 
+## Planer messen
+
+`backend/app/evaluation/planner_cases.json` enthält feste Anfragen an den Planungs-Agenten (Rad-Tagestour, mehrtägige Hüttenwanderung, Radtour mit Zug-Anreise, Bahnauskunft, mit dem Rad zum Bahnhof, unvollständige Anfrage). Die Auswertung schickt jede Anfrage wie im Chat an den Agenten, mit echtem Modell und echten Tools:
+
+```bash
+docker compose exec backend python -m app.evaluation.planner                                   # alle Fälle, je 2 Läufe
+docker compose exec backend python -m app.evaluation.planner --case bahnauskunft --repeat 1    # einzelner Fall
+docker compose exec -e LLM_REASONING_EFFORT=low backend python -m app.evaluation.planner --label low --output /app/low.json
+```
+
+Gemessen werden Laufzeit (davon Wartezeit auf Tools), Modellaufrufe, Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt. Ein Durchlauf kostet etwa 0,10-0,15 $ und dauert mit `LLM_REQUESTS_PER_MINUTE=5` rund 10-15 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
+
+Stand 23.10.2026 (gpt-5-mini, Standard-Reasoning; je Fall 2 bzw. 4 Läufe, Mittel je Anfrage). Vorher: Anweisungen ohne Hinweis auf gemeinsame Tool-Aufrufe. Nachher: mit diesem Hinweis und gedrosselt auf 5 Anfragen pro Minute.
+
+| | vorher | nachher |
+|---|---|---|
+| Modellaufrufe | 5,1 | 3,8 (−25 %) |
+| Eingabe-Tokens (davon ~80 % aus dem Cache) | 40.800 | 32.300 (−21 %) |
+| Ausgabe-Tokens (davon ~70 % Reasoning) | 3.530 | 3.800 |
+| Laufzeit | 67 s | 45 s |
+| Kosten | 0,010 $ | 0,010 $ |
+| Qualitätsprüfungen bestanden | 12/12 | 22/23 |
+
+Am meisten bringt der Hinweis bei vielen unabhängigen Tools: Hüttenwanderung 12,5 → 8,3 Aufrufe, Rad zum Bahnhof 5,0 → 3,5. Die Werte streuen stark (Hüttenwanderung zwischen 6 und 12 Aufrufen). Die eine nicht bestandene Prüfung war eine berechtigte Rückfrage (die Anfrage nannte „nächsten Samstag“ an einem Freitag); der Fall ist inzwischen eindeutig formuliert.
+
+Nicht übernommen: `LLM_REASONING_EFFORT=low` senkte die Ausgabe-Tokens auf etwa ein Viertel, ließ den Planer bei der Radtour mit Zug-Anreise aber in beiden Läufen nach Uhrzeiten fragen statt planen. Eine um ein Viertel gekürzte Fassung der Anweisungen sparte kaum (die Anweisungen kommen fast immer aus dem Prompt-Cache) und machte aus derselben Anfrage eine reine Bahnauskunft.
+
 ## Exporte
 
 - `GET /api/adventures/{id}/pdf`: Druckversion mit Überblick, Karte (OpenStreetMap-Hintergrund, falls `MAP_TILE_URL` gesetzt), Höhenprofil, Etappen, An- und Abreise, Wetter, Packliste, Sicherheit und Quellen.
@@ -141,6 +168,8 @@ Tests senden nie Traces. Evaluation und Seed-Skripte werden nicht getraced.
 | Variable | Bedeutung |
 |---|---|
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
+| `LLM_REQUESTS_PER_MINUTE` | Anfragelimit des API-Keys für den Planer; er sendet höchstens so viele Modellaufrufe je Minute und wartet sonst. 0 = nicht drosseln. |
+| `LLM_REASONING_EFFORT` | Optional: Reasoning-Aufwand des Planers bei Reasoning-Modellen (`minimal`, `low`, `medium`, `high`). Leer = Standard des Modells; `low` spart Tokens, verschlechterte aber die Planung (siehe „Planer messen“). |
 | `RELEVANCE_MODEL` | Kleines Modell, das die Treffer von `search_knowledge` vor der Weitergabe an den Agenten auf Relevanz prüft (Standard `openai:gpt-4.1-mini`, ein Aufruf je Suche). Leer = nur Mindestähnlichkeit. Bei einem Fehler gehen die Treffer ungeprüft weiter. |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | Bei einem Wechsel: `EMBEDDING_DIM` anpassen, Migration für die Vektorspalte erzeugen, `python -m app.seed --force` |
 | `ORS_API_KEY` | Optional, kostenlos unter openrouteservice.org (Free-Tarif: 200 Routen/Tag). Routing-Kette: ORS → BRouter (ohne Key) → weitere ORS-Profile → Luftlinien-Schätzung. Ohne Key wird direkt BRouter genutzt. |
@@ -157,11 +186,13 @@ Hinweis zu OpenAI: Ein Projekt mit niedrigem Ratenlimit (z. B. 5 Anfragen pro Mi
 
 ```
 backend/app/
-  agent/       planner.py (Agent), runner.py (Event-Streaming), plan_schema.py, deps.py
+  agent/       planner.py (Agent), runner.py (Event-Streaming), plan_schema.py, deps.py,
+               rate_limit.py (Drosselung auf das Anfragelimit)
     tools/     geocode, routing (+ Gehzeit), weather, accommodation, knowledge, sun, transit
   rag/         ingest.py (Chunking), embeddings.py, retrieve.py (pgvector-Suche), relevance.py (Relevanzprüfung),
                attribution.py + wikivoyage.py (Quellenangaben)
-  evaluation/  retrieval.py + retrieval_cases.json (Messung der Suchqualität)
+  evaluation/  retrieval.py + retrieval_cases.json (Messung der Suchqualität),
+               planner.py + planner_cases.json (Aufwand und Ergebnisqualität des Planers)
   export/      pdf.py, gpx.py, basemap.py (OSM-Kartenhintergrund), filename.py
   api/         auth, users, adventures (inkl. PDF/GPX), chat (SSE), documents
   observability.py  Tracing mit Langfuse (inkl. Maskierung der Wohnadresse)

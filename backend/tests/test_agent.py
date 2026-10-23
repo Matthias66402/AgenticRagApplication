@@ -9,11 +9,12 @@ import httpx
 import pytest
 import respx
 from pydantic import ValidationError
-from pydantic_ai import ModelMessage, ToolReturnPart
+from pydantic_ai import Agent, ModelMessage, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
-from app.agent.planner import model_settings, planner_agent
+from app.agent.planner import build_model, model_settings, planner_agent
+from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.config import get_settings
 from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK
@@ -74,6 +75,50 @@ def test_reasoning_summary_only_for_reasoning_models() -> None:
     assert model_settings("openai:gpt-5-mini")["openai_reasoning_summary"] == "detailed"  # type: ignore[typeddict-item]
     assert "openai_reasoning_summary" not in model_settings("openai:gpt-4.1-mini")
     assert "openai_reasoning_summary" not in model_settings("test")
+
+
+async def test_request_budget_keeps_limit_in_every_minute() -> None:
+    now = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    budget = RequestBudget(3, clock=lambda: now[0], sleep=sleep)
+    sent = []
+    for step in [0, 10, 10, 0, 0, 50]:  # Abstände zwischen den Anfragen in Sekunden
+        now[0] += step
+        await budget.acquire()
+        sent.append(now[0])
+    # Die 4. Anfrage wartet, bis die 1. (t=0) eine Minute zurückliegt, die 5. auf die 2. (t=10)
+    assert sent == [0, 10, 20, 61, 71, 121]
+    assert all(sum(t - 60 < s <= t for s in sent) <= 3 for t in sent)
+
+
+async def test_rate_limited_model_waits_before_each_request() -> None:
+    model = RateLimitedModel(scripted_model("ok", "ok"), per_minute=60)
+    acquired = []
+    original = model.budget.acquire
+
+    async def acquire() -> float:
+        acquired.append(True)
+        return await original()
+
+    model.budget.acquire = acquire  # type: ignore[method-assign]
+    async with Agent(model).run_stream_events("Hallo") as events:
+        async for _ in events:
+            pass
+    assert acquired == [True]
+
+
+def test_model_is_throttled_only_with_limit() -> None:
+    assert build_model("openai:gpt-5-mini") == "openai:gpt-5-mini"
+    assert isinstance(build_model("test", requests_per_minute=5), RateLimitedModel)
+
+
+def test_reasoning_effort_only_when_configured() -> None:
+    assert model_settings("openai:gpt-5-mini", "low")["openai_reasoning_effort"] == "low"  # type: ignore[typeddict-item]
+    assert "openai_reasoning_effort" not in model_settings("openai:gpt-5-mini")
+    assert "openai_reasoning_effort" not in model_settings("openai:gpt-4.1-mini", "low")
 
 
 def test_multi_day_requires_accommodation() -> None:

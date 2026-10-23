@@ -38,4 +38,5 @@ async def search_knowledge(ctx: RunContext[AgentDeps], query: str) -> list[dict[
             f"Die Wissensbasis enthält dazu nichts Passendes (gefunden, aber unpassend: {titles}). "
             "Anders formulieren oder ohne diese Informationen planen und im Plan darauf hinweisen."
         )
-    return [c.model_dump() for c in graded.kept]
+    # Ohne Ähnlichkeitswert: dem Modell nützt er nichts, er bliebe aber in jedem Folgeaufruf im Verlauf
+    return [c.model_dump(exclude={"score"}) for c in graded.kept]

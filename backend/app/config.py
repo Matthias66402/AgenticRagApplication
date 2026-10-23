@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     admin_password: str = "admin12345"
 
     llm_model: str = "openai:gpt-5-mini"
+    # Reasoning-Aufwand des Planers (minimal, low, medium, high); leer = Standard des Modells
+    llm_reasoning_effort: str = ""
+    # Anfragelimit des API-Keys für den Planer (Anfragen pro Minute); 0 = nicht drosseln
+    llm_requests_per_minute: int = 0
     embedding_model: str = "openai:text-embedding-3-small"
     embedding_dim: int = 1536
     # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit

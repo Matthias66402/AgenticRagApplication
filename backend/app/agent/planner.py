@@ -6,6 +6,7 @@ from pydantic_ai import (
     Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, ToolReturnPart,
     UserPromptPart,
 )  # fmt: skip
+from pydantic_ai.models import Model
 from pydantic_ai.profiles.openai import openai_model_profile
 from pydantic_ai.settings import ModelSettings
 
@@ -13,6 +14,7 @@ from app.agent.deps import AgentDeps
 from app.agent.plan_schema import (
     MAX_STAGE_KM, AccessRoute, AdventurePlan, ClarificationQuestion, Journey, TextAnswer, TrainTripPlan,
 )  # fmt: skip
+from app.agent.rate_limit import RateLimitedModel
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.knowledge import search_knowledge
@@ -41,14 +43,23 @@ SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
 MAX_OUTPUT_TOKENS = 12_000
 
 
-def model_settings(model: str) -> ModelSettings:
+def model_settings(model: str, reasoning_effort: str = "") -> ModelSettings:
     settings: ModelSettings = {"max_tokens": MAX_OUTPUT_TOKENS}
     provider, _, name = model.partition(":")
     # Ohne angeforderte Zusammenfassung liefern OpenAI-Reasoning-Modelle leere Thinking-Teile; mit ihr ist im Tracing
-    # nachvollziehbar, warum der Agent ein Tool aufruft. Nicht-Reasoning-Modelle lehnen den Parameter ab.
+    # nachvollziehbar, warum der Agent ein Tool aufruft. Nicht-Reasoning-Modelle lehnen beide Parameter ab.
     if provider.startswith("openai") and openai_model_profile(name).get("openai_supports_reasoning"):
         settings["openai_reasoning_summary"] = "detailed"  # type: ignore[typeddict-unknown-key]
+        if reasoning_effort:
+            settings["openai_reasoning_effort"] = reasoning_effort  # type: ignore[typeddict-unknown-key]
     return settings
+
+
+def build_model(model: str, requests_per_minute: int = 0) -> Model | str:
+    """Mit Limit gedrosselt (siehe app.agent.rate_limit); ohne Limit als Name, den PydanticAI erst bei Bedarf
+    auflöst (z. B. in Tests ohne API-Key)."""
+    return RateLimitedModel(model, requests_per_minute) if requests_per_minute > 0 else model
+
 
 INSTRUCTIONS = """\
 Du bist ein erfahrener Outdoor-Tourenplaner für Deutschland, Österreich, die Schweiz und das übrige Europa.
@@ -86,7 +97,9 @@ Weg in die Reisekarte (`access`): `geocode` für Wohnadresse bzw. Start und Bahn
 zu Fuß: 5 Minuten).
 
 ## Vorgehen, sobald alles bekannt ist
-Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig.
+Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig. Rufe voneinander unabhängige Tools im
+selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte, die beiden Pflichtsuchen,
+`get_weather` zusammen mit `find_accommodation` und `estimate_hiking_time` für alle Etappen.
 1. `geocode` für Start und Ziel (und ggf. Zwischenorte).
 2. `plan_route` für die Gesamtstrecke. Bei mehrtägigen Touren die Strecke in sinnvolle Tagesetappen teilen.
    Richtwerte pro Tag: Wandern 10-25 km bzw. max. ~1200 Hm, Rad 40-100 km, MTB 25-60 km, Kanu 15-30 km,
@@ -241,7 +254,7 @@ def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> N
 
 def build_agent() -> Agent[AgentDeps, PlannerOutput]:
     agent = Agent(
-        get_settings().llm_model,
+        build_model(get_settings().llm_model, get_settings().llm_requests_per_minute),
         name="adventure-planner",  # Name des Agent-Spans im Tracing
         deps_type=AgentDeps,
         output_type=[
@@ -262,7 +275,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
                 strict=True,
             ),
         ],
-        model_settings=model_settings(get_settings().llm_model),
+        model_settings=model_settings(get_settings().llm_model, get_settings().llm_reasoning_effort),
         instructions=INSTRUCTIONS,
         tools=[
             Tool(geocode),

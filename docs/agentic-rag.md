@@ -102,6 +102,14 @@ Ein Plan wird nur angenommen, wenn er mehrere Prüfungen besteht. Sonst wirft de
 
 Das Modell steht in der `.env` (`LLM_MODEL`, z. B. `openai:gpt-5-mini`). Da PydanticAI anbieter-agnostisch ist, lässt sich der Anbieter ohne Codeänderung wechseln, z. B. `groq:openai/gpt-oss-120b`. Voraussetzung ist, dass das Paket-Extra installiert und der API-Key gesetzt ist.
 
+**Ratenlimit:** Der genutzte API-Key erlaubt nur 5 Anfragen pro Minute. Beim Streaming meldet OpenAI ein überschrittenes Limit nicht als HTTP 429, sondern als Fehler im schon geöffneten Stream; weder das SDK noch ein HTTP-Transport können die Anfrage dann wiederholen. Mit `LLM_REQUESTS_PER_MINUTE` wickelt `build_model()` das Modell deshalb in `RateLimitedModel` (`agent/rate_limit.py`): Es sendet höchstens so viele Anfragen in jedem 60-Sekunden-Fenster und wartet sonst vor dem Senden. Kommt trotzdem ein 429 (z. B. weil eine Evaluation parallel dasselbe Limit nutzt), zeigt der Chat einen Hinweis, es in einer Minute erneut zu versuchen.
+
+Weil jeder Modellaufruf zählt, bitten die Anweisungen das Modell, voneinander unabhängige Tools im selben Schritt aufzurufen; PydanticAI führt sie parallel aus. Das halbierte die Modellaufrufe einer dreitägigen Hüttenwanderung (Messwerte in der README unter „Planer messen“).
+
+**Reasoning-Aufwand:** `LLM_REASONING_EFFORT` setzt bei Reasoning-Modellen `openai_reasoning_effort`. Mit `low` sinken die Ausgabe-Tokens auf etwa ein Viertel, der Planer fragte bei einer Radtour mit Zug-Anreise aber nach Uhrzeiten, statt sie selbst zu wählen. Daher bleibt es beim Standard des Modells.
+
+**Länge der Anweisungen:** Eine um ein Viertel gekürzte Fassung brachte kaum Ersparnis (die Anweisungen kommen fast immer aus dem Prompt-Cache), verschlechterte aber dieselbe Anfrage: Das Modell behandelte sie als reine Bahnauskunft. Die Abgrenzung zwischen Bahnauskunft und Tour ist für gpt-5-mini empfindlich, Änderungen daran sollten mit `python -m app.evaluation.planner` geprüft werden.
+
 ---
 
 ## Das Ergebnis-Schema

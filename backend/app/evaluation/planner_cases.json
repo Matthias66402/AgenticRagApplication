@@ -1,0 +1,43 @@
+{
+  "description": "Feste Anfragen an den Planungs-Agenten für python -m app.evaluation.planner. Relative Datumsangaben, damit Wetter und Fahrplan immer in der Zukunft liegen.",
+  "cases": [
+    {
+      "id": "rad-tagestour",
+      "message": "Ich möchte in acht Tagen eine Radtour von Oldenburg zum Zwischenahner Meer und zurück machen.",
+      "expected_output": "final_plan",
+      "transport": "cycling",
+      "duration_days": 1
+    },
+    {
+      "id": "huettenwanderung",
+      "message": "Plane mir eine dreitägige Hüttenwanderung ab dem 15.07.2027 von Garmisch-Partenkirchen nach Mittenwald, Übernachtung auf Hütten.",
+      "expected_output": "final_plan",
+      "transport": "hiking",
+      "duration_days": 3
+    },
+    {
+      "id": "rad-mit-zug",
+      "message": "Übernächsten Sonntag will ich mit dem Zug von Oldenburg nach Bremen fahren, dort aufs Rad steigen und an der Weser entlang nach Bremerhaven radeln. Tagestour, zurück nach Oldenburg wieder mit dem Zug.",
+      "expected_output": "final_plan",
+      "transport": "cycling",
+      "duration_days": 1,
+      "journeys": true
+    },
+    {
+      "id": "bahnauskunft",
+      "message": "Welche Zugverbindungen gibt es morgen gegen 9 Uhr von Oldenburg nach Hannover?",
+      "expected_output": "answer_user"
+    },
+    {
+      "id": "rad-zum-bahnhof",
+      "message": "Ich muss morgen um 10 Uhr in Bremen Hbf sein. Ich fahre mit dem Rad von der Nelkenstraße 10 in Oldenburg zum Hauptbahnhof und nehme dann den Zug. Erstelle mir eine Reisekarte.",
+      "expected_output": "final_train_trip",
+      "access": true
+    },
+    {
+      "id": "rueckfrage",
+      "message": "Ich möchte gern mal wieder wandern gehen.",
+      "expected_output": "ask_user"
+    }
+  ]
+}

@@ -16,7 +16,7 @@ from pydantic_ai import (
     TextPartDelta,
     UsageLimits,
 )
-from pydantic_ai.exceptions import AgentRunError
+from pydantic_ai.exceptions import AgentRunError, ModelRateLimitError
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
@@ -89,6 +89,9 @@ async def run_planner(
                         outcome.answer = output.message.strip()
                         if queries:
                             outcome.answer += "\n\n" + format_train_queries(queries)
+    except ModelRateLimitError:
+        # Trotz Drosselung möglich, z. B. wenn ein anderer Prozess (Evaluation) dasselbe Limit nutzt
+        outcome.error = "Das Sprachmodell ist gerade ausgelastet (Anfragelimit erreicht). Bitte in einer Minute erneut senden."
     except AgentRunError as exc:
         outcome.error = f"Der Agent konnte die Anfrage nicht abschließen: {exc}"
     except Exception as exc:  # Anbieter-/Netzwerkfehler sollen den Stream sauber beenden
