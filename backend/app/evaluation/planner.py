@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 from pydantic_ai import (
     AgentRunResultEvent, FunctionToolCallEvent, FunctionToolResultEvent, ModelMessage, ModelRequest, ModelResponse,
-    ToolCallPart, ToolReturnPart,
+    RetryFeedbackPart, ToolCallPart, ToolReturnPart,
 )  # fmt: skip
 
 from app.agent.deps import AgentDeps
@@ -76,11 +76,11 @@ class CaseRun:
 def retry_feedback(part: Any) -> str | None:
     """Rückmeldung eines Retrys an das Modell, für andere Nachrichtenteile None.
 
-    Bis pydantic-ai 2.60 ein RetryPromptPart, ab 2.61 ein ToolReturnPart mit outcome="retried" bzw. RetryFeedbackPart.
+    Retries eines Tool-Aufrufs sind ToolReturnParts mit outcome="retried", Retries der Ausgabe RetryFeedbackParts.
     """
-    if getattr(part, "outcome", None) == "retried":
+    if isinstance(part, ToolReturnPart) and part.outcome == "retried":
         return part.model_response_str()
-    if part.part_kind in ("retry-prompt", "retry-feedback"):
+    if isinstance(part, RetryFeedbackPart):
         return part.model_response()
     return None
 

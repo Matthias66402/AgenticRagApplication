@@ -1,7 +1,9 @@
 import json
 from typing import Any
 
-from pydantic_ai import ModelRequest, ModelResponse, RequestUsage, RetryPromptPart, ToolCallPart, ToolReturnPart
+from pydantic_ai import (
+    ModelRequest, ModelResponse, RequestUsage, RetryFeedbackPart, RetryInfo, ToolCallPart, ToolReturnPart,
+)  # fmt: skip
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
@@ -46,10 +48,14 @@ def test_other_outputs() -> None:
 
 def test_measure_and_summarize() -> None:
     run = CaseRun(id="t", run=1)
-    retry = ModelRequest(parts=[RetryPromptPart("Etappe zu lang")])
-    measure(run, [call("geocode"), retry, call("geocode")])
+    # Retry eines Tool-Aufrufs und Retry der Ausgabe (z. B. abgelehnter Plan) zählen beide
+    tool_retry = ToolReturnPart(
+        "geocode", "Ort nicht gefunden", "c-1", outcome="retried", retry=RetryInfo(cause="model_retry")
+    )
+    output_retry = RetryFeedbackPart("Etappe zu lang", retry=RetryInfo(cause="model_retry"))
+    measure(run, [call("geocode"), ModelRequest(parts=[tool_retry, output_retry]), call("geocode")])
 
-    assert (run.requests, run.input_tokens, run.output_tokens, run.retries) == (2, 200, 20, 1)
+    assert (run.requests, run.input_tokens, run.output_tokens, run.retries) == (2, 200, 20, 2)
     assert run.tool_calls == {"geocode": 2}
     run.checks = {"output_type": True}
     failed = CaseRun(id="t", run=2, error="Abbruch")
