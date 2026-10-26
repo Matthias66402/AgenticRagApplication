@@ -7,6 +7,8 @@ from app.models import UserRole
 
 # Fortbewegungsarten, die als Standard im Profil wählbar sind (Werte wie app.agent.plan_schema.TransportMode)
 DefaultTransport = Literal["hiking", "cycling"]
+# GPX-Download bei Mehrtagestouren: eine Gesamtdatei oder eine Datei je Tagesetappe
+GpxMode = Literal["combined", "per_day"]
 # Leere Eingabe löscht die Angabe
 OptionalText = Annotated[str | None, BeforeValidator(lambda v: (v.strip() or None) if isinstance(v, str) else v)]
 # Felder, die sich über PATCH mit null bzw. "" wieder leeren lassen
@@ -36,6 +38,7 @@ class UserSelfUpdate(BaseModel):
     home_address: OptionalText = Field(default=None, max_length=200)
     home_city: OptionalText = Field(default=None, max_length=100)
     default_transport: DefaultTransport | None = None
+    gpx_mode: GpxMode | None = None
 
 
 class UserAdminUpdate(UserSelfUpdate):
@@ -53,6 +56,7 @@ class UserRead(UserBase):
     home_address: str | None = None
     home_city: str | None = None
     default_transport: DefaultTransport | None = None
+    gpx_mode: GpxMode = "combined"
 
 
 class Token(BaseModel):

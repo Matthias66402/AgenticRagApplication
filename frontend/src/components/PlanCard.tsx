@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { downloadFile } from "../api/client";
 import type { AdventurePlan } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 import { ACCOMMODATION_LABELS, TRANSPORT_LABELS, formatDate, shortPlace } from "../lib/labels";
 import { ElevationProfile, buildProfile } from "./ElevationProfile";
 import type { ProfilePoint } from "./ElevationProfile";
@@ -53,6 +54,10 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
   const [hovered, setHovered] = useState<ProfilePoint | null>(null);
   const attributions = plan.attributions ?? [];
   const timetableLinks = plan.timetable_links ?? [];
+  const multiDay = plan.stages.length > 1;
+  // Mehrtagestouren als Gesamt-GPX oder eine GPX je Tagesetappe; Vorauswahl aus dem Profil, hier umschaltbar
+  const [perDay, setPerDay] = useState(useAuth().user?.gpx_mode === "per_day");
+  const gpxPerDay = multiDay && perDay;
 
   return (
     <article className="plan">
@@ -67,13 +72,38 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
               busyLabel="Erstelle PDF …"
               title="Druckversion mit Routenskizze, Höhenprofil, Etappen und Packliste"
             />
-            <DownloadButton
-              path={`/api/adventures/${adventureId}/gpx`}
-              fallbackName="abenteuer.gpx"
-              label={hasTrack ? "⬇ GPX" : "⬇ GPX (nur Wegpunkte)"}
-              busyLabel="Erstelle GPX …"
-              title={hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"}
-            />
+            {multiDay && (
+              <select
+                className="gpx-mode"
+                value={perDay ? "per_day" : "combined"}
+                onChange={(e) => setPerDay(e.target.value === "per_day")}
+                aria-label="GPX-Download für Mehrtagestouren"
+                title="Gesamte Tour als eine GPX oder je Tag eine eigene GPX herunterladen"
+              >
+                <option value="combined">Gesamt-GPX</option>
+                <option value="per_day">GPX je Tag</option>
+              </select>
+            )}
+            {gpxPerDay ? (
+              plan.stages.map((stage) => (
+                <DownloadButton
+                  key={stage.day}
+                  path={`/api/adventures/${adventureId}/gpx?day=${stage.day}`}
+                  fallbackName={`abenteuer_${stage.day}.gpx`}
+                  label={`⬇ GPX Tag ${stage.day}`}
+                  busyLabel="Erstelle GPX …"
+                  title={hasTrack ? `Track und Wegpunkte für Tag ${stage.day}` : `Wegpunkte für Tag ${stage.day} (keine berechnete Route)`}
+                />
+              ))
+            ) : (
+              <DownloadButton
+                path={`/api/adventures/${adventureId}/gpx`}
+                fallbackName="abenteuer.gpx"
+                label={hasTrack ? "⬇ GPX" : "⬇ GPX (nur Wegpunkte)"}
+                busyLabel="Erstelle GPX …"
+                title={hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"}
+              />
+            )}
           </div>
         </div>
         <div className="chips">

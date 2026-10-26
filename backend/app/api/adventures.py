@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 from app.auth.deps import CurrentUser, SessionDep
 from app.export.filename import export_filename
 from app.export.basemap import render_basemap
-from app.export.gpx import build_gpx, has_track
+from app.export.gpx import build_gpx, has_track, stage_tracks
 from app.export.pdf import build_pdf, map_viewport
 from app.export.trip import exportable_plan
 from app.models import Adventure
@@ -56,20 +56,31 @@ async def read_adventure(adventure_id: int, user: CurrentUser, session: SessionD
 
 
 @router.get("/{adventure_id}/gpx", response_class=Response, responses={200: {"content": {GPX_MEDIA_TYPE: {}}}})
-async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep) -> Response:
-    """GPX-Datei mit Track (falls eine Route berechnet wurde) und Wegpunkten für Start, Etappen und Unterkünfte."""
+async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep, day: int | None = None) -> Response:
+    """GPX-Datei mit Track (falls eine Route berechnet wurde) und Wegpunkten für Start, Etappen und Unterkünfte.
+
+    Mit ``day`` nur die Etappe dieses Tages (für Nutzer, die Mehrtagestouren als eine GPX je Tag herunterladen).
+    """
     adventure, plan = await get_export_plan(session, adventure_id, user.id)
     if not plan["stages"]:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="GPX gibt es für Bahnfahrten nur mit Weg zum Bahnhof; Verbindungen haben keine Koordinaten",
         )
+    days = [stage["day"] for stage in plan["stages"]]
+    if day is not None and day not in days:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Der Plan hat keinen Tag {day}")
+    if day is None:
+        filename, track = export_filename(adventure.title, "gpx"), has_track(plan)
+    else:
+        filename = export_filename(adventure.title, "gpx").removesuffix(".gpx") + f"_{day}.gpx"
+        track = bool(stage_tracks(plan)[days.index(day)])
     return Response(
-        content=build_gpx(plan),
+        content=build_gpx(plan, day),
         media_type=GPX_MEDIA_TYPE,
         headers={
-            "Content-Disposition": f'attachment; filename="{export_filename(adventure.title, "gpx")}"',
-            "X-Gpx-Has-Track": "true" if has_track(plan) else "false",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Gpx-Has-Track": "true" if track else "false",
         },
     )
 

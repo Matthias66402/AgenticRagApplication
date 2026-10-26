@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api, json } from "../api/client";
-import type { DefaultTransport, User } from "../api/types";
+import type { DefaultTransport, GpxMode, User } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { TRANSPORT_LABELS } from "../lib/labels";
 
@@ -15,6 +15,7 @@ export function ProfilePage() {
     home_address: user!.home_address ?? "",
     home_city: user!.home_city ?? "",
     default_transport: user!.default_transport ?? "",
+    gpx_mode: user!.gpx_mode,
   });
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -28,6 +29,7 @@ export function ProfilePage() {
     if (form.home_address !== (user!.home_address ?? "")) changes.home_address = form.home_address;
     if (form.home_city !== (user!.home_city ?? "")) changes.home_city = form.home_city;
     if (form.default_transport !== (user!.default_transport ?? "")) changes.default_transport = form.default_transport || null;
+    if (form.gpx_mode !== user!.gpx_mode) changes.gpx_mode = form.gpx_mode;
     if (Object.keys(changes).length === 0) return setStatus({ ok: true, text: "Keine Änderungen." });
     try {
       const updated = await api<User>("/api/users/me", { method: "PATCH", body: json(changes) });
@@ -67,11 +69,6 @@ export function ProfilePage() {
           />
         </label>
 
-        <h2>Vorgaben für die Planung</h2>
-        <p className="muted small">
-          Nennst Du im Chat keinen anderen Startort bzw. keine andere Fortbewegungsart, plant der Assistent mit diesen
-          Angaben. Die Adresse wird dafür an das Sprachmodell und an die Ortssuche (OpenStreetMap) übermittelt.
-        </p>
         <label>
           Adresse <span className="muted">(Straße und Hausnummer)</span>
           <input
@@ -90,6 +87,13 @@ export function ProfilePage() {
             onChange={(e) => setForm({ ...form, home_city: e.target.value })}
           />
         </label>
+
+        <h2>Vorgaben für die Planung</h2>
+        <p className="muted small">
+          Nennst Du im Chat keinen anderen Startort bzw. keine andere Fortbewegungsart, plant der Assistent mit Deiner
+          Adresse und diesen Angaben. Die Adresse wird dafür an das Sprachmodell und an die Ortssuche (OpenStreetMap)
+          übermittelt.
+        </p>
         <label>
           Standard-Fortbewegung
           <select
@@ -102,6 +106,13 @@ export function ProfilePage() {
                 {TRANSPORT_LABELS[mode]}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          Mehrtagestouren als
+          <select value={form.gpx_mode} onChange={(e) => setForm({ ...form, gpx_mode: e.target.value as GpxMode })}>
+            <option value="combined">Gesamt-GPX</option>
+            <option value="per_day">GPX je Tagestour</option>
           </select>
         </label>
 

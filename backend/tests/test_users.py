@@ -64,6 +64,16 @@ async def test_profile_home_and_default_transport(client: httpx.AsyncClient, use
     assert response.json()["display_name"] == "Ute"
 
 
+async def test_profile_gpx_mode(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    assert (await client.get("/api/users/me", headers=user_headers)).json()["gpx_mode"] == "combined"
+    response = await client.patch("/api/users/me", headers=user_headers, json={"gpx_mode": "per_day"})
+    assert response.json()["gpx_mode"] == "per_day"
+    # null lässt die Einstellung stehen, unbekannte Werte werden abgelehnt
+    response = await client.patch("/api/users/me", headers=user_headers, json={"gpx_mode": None})
+    assert response.json()["gpx_mode"] == "per_day"
+    assert (await client.patch("/api/users/me", headers=user_headers, json={"gpx_mode": "zip"})).status_code == 422
+
+
 async def test_requires_login(client: httpx.AsyncClient) -> None:
     assert (await client.get("/api/users/me")).status_code == 401
 

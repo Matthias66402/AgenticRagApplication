@@ -74,6 +74,39 @@ async def test_gpx_download(client: httpx.AsyncClient, user_headers: dict[str, s
 
 
 
+async def test_gpx_per_day(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    adventure_id = await store_adventure("user@example.com", PLAN)
+    response = await client.get(f"/api/adventures/{adventure_id}/gpx?day=2", headers=user_headers)
+
+    assert response.status_code == 200
+    assert 'filename="huttentour-garmisch-innsbruck_2.gpx"' in response.headers["content-disposition"]
+    assert response.headers["x-gpx-has-track"] == "true"
+    root = ET.fromstring(response.content)
+    assert root.findtext("g:metadata/g:name", namespaces=NS) == "Hüttentour Garmisch → Innsbruck – Tag 2"
+    names = [w.findtext("g:name", namespaces=NS) for w in root.findall("g:wpt", NS)]
+    assert names == ["Start: Mittenwald", "Tag 2: Innsbruck"]
+    # Der Gesamttrack wird am Etappenziel von Tag 1 geteilt
+    points = root.findall("g:trk/g:trkseg/g:trkpt", NS)
+    assert [p.get("lat") for p in points] == ["47.440000", "47.260000"]
+
+    day_one = ET.fromstring(build_gpx(PLAN, day=1))
+    assert [w.findtext("g:name", namespaces=NS) for w in day_one.findall("g:wpt", NS)] == [
+        "Start: Garmisch", "Tag 1: Mittenwald", "Testhütte",
+    ]  # fmt: skip
+    assert len(day_one.findall("g:trk/g:trkseg/g:trkpt", NS)) == 2
+
+    assert (await client.get(f"/api/adventures/{adventure_id}/gpx?day=3", headers=user_headers)).status_code == 404
+
+
+def test_gpx_joins_partial_routes_into_one_track() -> None:
+    # Eine Teilroute je Tag ergibt trotzdem nur einen Track, sonst bietet Komoot die Tage einzeln zur Auswahl an
+    routes = {"r-1": [[47.49, 11.09, 708.0], [47.44, 11.26, 912.5]], "r-2": [[47.44, 11.26, 912.5], [47.26, 11.39, 574.0]]}
+    root = ET.fromstring(build_gpx(PLAN | {"route_ids": ["r-1", "r-2"], "routes": routes}))
+    tracks = root.findall("g:trk", NS)
+    assert len(tracks) == 1 and tracks[0].findtext("g:name", namespaces=NS) == PLAN["title"]
+    assert [p.get("lat") for p in root.findall("g:trk/g:trkseg/g:trkpt", NS)] == ["47.490000", "47.440000", "47.260000"]
+
+
 def test_gpx_names_wikivoyage_sources() -> None:
     attribution = {
         "publisher": "Wikivoyage", "title": "Testradweg", "url": "https://de.wikivoyage.org/wiki/Testradweg",

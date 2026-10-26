@@ -10,10 +10,14 @@ export interface User {
   home_address: string | null;
   home_city: string | null;
   default_transport: DefaultTransport | null;
+  gpx_mode: GpxMode;
 }
 
 /** Im Profil wählbare Standard-Fortbewegungsarten */
 export type DefaultTransport = Extract<TransportMode, "hiking" | "cycling">;
+
+/** GPX-Download bei Mehrtagestouren: eine Gesamtdatei oder eine Datei je Tagesetappe */
+export type GpxMode = "combined" | "per_day";
 
 export interface Place {
   name: string;
