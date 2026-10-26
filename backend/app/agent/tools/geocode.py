@@ -37,6 +37,35 @@ async def nominatim_search(ctx: RunContext[AgentDeps], params: dict[str, Any]) -
     return response.json()
 
 
+def _inside(item: dict[str, Any], area: dict[str, Any]) -> bool:
+    south, north, west, east = (float(v) for v in area.get("boundingbox", ()) or (0, 0, 0, 0))
+    return south <= float(item["lat"]) <= north and west <= float(item["lon"]) <= east
+
+
+def _prefer_main_locality(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Gleichnamigen Ort vor die Gemeinde ziehen, in der er liegt.
+
+    Ohne verknüpften Ortspunkt liefert Nominatim für eine Gemeinde den Mittelpunkt ihrer Fläche, bei großen
+    Einheitsgemeinden oft kilometerweit vom Ort entfernt (Gemeinde Worpswede: mitten im Teufelsmoor). Die
+    gleichnamige Ortschaft bzw. der Ortspunkt innerhalb der Gemeinde (höherer place_rank) liegt dagegen am Ortskern.
+    """
+    ordered = list(items)
+    for i, area in enumerate(ordered):
+        if area.get("category") != "boundary":
+            continue
+        for j in range(i + 1, len(ordered)):
+            locality = ordered[j]
+            if (
+                locality.get("category") in ("boundary", "place")
+                and locality.get("name") == area.get("name")
+                and locality.get("place_rank", 0) > area.get("place_rank", 0)
+                and _inside(locality, area)
+            ):
+                ordered.insert(i, ordered.pop(j))
+                return ordered
+    return ordered
+
+
 async def geocode(
     ctx: RunContext[AgentDeps], place_name: str, country_codes: str | None = None
 ) -> list[dict[str, Any]] | dict[str, Any]:
@@ -68,7 +97,7 @@ async def geocode(
             "lon": round(float(item["lon"]), 6),
             "type": f"{item.get('category', '')}/{item.get('type', '')}",
         }
-        for item in items
+        for item in _prefer_main_locality(items)
     ]
     if not results:
         return tool_error(f"Kein Ort zu '{place_name}' gefunden. Schreibweise prüfen oder den Nutzer fragen.")

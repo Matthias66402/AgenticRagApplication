@@ -66,6 +66,34 @@ async def test_geocode(ctx) -> None:
 
 
 @respx.mock
+async def test_geocode_prefers_locality_over_municipality_area(ctx) -> None:
+    """Gemeinde ohne Ortspunkt (Flächenmitte im Moor) und gleichnamige Ortschaft darin: die Ortschaft zuerst."""
+    geocode_module._cache.clear()
+    municipality = {
+        "display_name": "Worpswede, Landkreis Osterholz", "name": "Worpswede", "lat": "53.2616751", "lon": "8.9758702",
+        "category": "boundary", "type": "administrative", "place_rank": 16,
+        "boundingbox": ["53.1844", "53.3420", "8.8510", "9.1210"],
+    }  # fmt: skip
+    locality = municipality | {
+        "lat": "53.2230018", "lon": "8.9283482", "place_rank": 18, "boundingbox": ["53.2000", "53.2400", "8.9000", "8.9600"],
+    }  # fmt: skip
+    respx.get(geocode_module.NOMINATIM_URL).respond(json=[municipality, locality])
+    result = await geocode(ctx, "Worpswede")
+    assert [(r["lat"], r["lon"]) for r in result] == [(53.223002, 8.928348), (53.261675, 8.97587)]
+
+    # Ortspunkt statt Ortschaftsgrenze (z. B. Bad Zwischenahn)
+    geocode_module._cache.clear()
+    respx.get(geocode_module.NOMINATIM_URL).respond(json=[municipality, locality | {"category": "place", "type": "town"}])
+    assert (await geocode(ctx, "Worpswede"))[0]["lat"] == 53.223002
+
+    # Gleichnamiger Ort außerhalb der Gemeinde (anderswo in Deutschland) ändert die Reihenfolge nicht
+    geocode_module._cache.clear()
+    elsewhere = locality | {"lat": "50.1", "lon": "10.1"}
+    respx.get(geocode_module.NOMINATIM_URL).respond(json=[municipality, elsewhere])
+    assert (await geocode(ctx, "Worpswede"))[0]["lat"] == 53.261675
+
+
+@respx.mock
 async def test_geocode_not_found(ctx) -> None:
     geocode_module._cache.clear()
     respx.get(geocode_module.NOMINATIM_URL).respond(json=[])
