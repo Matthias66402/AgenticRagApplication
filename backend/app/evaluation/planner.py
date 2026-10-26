@@ -26,7 +26,7 @@ from typing import Any
 import httpx
 from pydantic_ai import (
     AgentRunResultEvent, FunctionToolCallEvent, FunctionToolResultEvent, ModelMessage, ModelRequest, ModelResponse,
-    RetryPromptPart, ToolCallPart, ToolReturnPart,
+    ToolCallPart, ToolReturnPart,
 )  # fmt: skip
 
 from app.agent.deps import AgentDeps
@@ -73,13 +73,25 @@ class CaseRun:
         return self.error is None and all(self.checks.values())
 
 
+def retry_feedback(part: Any) -> str | None:
+    """Rückmeldung eines Retrys an das Modell, für andere Nachrichtenteile None.
+
+    Bis pydantic-ai 2.60 ein RetryPromptPart, ab 2.61 ein ToolReturnPart mit outcome="retried" bzw. RetryFeedbackPart.
+    """
+    if getattr(part, "outcome", None) == "retried":
+        return part.model_response_str()
+    if part.part_kind in ("retry-prompt", "retry-feedback"):
+        return part.model_response()
+    return None
+
+
 def tool_returns(messages: list[ModelMessage], tool_name: str) -> list[Any]:
     return [
         part.content
         for message in messages
         if isinstance(message, ModelRequest)
         for part in message.parts
-        if isinstance(part, ToolReturnPart) and part.tool_name == tool_name
+        if isinstance(part, ToolReturnPart) and part.tool_name == tool_name and retry_feedback(part) is None
     ]
 
 
@@ -129,7 +141,7 @@ def measure(run: CaseRun, messages: list[ModelMessage]) -> None:
                 if isinstance(part, ToolCallPart):
                     run.tool_calls[part.tool_name] = run.tool_calls.get(part.tool_name, 0) + 1
         else:
-            run.retries += sum(isinstance(part, RetryPromptPart) for part in message.parts)
+            run.retries += sum(retry_feedback(part) is not None for part in message.parts)
 
 
 def covered_seconds(spans: list[tuple[float, float]]) -> float:

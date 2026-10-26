@@ -18,6 +18,7 @@ from app.agent.planner import build_model, model_settings, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
+from app.evaluation.planner import retry_feedback
 from app.config import get_settings
 from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, add_test_route, one_trip
 
@@ -567,7 +568,7 @@ async def test_plan_must_use_route_along_long_distance_route(
             if isinstance(part, ToolReturnPart) and part.tool_name == "plan_route"
         ]
         retries.extend(
-            part.model_response() for message in messages for part in message.parts if part.part_kind == "retry-prompt"
+            feedback for message in messages for part in message.parts if (feedback := retry_feedback(part)) is not None
         )
         return "final_plan", make_plan() | {"transport": "cycling", "route_ids": [route_ids[route_id]]}
 
