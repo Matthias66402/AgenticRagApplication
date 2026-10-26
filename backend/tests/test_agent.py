@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import re
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -23,6 +24,20 @@ from app.config import get_settings
 from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, add_test_route, one_trip
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
+
+
+def _tomorrow_same_local_time(match: re.Match[str]) -> str:
+    berlin = ZoneInfo("Europe/Berlin")
+    local = dt.datetime.fromisoformat(match.group(0)).astimezone(berlin)
+    moved = dt.datetime.combine(TOMORROW, local.time(), berlin)
+    return moved.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# Fahrplanantwort mit den Verbindungen der Fixture aus test_tools (festes, inzwischen vergangenes Datum) zur selben
+# Ortszeit morgen; über die Umstellung auf Sommer- bzw. Winterzeit hinweg ändern sich dabei die UTC-Zeiten
+TRANSIT_TOMORROW = json.loads(
+    re.sub(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", _tomorrow_same_local_time, json.dumps(TRANSIT_OK))
+)
 
 
 def make_plan(distance_km: float = 15.0, days: int = 1, accommodation: str | None = None) -> dict[str, Any]:
@@ -280,7 +295,7 @@ async def test_plan_links_bahn_search_without_timetable(client: httpx.AsyncClien
 
 @respx.mock
 async def test_train_connection_answer_without_plan(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
-    transit = respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    transit = respx.get(get_settings().transit_api_url).respond(json=TRANSIT_TOMORROW)
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     args = {
         "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
@@ -313,7 +328,7 @@ async def test_train_connection_answer_without_plan(client: httpx.AsyncClient, u
 @respx.mock
 async def test_train_trip_card_for_chosen_connection(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     """Folgenachricht "Plan für Verbindung 1": Reisekarte statt Verweis auf nicht angezeigte Verbindungen."""
-    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_TOMORROW)
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     args = {
         "from_name": "München", "from_lat": 48.14, "from_lon": 11.56,
@@ -374,7 +389,7 @@ async def test_train_trip_with_bike_to_station(client: httpx.AsyncClient, user_h
     """Mit dem Rad zum Bahnhof, dann Zug: Reisekarte mit berechneter Route, die vor der Abfahrt ankommt."""
     respx.post(ORS_URL.format(profile="cycling-regular")).respond(status_code=503)
     respx.get(BROUTER_URL).respond(json=BROUTER_OK)
-    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_TOMORROW)
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     args = {
         "from_name": "Oldenburg Hbf", "from_lat": 53.14, "from_lon": 8.22,
@@ -486,7 +501,7 @@ async def test_default_transport_instead_of_question(client: httpx.AsyncClient, 
 async def test_default_transport_instead_of_train_answer(
     client: httpx.AsyncClient, user_headers: dict[str, str]
 ) -> None:
-    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_OK)
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_TOMORROW)
     connection_args = {
         "from_name": "Osnabrück", "from_lat": 52.27, "from_lon": 8.06,
         "to_name": "Oldenburg", "to_lat": 53.14, "to_lon": 8.21, "date": TOMORROW.isoformat(),
