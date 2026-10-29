@@ -315,7 +315,10 @@ async def test_named_route_from_catalog_without_overpass(ctx) -> None:
 
     assert overpass.call_count == 0
     assert "8.250000,53.000000" in brouter.calls[0].request.url.params["lonlats"]
-    assert result["named_route"] == {"routes": ["Testweg"], "on_route_km": 23.2, "off_route_legs": []}
+    assert result["named_route"] == {
+        "routes": ["Testweg"], "on_route_km": 23.2, "off_route_legs": [],
+        "checkpoints": [{"km": 12, "lat": 53.0, "lon": 8.25}],  # Stützpunkt der Echo-Geometrie
+    }  # fmt: skip
     assert result["source"] == "BRouter trekking entlang Testweg (Verlauf: © OpenStreetMap-Mitwirkende)"
     # Wandern sucht nur Wanderwege im Katalog → live über Overpass (hier nicht erreichbar)
     respx.post(url__startswith="https://api.openrouteservice.org/").respond(status_code=503)
@@ -338,7 +341,26 @@ async def test_named_route_far_waypoint_is_routed_normally(ctx) -> None:
     inland = Coordinate(lat=53.00, lon=8.40)  # ~11 km vom Fernweg
     result = await plan_route(ctx, [COAST_START, COAST_END, inland], TransportMode.cycling, "Testküsten-Radweg")
     assert result["named_route"]["off_route_legs"] == [2]
-    assert "Teilstück(e) 2 folgen nicht dem Fernweg" in result["note"]
+    assert "Teilstück(e) 2 folgen nicht dem Fernweg (Teilstück 2: Wegpunkt 3 weiter als 5 km" in result["note"]
+
+
+def test_named_route_follows_long_coastal_bow() -> None:
+    """Küstenwege um Buchten sind ein Mehrfaches der Luftlinie lang; genau diesem Verlauf soll die Route folgen."""
+    bow = [(53.10, 8.20), (53.20, 8.20), (53.20, 8.30), (53.10, 8.30)]  # ~29 km bei ~7 km Luftlinie
+    graph = named_route.build_graph(["Bucht-Radweg"], [([1, 2, 3, 4], bow)])
+    route_guide = named_route.guide(graph, [bow[0], bow[-1]])
+    assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(28.9, abs=0.5)
+    assert (53.20, 8.30) in route_guide.waypoints
+
+
+def test_checkpoints_along_route() -> None:
+    line = [[53.0, 8.0 + i * 0.01, 5.0] for i in range(60)]  # ~39 km nach Osten
+    marks = routing.checkpoints(line, TransportMode.cycling)
+    assert [m["km"] for m in marks] == [10, 20, 30]
+    assert marks[0]["lat"] == 53.0
+    # Lange Wanderungen: größere Abstände statt beliebig vieler Marken
+    long_line = [[53.0, 8.0 + i * 0.01, 5.0] for i in range(300)]  # ~200 km
+    assert len(routing.checkpoints(long_line, TransportMode.hiking)) <= routing.MAX_CHECKPOINTS
 
 
 @respx.mock

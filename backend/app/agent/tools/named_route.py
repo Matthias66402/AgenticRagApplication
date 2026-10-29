@@ -48,7 +48,10 @@ OVERPASS_TIMEOUT_SECONDS = 90
 GRID_DEG = 0.01  # Zellgröße des Suchrasters (~1 km)
 MAX_SNAP_KM = 5.0  # weiter entfernte Wegpunkte (z. B. Unterkunft im Hinterland) werden normal angebunden
 GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden überbrückt
-DETOUR_LIMIT = 3.0  # Pfad länger als 3 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll
+# Pfad länger als 6 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll (z. B. nur über das andere
+# Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
+# (Nordseeküsten-Radweg Emden–Wilhelmshaven: 201 km bei 62 km Luftlinie); genau diesen Verlauf will der Nutzer.
+DETOUR_LIMIT = 6.0
 SAMPLE_SPACING_KM = 2.0  # Abstand der Stützpunkte für den Router
 SNAP_POINT_MIN_KM = 0.2  # Einstiegspunkt auf dem Fernweg nur bei spürbarem Abstand als eigener Stützpunkt
 
@@ -254,6 +257,7 @@ class Guide:
     waypoints: list[Point]
     on_route_km: float
     off_route_legs: list[int]  # 1-basierte Nummern der Teilstücke, die nicht dem Fernweg folgen
+    off_route_reasons: list[str] = field(default_factory=list)  # je Teilstück abseits ein Grund, für den Agenten
 
 
 def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
@@ -261,12 +265,22 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
     dense = [waypoints[0]]
     on_route_km = 0.0
     off_route_legs = []
+    reasons = []
     for leg, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
         path = None
         start, goal = snaps[leg], snaps[leg + 1]
-        if start and goal:
+        far = [str(i + 1) for i in (leg, leg + 1) if snaps[i] is None]
+        if far:
+            reasons.append(f"Teilstück {leg + 1}: Wegpunkt {' und '.join(far)} weiter als {MAX_SNAP_KM:g} km vom Fernweg")
+        else:
             path = graph.shortest_path(start[0], goal[0])
-            if path and path[1] > DETOUR_LIMIT * haversine_km(*a, *b) + 2:
+            straight = haversine_km(*a, *b)
+            if path is None:
+                reasons.append(f"Teilstück {leg + 1}: keine Verbindung auf dem Fernweg")
+            elif path[1] > DETOUR_LIMIT * straight + 2:
+                reasons.append(
+                    f"Teilstück {leg + 1}: auf dem Fernweg {path[1]:.0f} km bei {straight:.0f} km Luftlinie (Umweg)"
+                )
                 path = None
         if path:
             points, km = path
@@ -279,7 +293,7 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
         else:
             off_route_legs.append(leg + 1)
         dense.append(b)
-    return Guide(dense, on_route_km, off_route_legs)
+    return Guide(dense, on_route_km, off_route_legs, reasons)
 
 
 # Katalog-ID -> (Importzeitpunkt, Graph); ein neuer Import ersetzt den Graphen

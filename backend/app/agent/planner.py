@@ -37,6 +37,15 @@ PUBLIC_TRANSPORT_WORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Wunsch nach einem bestimmten Verlauf: "entlang der Nordseeküste", "an der Elbe entlang", "auf dem Weser-Radweg"
+# ("Radwegen" o. Ä. im Plural zählt nicht: "möglichst auf Radwegen" ist kein bestimmter Fernweg)
+ROUTE_WORDS = re.compile(
+    r"\b(entlang|längs)\b|(radweg|radroute|radfernweg|wanderweg|höhenweg|steig|pfad)\b",
+    re.IGNORECASE,
+)
+# Fortbewegungsarten, für die plan_route einem Fernweg folgen kann (app.agent.tools.named_route.ROUTE_TYPES)
+NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode.hiking}
+
 # Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
 SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
 
@@ -73,9 +82,15 @@ Fortbewegungsart, Startdatum, Dauer in Tagen, Start, Ziel. Bei mehr als einem Ta
 (hut, camping, hotel, hostel, bivouac). Bei einer Rundtour ist das Ziel gleich dem Start.
 Nennt der Nutzer keine Fortbewegungsart bzw. keinen Start, gelten seine Profil-Vorgaben (siehe unten, falls
 vorhanden). Ein allgemeines "fahren" ohne Verkehrsmittel ist dann eine Tour mit der Standard-Fortbewegungsart.
+Die Dauer ergibt sich auch aus der Zahl der Übernachtungen (Tage = Übernachtungen + 1, "eine Übernachtung" = 2 Tage).
+Nennt der Nutzer weder Tage noch Übernachtungen und ist die Tour an einem Tag machbar (z. B. ein Ausflug "und
+zurück"), ist es eine Tagestour; frage dann nicht nach der Dauer.
+Lässt der Nutzer mehrere Übernachtungsarten zu (z. B. "Hostel oder Hotel"), ist das keine offene Angabe: suche beide
+mit `find_accommodation`, wähle die passendste Unterkunft und setze `accommodation_type` auf deren Art.
 Fehlt eine Pflichtangabe oder ist sie mehrdeutig, rufe `ask_user` auf: eine freundliche Rückfrage, die alle offenen
 Punkte auf einmal klärt. Rate keine Pflichtangaben. Optionale Details (Fitness, Budget) darfst Du sinnvoll annehmen.
-Relative Angaben wie "nächstes Wochenende" löst Du anhand des heutigen Datums auf.
+Relative Angaben wie "nächstes Wochenende" oder "in acht Tagen" löst Du anhand des heutigen Datums auf; "in acht
+Tagen" ist das Startdatum, keine Dauer.
 
 ## Reine Bahnauskunft
 Nur wenn der Nutzer ausdrücklich Zug, Bahn, Bus bzw. ÖPNV nennt und keine Tour möchte. Sätze wie "nach Hause
@@ -106,11 +121,17 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
 1. `geocode` für Start und Ziel (und ggf. Zwischenorte).
 2. `plan_route` für die Gesamtstrecke. Bei mehrtägigen Touren die Strecke in sinnvolle Tagesetappen teilen.
    Richtwerte pro Tag: Wandern 10-25 km bzw. max. ~1200 Hm, Rad 40-100 km, MTB 25-60 km, Kanu 15-30 km,
-   Auto max. ~500 km.
-   Soll die Tour einem ausgeschilderten Fernweg folgen (z. B. "auf dem Ostseeküsten-Radweg"), übergib dessen Namen
-   bei jedem `plan_route` dieser Tour als `route_name` und wähle Etappenorte und Unterkünfte nahe am Fernweg
-   (max. 5 km). Findet das Tool den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der
-   Plan nutzt dann diese Route; passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
+   Auto max. ~500 km. Hat der Nutzer Tage bzw. Übernachtungen festgelegt, plane auch etwas längere Etappen ohne
+   Rückfrage und weise in den Notizen darauf hin; nachfragen erst, wenn eine Etappe das Tageslimit überschreitet
+   (Wandern 35 km, Rad 160 km, MTB 90 km).
+   Soll die Tour einem ausgeschilderten Fernweg folgen (z. B. "auf dem Ostseeküsten-Radweg") oder beschreibt der
+   Nutzer einen Verlauf, den ein Fernweg abdeckt (z. B. "entlang der Nordseeküste" → "Nordseeküsten-Radweg",
+   "an der Elbe entlang" → "Elberadweg"), übergib dessen Namen bei jedem `plan_route` dieser Tour als `route_name`.
+   Rufe es zuerst nur mit Start und Ziel auf: Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
+   die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
+   Tagesdistanz und suche Unterkünfte dort (`find_accommodation`, max. 5 km), statt Orte zu raten. Findet das Tool
+   den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der Plan nutzt dann diese Route;
+   passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
 3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart. Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
    Hüttenwanderung (Wandern, Übernachtung hut bzw. bivouac, Start ungleich Ziel): statt Schritt 2 und 3 nach
@@ -167,15 +188,20 @@ def used_tool(ctx: RunContext[AgentDeps], tool_name: str) -> bool:
     )
 
 
-def mentions_public_transport(ctx: RunContext[AgentDeps]) -> bool:
-    """Hat der Nutzer in einer seiner Nachrichten Zug, Bahn, Bus oder ÖPNV erwähnt?"""
+def user_mentions(ctx: RunContext[AgentDeps], pattern: re.Pattern[str]) -> bool:
+    """Passt das Muster auf eine der Nachrichten des Nutzers (inkl. früherer Nachrichten dieses Abenteuers)?"""
     return any(
-        PUBLIC_TRANSPORT_WORDS.search(part.content)
+        pattern.search(part.content)
         for message in ctx.messages
         if isinstance(message, ModelRequest)
         for part in message.parts
         if isinstance(part, UserPromptPart) and isinstance(part.content, str)
     )
+
+
+def mentions_public_transport(ctx: RunContext[AgentDeps]) -> bool:
+    """Hat der Nutzer in einer seiner Nachrichten Zug, Bahn, Bus oder ÖPNV erwähnt?"""
+    return user_mentions(ctx, PUBLIC_TRANSPORT_WORDS)
 
 
 def check_default_transport(ctx: RunContext[AgentDeps], output: PlannerOutput) -> None:
@@ -291,6 +317,31 @@ def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
     )
 
 
+def check_route_wish(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Wünscht der Nutzer einen Verlauf ("entlang der Nordseeküste"), muss `plan_route` einen Fernweg versucht haben.
+
+    Sonst routet das Modell oft direkt, obwohl ein Fernweg den Wunsch abdeckt. Ein Aufruf mit `route_name` genügt,
+    auch wenn er keinen passenden Fernweg fand: Dann plant das Modell mit dem Hinweis ohne Fernweg weiter.
+    """
+    if output.transport not in NAMED_ROUTE_TRANSPORT or used_tool(ctx, "plan_hut_tour"):
+        return
+    if not user_mentions(ctx, ROUTE_WORDS):
+        return
+    tried = any(
+        isinstance(part, ToolCallPart) and part.tool_name == "plan_route" and part.args_as_dict().get("route_name")
+        for message in ctx.messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+    )
+    if not tried:
+        raise ModelRetry(
+            "Der Nutzer wünscht einen bestimmten Verlauf (z. B. entlang einer Küste, eines Flusses oder auf einem "
+            "Fernweg). Rufe `plan_route` mit Start und Ziel und dem passenden Fernweg als `route_name` auf (z. B. "
+            "\"Nordseeküsten-Radweg\", \"Elberadweg\"), wähle die Etappenorte aus `named_route.checkpoints` und "
+            "plane dann neu. Findet das Tool keinen passenden Fernweg, plane ohne route_name weiter."
+        )
+
+
 def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
     """Hüttenwanderungen von A nach B über `plan_hut_tour`, sonst sucht das Modell Hütten rund um Talorte."""
     if (
@@ -391,6 +442,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             raise ModelRetry(f"Das Startdatum {output.start_date} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
         check_named_route_used(ctx, output)
         check_hut_tour(ctx, output)
+        check_route_wish(ctx, output)
         if (output.outbound_journey or output.return_journey) and not used_tool(ctx, "find_train_connections"):
             raise ModelRetry(
                 "An- und Rückreise nur mit Verbindungen aus `find_train_connections` angeben. "

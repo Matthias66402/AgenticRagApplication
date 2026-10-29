@@ -23,6 +23,14 @@
       "duration_days": 4
     },
     {
+      "id": "rad-nordseekueste",
+      "message": "Ich möchte ab dem 10.06.2027 um 10:00 Uhr von Emden entlang der Nordseeküste bis nach Wilhelmshaven eine Fahrradtour unternehmen. Bitte eine Übernachtung in einem Hostel oder Hotel einplanen.",
+      "expected_output": "final_plan",
+      "transport": "cycling",
+      "duration_days": 2,
+      "named_route": true
+    },
+    {
       "id": "rad-mit-zug",
       "message": "Übernächsten Sonntag will ich mit dem Zug von Oldenburg nach Bremen fahren, dort aufs Rad steigen und an der Weser entlang nach Bremerhaven radeln. Tagestour, zurück nach Oldenburg wieder mit dem Zug.",
       "expected_output": "final_plan",

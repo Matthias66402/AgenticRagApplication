@@ -9,7 +9,7 @@ from app.agent.plan_schema import AccommodationType, AdventurePlan
 from app.agent.planner import check_hut_tour
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.common import haversine_km
-from app.agent.tools.huts import choose_chain, overnight_likely, plan_hut_tour
+from app.agent.tools.huts import choose_chain, overnight_likely, plan_hut_tour, problem_legs, valley_drops
 from app.agent.tools.routing import BROUTER_URL, Coordinate
 from tests.test_agent import make_plan
 from tests.test_tools import brouter_echo, ctx, reset_overpass_state  # noqa: F401 (Fixtures)
@@ -27,7 +27,7 @@ HUTS = [
     osm_hut(2, "Hochalm", 47.035, 11.14),  # seitlich und ohne Hinweis auf Übernachtung
     osm_hut(3, "Osthaus", 47.0, 11.27, capacity="40", ele="2000"),
     osm_hut(4, "Osthaus Nebengebäude", 47.001, 11.271),  # derselbe Standort
-    osm_hut(5, "Rückwärtshütte", 47.0, 10.9),  # entgegen der Laufrichtung
+    osm_hut(5, "Rückwärtshütte", 47.0, 10.85),  # 11 km hinter dem Start
     osm_hut(6, "Umweghütte", 47.0, 11.2, operator="ÖAV"),
 ]
 
@@ -101,6 +101,22 @@ async def test_plan_hut_tour_replaces_hut_with_long_detour(ctx) -> None:  # noqa
 
     assert "Osthaus" not in [h["name"] for h in result["huts"]]
     assert max(s["distance_km"] for s in result["route"]["segments"]) < 26
+
+
+def test_deep_valley_between_huts_is_a_problem_leg() -> None:
+    """Zwischen zwei Hütten zurück ins Tal (Wank-Haus → Meilerhütte über Garmisch) taugt nicht als Etappe."""
+    waypoints = [START, Coordinate(lat=47.0, lon=11.1), Coordinate(lat=47.0, lon=11.2), END]
+    geometry = [
+        [47.0, 11.0, 700.0], [47.0, 11.1, 1800.0],  # Aufstieg zur ersten Hütte
+        [47.0, 11.15, 750.0], [47.0, 11.2, 2300.0],  # ins Tal und wieder hinauf
+        [47.0, 11.3, 1700.0], [47.0, 11.4, 1500.0],
+    ]
+    drops = valley_drops(geometry, waypoints)
+    assert drops == [0.0, 1050.0, 0.0]
+    segments = [{"distance_km": 8.0}, {"distance_km": 10.0}, {"distance_km": 15.0}]
+    assert problem_legs(waypoints, {"segments": segments}, drops) == [1]
+    # Schätzung ohne Wegverlauf: keine Aussage
+    assert problem_legs(waypoints, {"segments": segments, "estimated": True}, drops) == []
 
 
 async def test_plan_hut_tour_rejects_round_trip(ctx) -> None:  # noqa: F811

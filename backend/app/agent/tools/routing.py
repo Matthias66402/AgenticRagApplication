@@ -14,7 +14,7 @@ from pydantic_ai import RunContext
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import TransportMode
 from app.agent.tools.common import haversine_km, http_error_message, tool_error
-from app.agent.tools.named_route import MAX_SNAP_KM, ROUTE_TYPES, Guide, guide, load_route_graph
+from app.agent.tools.named_route import ROUTE_TYPES, Guide, guide, load_route_graph
 
 ORS_URL = "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
 BROUTER_URL = "https://brouter.de/brouter"
@@ -54,6 +54,14 @@ ESTIMATE_FACTORS: dict[TransportMode, tuple[float, float]] = {
     TransportMode.canoe: (1.4, 5.0),
     TransportMode.public_transport: (1.3, 50.0),
 }
+
+# Kilometer-Marken entlang eines Fernwegs zur Wahl der Etappenorte; bei langen Routen größere Abstände
+CHECKPOINT_SPACING_KM: dict[TransportMode, float] = {
+    TransportMode.cycling: 10.0,
+    TransportMode.mtb: 10.0,
+    TransportMode.hiking: 4.0,
+}
+MAX_CHECKPOINTS = 30
 
 # Vereinfachung der Geometrie: genau genug für GPX-Navigation, klein genug für die Karte
 SIMPLIFY_TOLERANCE_M = 3.0
@@ -181,6 +189,26 @@ def split_segments(
             "distance": distance, "duration": duration_s * distance / total, "ascent": ascent, "descent": descent,
         })  # fmt: skip
     return segments
+
+
+def checkpoints(geometry: list[list[float]], transport: TransportMode) -> list[dict[str, float]]:
+    """Punkte in festen Abständen entlang der Route mit Kilometerstand.
+
+    Der Agent kennt den Verlauf eines Fernwegs nicht und wählt Etappenorte sonst nach Gefühl (oft abseits oder
+    mit viel zu langen Etappen); aus diesen Punkten wählt er den bei der gewünschten Tagesdistanz.
+    """
+    spacing = CHECKPOINT_SPACING_KM.get(transport, 10.0)
+    total = sum(haversine_km(a[0], a[1], b[0], b[1]) for a, b in zip(geometry, geometry[1:]))
+    spacing = max(spacing, total / MAX_CHECKPOINTS)
+    result = []
+    travelled = 0.0
+    next_mark = spacing
+    for a, b in zip(geometry, geometry[1:]):
+        travelled += haversine_km(a[0], a[1], b[0], b[1])
+        if travelled >= next_mark and total - travelled >= spacing / 2:
+            result.append({"km": round(travelled), "lat": round(b[0], 5), "lon": round(b[1], 5)})
+            next_mark += spacing
+    return result
 
 
 def _estimate(waypoints: list[Coordinate], transport: TransportMode, reason: str) -> dict[str, Any]:
@@ -340,7 +368,8 @@ async def plan_route(
     Returns:
         route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments
         (beim Wandern und MTB mit lowest_m, dem tiefsten Punkt der Etappe);
-        mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon).
+        mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon,
+        checkpoints: Punkte entlang der Route mit Kilometerstand für die Wahl der Etappenorte).
     """
     if len(waypoints) < 2:
         return tool_error("Mindestens Start und Ziel als Wegpunkte angeben.")
@@ -389,8 +418,10 @@ async def plan_route(
                 if route_guide.off_route_legs:
                     notes.append(
                         f"Teilstück(e) {', '.join(map(str, route_guide.off_route_legs))} folgen nicht dem Fernweg "
-                        f"(Wegpunkt weiter als {MAX_SNAP_KM:g} km entfernt oder keine Verbindung auf dem Fernweg)."
+                        f"({'; '.join(route_guide.off_route_reasons)}). Etappenorte bzw. Unterkünfte näher am "
+                        "Fernweg wählen, z. B. aus checkpoints."
                     )
+                named_route["checkpoints"] = checkpoints(route.geometry, transport)
     if route is None:
         route, label, chain_problems = await _route_chain(ctx, chain, waypoints)
         problems += chain_problems

@@ -17,23 +17,32 @@ from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AccommodationType, TransportMode
 from app.agent.tools.accommodation import search_nominatim
 from app.agent.tools.common import haversine_km, http_error_message, tool_error
-from app.agent.tools.routing import Coordinate, plan_route
+from app.agent.tools.routing import Coordinate, cut_indices, plan_route
 
 # Wanderwege im Gebirge sind deutlich länger als die Luftlinie
 DETOUR_FACTOR = 1.4
 MAX_LEG_KM = 22.0
+# Kürzere Tagesetappen als Ziel nur, wenn die Strecke selbst so kurz ist (sonst landen alle Hütten am Start)
+MIN_TARGET_LEG_KM = 10.0
+# Aufschlag je Hütte ohne Hinweis auf Übernachtung, in Einheiten der Etappenabweichung
+NO_OVERNIGHT_PENALTY = 3.0
 # Nach dem Routing: Etappen, die viel länger als geschätzt sind, liegen nicht auf dem Weg → Hütte austauschen
 MAX_ROUTED_LEG_KM = 26.0
 MAX_ROUTED_DETOUR = 2.2
 CHAIN_ATTEMPTS = 3
 # Einträge so nah beieinander gelten als dieselbe Hütte (z. B. Hütte und Nebengebäude)
 SAME_HUT_KM = 0.4
-# Korridor beiderseits der Luftlinie Start–Ziel (km)
-MIN_CORRIDOR_KM = 6.0
-MAX_CORRIDOR_KM = 8.0
+# Korridor: Höchstabstand zur Luftlinie Start–Ziel (km), auch rund um Start und Ziel. Zwischen nahen Talorten
+# liegen oft keine Hütten auf der Achse (Garmisch–Mittenwald: Meilerhütte 7 km seitlich, Mittenwalder Hütte
+# oberhalb des Ziels), daher auch bei kurzen Strecken mindestens 8 km.
+MIN_CORRIDOR_KM = 8.0
+MAX_CORRIDOR_KM = 10.0
 CORRIDOR_SHARE = 0.25
-# Etappen, deren tiefster Punkt so weit unter beiden Enden liegt, führen durchs Tal
+# Etappen, deren tiefster Punkt so weit unter beiden Enden liegt, führen durchs Tal (Hinweis im Ergebnis). Ab
+# DEEP_VALLEY_DROP_M wird die Verbindung verworfen und eine andere Kette gesucht (Wank-Haus → Meilerhütte über
+# Garmisch); kürzere Talquerungen zwischen zwei Gebirgsgruppen sind oft unvermeidbar.
 VALLEY_DROP_M = 500
+DEEP_VALLEY_DROP_M = 800
 MAX_OTHER_HUTS = 12
 # Darunter ist es eher eine Rundtour bzw. Start und Ziel am selben Ort
 MIN_HUT_TOUR_KM = 3.0
@@ -90,8 +99,8 @@ async def _huts_in_corridor(
     # Aussagekräftigster Eintrag zuerst, damit er bei Doppeleinträgen derselben Hütte bleibt
     for hut in sorted(found.values(), key=lambda h: (not overnight_likely(h), -len(h))):
         along, offset = _axis_position(hut["lat"], hut["lon"], start, end)
-        if not (-1 <= along <= distance + 1 and abs(offset) <= width):
-            continue
+        if math.hypot(along - min(max(along, 0.0), distance), offset) > width:
+            continue  # weiter als `width` von der Strecke Start–Ziel
         if any(haversine_km(hut["lat"], hut["lon"], h["lat"], h["lon"]) < SAME_HUT_KM for h in huts):
             continue
         hut = {k: v for k, v in hut.items() if k != "distance_km"}
@@ -101,27 +110,35 @@ async def _huts_in_corridor(
 
 
 def choose_chain(
-    huts: list[dict[str, Any]], start: Coordinate, end: Coordinate, nights: int
+    huts: list[dict[str, Any]],
+    start: Coordinate,
+    end: Coordinate,
+    nights: int,
+    forbidden: frozenset[tuple[int, int]] = frozenset(),
 ) -> list[dict[str, Any]] | None:
     """Wählt `nights` Hütten in Laufrichtung, sodass die Tagesetappen möglichst gleich lang und nicht zu lang sind.
 
     Dynamische Programmierung über die nach Fortschritt sortierten Hütten; Hütten ohne Hinweis auf Übernachtung
-    kosten einen Aufschlag.
+    kosten einen Aufschlag. `forbidden` enthält Verbindungen (i, j), die nach dem Routing nicht taugen; Indizes wie
+    `points`: 0 = Start, 1..n = Hütten, n + 1 = Ziel.
     """
     points = [(start.lat, start.lon)] + [(h["lat"], h["lon"]) for h in huts] + [(end.lat, end.lon)]
     progress = [0.0] + [h["km_from_start"] for h in huts] + [haversine_km(start.lat, start.lon, end.lat, end.lon)]
-    target = progress[-1] * DETOUR_FACTOR / (nights + 1)
+    target = max(progress[-1] * DETOUR_FACTOR / (nights + 1), MIN_TARGET_LEG_KM)
+
+    last = len(points) - 1
 
     def leg_cost(i: int, j: int) -> float:
-        if progress[j] - progress[i] < 1.0:
-            return math.inf  # kein Rückschritt, keine zwei Hütten nebeneinander
-        km = haversine_km(*points[i], *points[j]) * DETOUR_FACTOR
+        # Kein Rückschritt, keine zwei Hütten nebeneinander; nur zum Ziel darf es zurückgehen (letzte Hütte
+        # oberhalb des Zielorts)
+        if (j != last and progress[j] - progress[i] < 1.0) or (i, j) in forbidden:
+            return math.inf
+        km =haversine_km(*points[i], *points[j]) * DETOUR_FACTOR
         return ((km - target) / target) ** 2 + 5 * max(0.0, km - MAX_LEG_KM) / MAX_LEG_KM
 
     def node_cost(i: int) -> float:
-        return 0.0 if i in (0, len(points) - 1) or huts[i - 1]["overnight_likely"] else 1.0
+        return 0.0 if i in (0, last) or huts[i - 1]["overnight_likely"] else NO_OVERNIGHT_PENALTY
 
-    last = len(points) - 1
     # best[k][j]: minimale Kosten bis Punkt j mit k Hütten (j selbst eingeschlossen), prev für den Rückweg
     best: list[dict[int, float]] = [{0: 0.0}]
     prev: list[dict[int, int]] = [{}]
@@ -146,23 +163,30 @@ def choose_chain(
     return chain[::-1]
 
 
-def detour_huts(chain: list[dict[str, Any]], waypoints: list[Coordinate], route: dict[str, Any]) -> list[dict[str, Any]]:
-    """Hütten an Etappen, deren Wanderweg viel länger als die Luftlinie oder als eine Tagesetappe ist.
+def valley_drops(geometry: list[list[float]], waypoints: list[Coordinate]) -> list[float | None]:
+    """Je Etappe: wie weit der tiefste Punkt unter dem tieferen der beiden Enden liegt (m; Höhen aus der Route)."""
+    if not geometry or len(geometry[0]) < 3:
+        return [None] * (len(waypoints) - 1)
+    cuts = cut_indices(geometry, waypoints)
+    return [
+        min(geometry[a][2], geometry[b][2]) - min(p[2] for p in geometry[a : b + 1])
+        for a, b in zip(cuts, cuts[1:])
+    ]
 
-    Bei einer Etappe zwischen zwei Hütten ist nicht erkennbar, welche abseits liegt; beide werden verworfen.
-    """
+
+def problem_legs(waypoints: list[Coordinate], route: dict[str, Any], drops: list[float | None]) -> list[int]:
+    """Etappen (0-basiert), deren Wanderweg viel länger als Luftlinie bzw. Tagesetappe ist oder tief ins Tal führt."""
     segments = route.get("segments", [])
     if route.get("estimated") or len(segments) != len(waypoints) - 1:
         return []  # Schätzung ohne echten Wegverlauf sagt über Umwege nichts aus
-    stops: list[dict[str, Any] | None] = [None, *chain, None]
-    detours = []
-    for day, segment in enumerate(segments):
+    problems = []
+    for day, (segment, drop) in enumerate(zip(segments, drops)):
         a, b = waypoints[day], waypoints[day + 1]
         straight = haversine_km(a.lat, a.lon, b.lat, b.lon)
-        if segment["distance_km"] <= MAX_ROUTED_LEG_KM and segment["distance_km"] <= straight * MAX_ROUTED_DETOUR + 3:
-            continue
-        detours += [h for h in stops[day : day + 2] if h is not None and h not in detours]
-    return detours
+        km = segment["distance_km"]
+        if km > MAX_ROUTED_LEG_KM or km > straight * MAX_ROUTED_DETOUR + 3 or (drop or 0) > DEEP_VALLEY_DROP_M:
+            problems.append(day)
+    return problems
 
 
 async def plan_hut_tour(
@@ -201,22 +225,25 @@ async def plan_hut_tour(
     except httpx.HTTPError as exc:
         return tool_error(http_error_message("Nominatim", exc) + " Ersatzweise find_accommodation nutzen.")
 
-    # Kette wählen, routen und Hütten an Etappen mit großem Umweg ausschließen, bis die Kette passt
-    excluded: set[int] = set()
-    chain: list[dict[str, Any]] | None = None
-    route: dict[str, Any] = {}
-    for _ in range(CHAIN_ATTEMPTS):
-        candidate = choose_chain([h for h in huts if id(h) not in excluded], start, end, nights)
+    # Kette wählen und routen; Verbindungen mit großem Umweg oder tiefem Talabstieg sperren und neu wählen.
+    # Von den Versuchen gewinnt der mit den wenigsten solchen Etappen.
+    index = {id(h): i + 1 for i, h in enumerate(huts)}
+    forbidden: set[tuple[int, int]] = set()
+    attempts: list[tuple[int, int, list[dict[str, Any]], dict[str, Any], list[float | None]]] = []
+    for attempt in range(CHAIN_ATTEMPTS):
+        candidate = choose_chain(huts, start, end, nights, frozenset(forbidden))
         if candidate is None:
             break
-        chain = candidate
-        waypoints = [start, *(Coordinate(lat=h["lat"], lon=h["lon"]) for h in chain), end]
-        route = await plan_route(ctx, waypoints, TransportMode.hiking)
-        detours = detour_huts(chain, waypoints, route)
-        if not detours:
+        waypoints = [start, *(Coordinate(lat=h["lat"], lon=h["lon"]) for h in candidate), end]
+        candidate_route = await plan_route(ctx, waypoints, TransportMode.hiking)
+        drops = valley_drops(ctx.deps.routes.get(candidate_route.get("route_id", ""), []), waypoints)
+        problems = problem_legs(waypoints, candidate_route, drops)
+        attempts.append((len(problems), attempt, candidate, candidate_route, drops))
+        if not problems:
             break
-        excluded |= {id(h) for h in detours}
-    if chain is None:
+        stops = [0, *(index[id(h)] for h in candidate), len(huts) + 1]
+        forbidden |= {(stops[day], stops[day + 1]) for day in problems}
+    if not attempts:
         return {
             "huts": [],
             "other_huts": huts[:MAX_OTHER_HUTS],
@@ -224,14 +251,13 @@ async def plan_hut_tour(
             "Übernachtungen, Talorte mit find_accommodation oder ein anderes Ziel vorschlagen.",
         }
 
+    _, _, chain, route, drops = min(attempts, key=lambda a: a[:2])
     notes = []
     unlikely = [h["name"] for h in chain if not h["overnight_likely"]]
     if unlikely:
         notes.append(f"Ohne Hinweis auf Übernachtung (evtl. nur Einkehr): {', '.join(unlikely)}.")
-    ends = [None, *(h.get("elevation_m") for h in chain), None]
-    for day, segment in enumerate(route.get("segments", []), start=1):
-        known = [float(e) for e in ends[day - 1 : day + 1] if e and str(e).replace(".", "", 1).isdigit()]
-        if "lowest_m" in segment and len(known) == 2 and min(known) - segment["lowest_m"] > VALLEY_DROP_M:
+    for day, (segment, drop) in enumerate(zip(route.get("segments", []), drops), start=1):
+        if "lowest_m" in segment and (drop or 0) > VALLEY_DROP_M:
             notes.append(f"Etappe {day} steigt bis auf {segment['lowest_m']} m ins Tal ab.")
     chosen = {id(h) for h in chain}
     others = sorted(

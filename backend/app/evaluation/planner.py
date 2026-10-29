@@ -118,6 +118,14 @@ def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage]
             }
             stays = [s.accommodation for s in output.stages[:-1]]
             checks["accommodation_from_tool"] = all(a is not None and a.name in found for a in stays)
+        if case.get("named_route"):
+            # Mindestens eine Route des Plans folgt dem Fernweg ohne Teilstücke abseits davon
+            along = {
+                result["route_id"]
+                for result in tool_returns(messages, "plan_route")
+                if isinstance(result, dict) and result.get("named_route", {}).get("off_route_legs") == []
+            }
+            checks["named_route"] = any(route_id in along for route_id in output.route_ids)
         if case.get("journeys"):
             checks["journeys"] = output.outbound_journey is not None and output.return_journey is not None
     if isinstance(output, TrainTripPlan) and case.get("access"):

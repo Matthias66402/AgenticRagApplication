@@ -84,7 +84,7 @@ Schwelle und Relevanzprüfung sind mit der Evaluation unten begründet.
 
 ## Fernwege
 
-Soll eine Tour einem ausgeschilderten Fernweg folgen (z. B. „auf dem Ostseeküsten-Radweg“), routet der Agent entlang dessen Verlauf aus OpenStreetMap. Die Fernwege aus `backend/app/seed/long_distance_routes.json` (Name, weitere Namen, OSM-Relationen) werden dafür vorab importiert, weil Live-Abfragen bei Overpass oft ein bis zwei Minuten dauern. Andere Fernwege fragt die App live ab.
+Soll eine Tour einem ausgeschilderten Fernweg folgen (z. B. „auf dem Ostseeküsten-Radweg“ oder „entlang der Nordseeküste“), routet der Agent entlang dessen Verlauf aus OpenStreetMap und wählt die Etappenorte anhand von Kilometer-Marken auf dem Fernweg. Die Fernwege aus `backend/app/seed/long_distance_routes.json` (Name, weitere Namen, OSM-Relationen) werden dafür vorab importiert, weil Live-Abfragen bei Overpass oft ein bis zwei Minuten dauern. Andere Fernwege fragt die App live ab.
 
 ```bash
 docker compose exec backend python -m app.seed.long_distance_routes --list                 # Katalog und Importstand
@@ -143,7 +143,7 @@ docker compose exec backend python -m app.evaluation.planner --case bahnauskunft
 docker compose exec -e LLM_REASONING_EFFORT=low backend python -m app.evaluation.planner --label low --output /app/low.json
 ```
 
-Gemessen werden Laufzeit (davon Wartezeit auf Tools), Modellaufrufe, Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation` bzw. `plan_hut_tour`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt. Ein Durchlauf kostet etwa 0,10-0,15 $ und dauert mit `LLM_REQUESTS_PER_MINUTE=5` rund 10-15 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
+Gemessen werden Laufzeit (davon Wartezeit auf Tools), Modellaufrufe, Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation` bzw. `plan_hut_tour`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt, und bei Fernweg-Touren eine Route ohne Teilstücke abseits des Fernwegs. Ein Durchlauf kostet etwa 0,10-0,15 $ und dauert mit `LLM_REQUESTS_PER_MINUTE=5` rund 10-15 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
 
 Stand 23.10.2026 (gpt-5-mini, Standard-Reasoning; je Fall 2 bzw. 4 Läufe, Mittel je Anfrage). Vorher: Anweisungen ohne Hinweis auf gemeinsame Tool-Aufrufe. Nachher: mit diesem Hinweis und gedrosselt auf 5 Anfragen pro Minute.
 

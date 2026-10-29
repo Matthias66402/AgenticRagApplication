@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import re
 from collections.abc import AsyncIterator, Callable
+from types import SimpleNamespace
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,11 +12,11 @@ import httpx
 import pytest
 import respx
 from pydantic import ValidationError
-from pydantic_ai import Agent, ModelMessage, ToolReturnPart
+from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, ModelRetry, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
-from app.agent.planner import build_model, model_settings, planner_agent
+from app.agent.planner import build_model, check_route_wish, model_settings, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
@@ -622,3 +623,27 @@ def parse_sse(body: str) -> list[dict[str, Any]]:
         for line in block.splitlines()
         if line.startswith("data: ")
     ]
+
+
+def route_wish_context(message: str, *calls: dict[str, Any]) -> SimpleNamespace:
+    """Verlauf mit einer Nutzernachricht und plan_route-Aufrufen mit den angegebenen Argumenten."""
+    return SimpleNamespace(messages=[
+        ModelRequest(parts=[UserPromptPart(content=message)]),
+        ModelResponse(parts=[ToolCallPart(tool_name="plan_route", args=args) for args in calls] or [ToolCallPart(tool_name="geocode", args={})]),
+    ])  # fmt: skip
+
+
+def test_route_wish_requires_named_route_attempt() -> None:
+    """Wünscht der Nutzer einen Verlauf, muss plan_route einen Fernweg versucht haben, bevor der Plan durchgeht."""
+    plan = AdventurePlan.model_validate(make_plan() | {"transport": "cycling"})
+    coast = "Von Emden entlang der Nordseeküste nach Wilhelmshaven radeln"
+    with pytest.raises(ModelRetry, match="route_name"):
+        check_route_wish(route_wish_context(coast, {"waypoints": [], "transport": "cycling"}), plan)
+    # Ein Versuch genügt, auch wenn das Tool keinen passenden Fernweg fand
+    check_route_wish(route_wish_context(coast, {"transport": "cycling", "route_name": "Nordseeküsten-Radweg"}), plan)
+    with pytest.raises(ModelRetry):
+        check_route_wish(route_wish_context("Auf dem Weser-Radweg nach Bremen", {"transport": "cycling"}), plan)
+    # Ohne Verlaufswunsch und für Autofahrten keine Pflicht
+    check_route_wish(route_wish_context("Von Emden nach Wilhelmshaven radeln", {"transport": "cycling"}), plan)
+    car = plan.model_copy(update={"transport": "car"})
+    check_route_wish(route_wish_context(coast, {"transport": "car"}), car)
