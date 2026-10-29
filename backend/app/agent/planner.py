@@ -12,11 +12,14 @@ from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import (
-    MAX_STAGE_KM, AccessRoute, AdventurePlan, ClarificationQuestion, Journey, TextAnswer, TrainTripPlan,
+    MAX_STAGE_KM, AccessRoute, AccommodationType, AdventurePlan, ClarificationQuestion, Journey, TextAnswer,
+    TrainTripPlan, TransportMode,
 )  # fmt: skip
 from app.agent.rate_limit import RateLimitedModel
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
+from app.agent.tools.common import haversine_km
+from app.agent.tools.huts import MIN_HUT_TOUR_KM, plan_hut_tour
 from app.agent.tools.knowledge import search_knowledge
 from app.agent.tools.routing import estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
@@ -110,6 +113,13 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
    Plan nutzt dann diese Route; passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
 3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart. Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
+   Hüttenwanderung (Wandern, Übernachtung hut bzw. bivouac, Start ungleich Ziel): statt Schritt 2 und 3 nach
+   `geocode` gleich `plan_hut_tour` mit Anzahl der Nächte (= Tage - 1). Es wählt Hütten, die auf dem Weg liegen, und
+   liefert die Route über sie; übernimm Hütten, route_id und Etappenwerte daraus. Wähle keine Talorte als
+   Etappenziele, um dort Hütten zu suchen: Solche Hütten liegen meist abseits, die Route führt dann durchs Tal.
+   Passt eine Hütte nicht (z. B. Wunsch des Nutzers), tausche sie gegen eine aus `other_huts` und rufe `plan_route`
+   mit den Hütten als Wegpunkten auf. `lowest_m` je Etappe zeigt, wie tief sie absteigt; Abstiege ins Tal und
+   Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen.
 4. `get_weather` für Ort und Zeitraum.
 5. `search_knowledge` mit kurzen Suchen zu je einem Thema statt einer Sammelanfrage. Vor jedem neuen Plan
    sind diese beiden Suchen Pflicht:
@@ -128,14 +138,15 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
    zur Fahrradmitnahme suchen (die weitere Suche aus Schritt 5) und darauf hinweisen.
 
 ## Regeln
-- Verwende nur Fakten aus Tool-Ergebnissen. Unterkünfte ausschließlich aus `find_accommodation`; wurde keine
-  gefunden, schreibe das in die Etappen-Notizen statt eine zu erfinden.
+- Verwende nur Fakten aus Tool-Ergebnissen. Unterkünfte ausschließlich aus `find_accommodation` bzw.
+  `plan_hut_tour`; wurde keine gefunden, schreibe das in die Etappen-Notizen statt eine zu erfinden.
 - Liefert ein Tool einen Fehler oder eine Schätzung, passe das Vorgehen an und weise im Plan darauf hin.
 - Bahnverbindungen ausschließlich aus `find_train_connections` übernehmen (Zeiten, Linien, Gleise unverändert).
   Ändern sich Abfahrts- oder Zielort einer Bahnfahrt (z. B. andere Unterkunft), die Verbindung neu abfragen.
 - Trage genutzte Wissensbasis-Dokumente (Titel) und Datendienste in `sources` ein.
-- Etappenenden sind immer reale Orte (per `geocode` gefunden) oder Unterkünfte aus `find_accommodation`,
-  niemals interpolierte Koordinaten. Wähle dafür passende Orte entlang der Strecke, z. B. Talorte oder Hüttenstandorte.
+- Etappenenden sind immer reale Orte (per `geocode` gefunden) oder Unterkünfte aus `find_accommodation` bzw.
+  `plan_hut_tour`, niemals interpolierte Koordinaten. Wähle dafür passende Orte entlang der Strecke, z. B. Talorte
+  oder Hüttenstandorte.
 - Verwende im Plan kurze Ortsnamen (z. B. "Ulm" statt der vollständigen Geocoding-Adresse).
 - Übernimm die `route_id` der finalen Route(n) in `route_ids`.
 - Gibt der Nutzer später Änderungswünsche, passe den bestehenden Plan an und gib ihn vollständig neu aus.
@@ -280,6 +291,22 @@ def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
     )
 
 
+def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Hüttenwanderungen von A nach B über `plan_hut_tour`, sonst sucht das Modell Hütten rund um Talorte."""
+    if (
+        output.transport == TransportMode.hiking
+        and output.duration_days > 1
+        and output.accommodation_type in (AccommodationType.hut, AccommodationType.bivouac)
+        and haversine_km(output.start.lat, output.start.lon, output.destination.lat, output.destination.lon)
+        >= MIN_HUT_TOUR_KM
+        and not used_tool(ctx, "plan_hut_tour")
+    ):
+        raise ModelRetry(
+            "Plane die Hüttenwanderung mit `plan_hut_tour` (Start, Ziel, Nächte), damit die Hütten auf dem Weg liegen "
+            "statt abseits von Talorten. Übernimm Hütten, route_id und Etappenwerte aus dem Ergebnis."
+        )
+
+
 def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:
     """Verbindungen hängt das Backend nur an, wenn sie in diesem Lauf abgefragt wurden (siehe runner)."""
     if not ctx.deps.train_queries and SHOWN_BELOW.search(output.message):
@@ -321,6 +348,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             Tool(estimate_hiking_time),
             Tool(get_weather),
             Tool(find_accommodation),
+            Tool(plan_hut_tour),
             Tool(search_knowledge),
             Tool(sun_times),
             Tool(find_train_connections),
@@ -362,6 +390,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         if output.start_date < ctx.deps.today:
             raise ModelRetry(f"Das Startdatum {output.start_date} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
         check_named_route_used(ctx, output)
+        check_hut_tour(ctx, output)
         if (output.outbound_journey or output.return_journey) and not used_tool(ctx, "find_train_connections"):
             raise ModelRetry(
                 "An- und Rückreise nur mit Verbindungen aus `find_train_connections` angeben. "

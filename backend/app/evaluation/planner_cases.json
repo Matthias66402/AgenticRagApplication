@@ -16,6 +16,13 @@
       "duration_days": 3
     },
     {
+      "id": "huettentour-garmisch-innsbruck",
+      "message": "Ich möchte ab dem 15.07.2027 eine viertägige Bergwanderung von Garmisch-Partenkirchen nach Innsbruck machen und dreimal auf Hütten übernachten.",
+      "expected_output": "final_plan",
+      "transport": "hiking",
+      "duration_days": 4
+    },
+    {
       "id": "rad-mit-zug",
       "message": "Übernächsten Sonntag will ich mit dem Zug von Oldenburg nach Bremen fahren, dort aufs Rad steigen und an der Weser entlang nach Bremerhaven radeln. Tagestour, zurück nach Oldenburg wieder mit dem Zug.",
       "expected_output": "final_plan",

@@ -31,7 +31,7 @@ OSM_FILTERS: dict[AccommodationType, list[OsmFilter]] = {
 # Ausgewählte OSM-Tags → Feldnamen im Tool-Ergebnis
 DETAIL_TAGS = [
     ("website", "website"), ("contact:website", "website"), ("phone", "phone"), ("contact:phone", "phone"),
-    ("opening_hours", "opening_hours"), ("beds", "beds"), ("capacity", "capacity"),
+    ("opening_hours", "opening_hours"), ("beds", "beds"), ("capacity:overnight", "capacity"), ("capacity", "capacity"),
     ("ele", "elevation_m"), ("operator", "operator"), ("fee", "fee"),
 ]  # fmt: skip
 

@@ -11,6 +11,8 @@ function describeArgs(call: ToolCall): string {
       return `„${a.query}“`;
     case "find_accommodation":
       return `${a.accommodation_type}, ${a.radius_km ?? 5} km`;
+    case "plan_hut_tour":
+      return `${a.nights} Nächte, ${a.accommodation_type ?? "hut"}`;
     case "plan_route":
       return (
         `${Array.isArray(a.waypoints) ? a.waypoints.length : "?"} Wegpunkte, ${a.transport}` +

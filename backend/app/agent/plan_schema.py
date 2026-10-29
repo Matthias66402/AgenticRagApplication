@@ -59,7 +59,7 @@ class Stage(BaseModel):
     descent_m: float | None = Field(default=None, ge=0)
     duration_hours: float | None = Field(default=None, ge=0, description="Reine Bewegungszeit")
     accommodation: AccommodationStop | None = Field(
-        default=None, description="Übernachtung am Etappenende; nur aus find_accommodation-Ergebnissen"
+        default=None, description="Übernachtung am Etappenende; nur aus find_accommodation- bzw. plan_hut_tour-Ergebnissen"
     )
     notes: str | None = None
 

@@ -139,15 +139,8 @@ def elevation_gain(points: list[list[float]], hysteresis_m: float = ELEVATION_HY
     return ascent, descent
 
 
-def split_segments(
-    geometry: list[list[float]], waypoints: list[Coordinate], duration_s: float
-) -> list[dict[str, float]]:
-    """Teilt eine Gesamtroute an den Zwischen-Wegpunkten und berechnet Werte je Teilstück."""
-    cumulative = [0.0]
-    for a, b in zip(geometry, geometry[1:]):
-        cumulative.append(cumulative[-1] + haversine_km(a[0], a[1], b[0], b[1]) * 1000)
-    total = cumulative[-1] or 1.0
-
+def cut_indices(geometry: list[list[float]], waypoints: list[Coordinate]) -> list[int]:
+    """Indizes der Geometriepunkte, die Start, Zwischen-Wegpunkten und Ziel am nächsten liegen (in Reihenfolge)."""
     cuts = [0]
     for waypoint in waypoints[1:-1]:
         start = cuts[-1]
@@ -157,7 +150,29 @@ def split_segments(
         )
         cuts.append(nearest)
     cuts.append(len(geometry) - 1)
+    return cuts
 
+
+def lowest_points(geometry: list[list[float]], waypoints: list[Coordinate]) -> list[float | None]:
+    """Tiefster Punkt (m) je Teilstück; zeigt, ob eine Etappe zwischen zwei Hütten durchs Tal führt."""
+    cuts = cut_indices(geometry, waypoints)
+    lowest: list[float | None] = []
+    for start, end in zip(cuts, cuts[1:]):
+        elevations = [p[2] for p in geometry[start : end + 1] if len(p) > 2]
+        lowest.append(min(elevations) if elevations else None)
+    return lowest
+
+
+def split_segments(
+    geometry: list[list[float]], waypoints: list[Coordinate], duration_s: float
+) -> list[dict[str, float]]:
+    """Teilt eine Gesamtroute an den Zwischen-Wegpunkten und berechnet Werte je Teilstück."""
+    cumulative = [0.0]
+    for a, b in zip(geometry, geometry[1:]):
+        cumulative.append(cumulative[-1] + haversine_km(a[0], a[1], b[0], b[1]) * 1000)
+    total = cumulative[-1] or 1.0
+
+    cuts = cut_indices(geometry, waypoints)
     segments = []
     for start, end in zip(cuts, cuts[1:]):
         distance = cumulative[end] - cumulative[start]
@@ -323,7 +338,8 @@ async def plan_route(
             Region kann ein bis zwei Minuten dauern. Passt kein Name, nennt der Fehler die Routen in der Nähe.
 
     Returns:
-        route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments;
+        route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments
+        (beim Wandern und MTB mit lowest_m, dem tiefsten Punkt der Etappe);
         mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon).
     """
     if len(waypoints) < 2:
@@ -404,6 +420,10 @@ async def plan_route(
             for s in route.segments
         ],
     }
+    if transport in (TransportMode.hiking, TransportMode.mtb) and len(result["segments"]) == len(waypoints) - 1:
+        for segment, lowest in zip(result["segments"], lowest_points(ctx.deps.routes[route_id], waypoints)):
+            if lowest is not None:
+                segment["lowest_m"] = round(lowest)
     if named_route:
         result["named_route"] = named_route
     if notes:

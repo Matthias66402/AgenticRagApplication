@@ -45,6 +45,8 @@ OUTPUT_NAMES = {
 }
 # Pflichtsuchen vor jedem neuen Plan (Region + Ausrüstung/Sicherheit, siehe INSTRUCTIONS)
 MIN_KNOWLEDGE_SEARCHES = 2
+# (Tool, Ergebnisliste) mit Unterkünften, die der Plan übernehmen darf
+ACCOMMODATION_RESULTS = [("find_accommodation", "results"), ("plan_hut_tour", "huts"), ("plan_hut_tour", "other_huts")]
 
 
 @dataclass
@@ -109,9 +111,10 @@ def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage]
         if output.duration_days > 1:
             found = {
                 entry["name"]
-                for result in tool_returns(messages, "find_accommodation")
+                for tool_name, key in ACCOMMODATION_RESULTS
+                for result in tool_returns(messages, tool_name)
                 if isinstance(result, dict)
-                for entry in result.get("results", [])
+                for entry in result.get(key, [])
             }
             stays = [s.accommodation for s in output.stages[:-1]]
             checks["accommodation_from_tool"] = all(a is not None and a.name in found for a in stays)

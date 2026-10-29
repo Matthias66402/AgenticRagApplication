@@ -23,6 +23,7 @@ export const TOOL_LABELS: Record<string, { icon: string; label: string }> = {
   estimate_hiking_time: { icon: "⏱️", label: "Gehzeit" },
   get_weather: { icon: "🌦️", label: "Wetter" },
   find_accommodation: { icon: "🏕️", label: "Unterkünfte" },
+  plan_hut_tour: { icon: "🛖", label: "Hüttentour" },
   search_knowledge: { icon: "📚", label: "Wissensbasis" },
   sun_times: { icon: "🌅", label: "Sonnenzeiten" },
   find_train_connections: { icon: "🚆", label: "Bahnverbindung" },
