@@ -18,6 +18,7 @@ from sqlalchemy import text  # noqa: E402
 from app.auth.security import hash_password  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
+from app.agent.research import research_agent  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User, UserRole  # noqa: E402
 from app.rag.embeddings import get_embedder  # noqa: E402
@@ -49,6 +50,13 @@ def fake_embeddings() -> Iterator[None]:
 def keep_all_hits() -> Iterator[None]:
     """Relevanzprüfung ohne LLM: keine Bewertungen, also bleiben alle Treffer erhalten."""
     with get_relevance_agent().override(model=TestModel(custom_output_args={"judgements": []})):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def fake_research() -> Iterator[None]:
+    """Recherche-Agent ohne LLM: TestModel ruft search_knowledge einmal auf und gibt eine generierte Zusammenfassung aus."""
+    with research_agent.override(model=TestModel()):
         yield
 
 

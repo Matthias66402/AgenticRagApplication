@@ -7,6 +7,8 @@ function describeArgs(call: ToolCall): string {
   switch (call.tool) {
     case "geocode":
       return String(a.place_name ?? "");
+    case "research_knowledge":
+      return [a.region, a.extra_topic].filter(Boolean).join(", ");
     case "search_knowledge":
       return `„${a.query}“`;
     case "find_accommodation":

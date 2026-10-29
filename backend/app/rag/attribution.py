@@ -2,6 +2,8 @@
 
 Wird deterministisch aus dem Agent-Verlauf bestimmt, nicht aus den Freitext-`sources` des LLM: Jedes
 Dokument mit Lizenz-Kopfzeile (z. B. Wikivoyage, CC BY-SA), das `search_knowledge` geliefert hat, wird genannt.
+Der Planer erhält die Treffer über den Recherche-Agenten (`research_knowledge` mit den Titeln in `documents`);
+ältere Verläufe enthalten noch eigene `search_knowledge`-Aufrufe des Planers.
 """
 
 from typing import Any
@@ -13,19 +15,25 @@ from app.models import Chunk, Document
 from app.rag.wikivoyage import parse_attribution
 
 KNOWLEDGE_TOOL = "search_knowledge"
+RESEARCH_TOOL = "research_knowledge"
 
 
 def retrieved_documents(history: list[dict[str, Any]]) -> list[str]:
-    """Titel der Dokumente aus allen search_knowledge-Ergebnissen, in Reihenfolge des ersten Auftretens."""
+    """Titel der Dokumente aus allen Ergebnissen von search_knowledge und research_knowledge, in Reihenfolge des
+    ersten Auftretens."""
     titles: dict[str, None] = {}
     for message in history:
         for part in message.get("parts", []):
-            if part.get("part_kind") != "tool-return" or part.get("tool_name") != KNOWLEDGE_TOOL:
+            if part.get("part_kind") != "tool-return":
                 continue
             content = part.get("content")
-            for hit in content if isinstance(content, list) else []:
-                if isinstance(hit, dict) and hit.get("document"):
-                    titles.setdefault(hit["document"], None)
+            if part.get("tool_name") == KNOWLEDGE_TOOL:
+                for hit in content if isinstance(content, list) else []:
+                    if isinstance(hit, dict) and hit.get("document"):
+                        titles.setdefault(hit["document"], None)
+            elif part.get("tool_name") == RESEARCH_TOOL and isinstance(content, dict):
+                for title in content.get("documents", []):
+                    titles.setdefault(title, None)
     return list(titles)
 
 

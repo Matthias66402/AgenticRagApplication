@@ -6,21 +6,18 @@ from pydantic_ai import (
     Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, ToolReturnPart,
     UserPromptPart,
 )  # fmt: skip
-from pydantic_ai.models import Model
-from pydantic_ai.profiles.openai import openai_model_profile
-from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import (
     MAX_STAGE_KM, AccessRoute, AccommodationType, AdventurePlan, ClarificationQuestion, Journey, TextAnswer,
     TrainTripPlan, TransportMode,
 )  # fmt: skip
-from app.agent.rate_limit import RateLimitedModel
+from app.agent.models import build_model, model_settings
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.common import haversine_km
 from app.agent.tools.huts import MIN_HUT_TOUR_KM, plan_hut_tour
-from app.agent.tools.knowledge import search_knowledge
+from app.agent.tools.research import research_knowledge
 from app.agent.tools.routing import estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
 from app.agent.tools.transit import find_train_connections
@@ -48,30 +45,6 @@ NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode
 
 # Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
 SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
-
-# Ausgaben im strict-Modus: Ohne Constrained Decoding hängt gpt-5-mini gelegentlich zehntausende Leerzeichen an
-# die JSON-Argumente an und braucht dafür Minuten. Das Tokenlimit fängt solche Ausreißer zusätzlich ab
-# (ein normaler Plan inkl. Reasoning braucht 2.000-5.000 Tokens).
-MAX_OUTPUT_TOKENS = 12_000
-
-
-def model_settings(model: str, reasoning_effort: str = "") -> ModelSettings:
-    settings: ModelSettings = {"max_tokens": MAX_OUTPUT_TOKENS}
-    provider, _, name = model.partition(":")
-    # Ohne angeforderte Zusammenfassung liefern OpenAI-Reasoning-Modelle leere Thinking-Teile; mit ihr ist im Tracing
-    # nachvollziehbar, warum der Agent ein Tool aufruft. Nicht-Reasoning-Modelle lehnen beide Parameter ab.
-    if provider.startswith("openai") and openai_model_profile(name).get("openai_supports_reasoning"):
-        settings["openai_reasoning_summary"] = "detailed"  # type: ignore[typeddict-unknown-key]
-        if reasoning_effort:
-            settings["openai_reasoning_effort"] = reasoning_effort  # type: ignore[typeddict-unknown-key]
-    return settings
-
-
-def build_model(model: str, requests_per_minute: int = 0) -> Model | str:
-    """Mit Limit gedrosselt (siehe app.agent.rate_limit); ohne Limit als Name, den PydanticAI erst bei Bedarf
-    auflöst (z. B. in Tests ohne API-Key)."""
-    return RateLimitedModel(model, requests_per_minute) if requests_per_minute > 0 else model
-
 
 INSTRUCTIONS = """\
 Du bist ein erfahrener Outdoor-Tourenplaner für Deutschland, Österreich, die Schweiz und das übrige Europa.
@@ -142,21 +115,20 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
    mit den Hütten als Wegpunkten auf. `lowest_m` je Etappe zeigt, wie tief sie absteigt; Abstiege ins Tal und
    Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen.
 4. `get_weather` für Ort und Zeitraum.
-5. `search_knowledge` mit kurzen Suchen zu je einem Thema statt einer Sammelanfrage. Vor jedem neuen Plan
-   sind diese beiden Suchen Pflicht:
-   a) Region bzw. Route mit Ortsnamen, z. B. "Radrouten rund um Oldenburg" oder "Wandern im Harz",
-   b) Ausrüstung und Sicherheit für die Fortbewegungsart, z. B. "Ausrüstung Radtour" oder "Ausrüstung
-      Tageswanderung". Daraus stammen `packing_tips` und `safety_notes`.
-   Höchstens eine weitere Suche, z. B. Fahrradmitnahme (Schritt 7), Hüttenregeln oder Wildcampen im jeweiligen
-   Land; sie ersetzt keine der Pflichtsuchen. Passt der Nutzer nur einen bestehenden Plan an, entfallen Suchen,
-   deren Ergebnisse schon im Verlauf stehen. Hinweise zur Region gehören auch in die Etappen-Notizen.
+5. `research_knowledge` einmal vor jedem neuen Plan: Ein Recherche-Agent durchsucht die Wissensbasis zu Region
+   bzw. Route, Ausrüstung und Sicherheit für die Fortbewegungsart sowie zur Übernachtungsart und fasst die Treffer
+   zusammen. `region` mit Ortsnamen bzw. Routenname, z. B. "Oldenburg" oder "Nordseeküsten-Radweg". Höchstens ein
+   `extra_topic`, z. B. Fahrradmitnahme in der Bahn (Schritt 7) oder Wildcampen im jeweiligen Land.
+   `packing_tips` und `safety_notes` stammen aus dem Ergebnis, Hinweise zur Region gehören auch in die
+   Etappen-Notizen. Passt der Nutzer nur einen bestehenden Plan an, entfällt die Recherche, wenn ihr Ergebnis
+   schon im Verlauf steht.
 6. Bei Wanderungen `estimate_hiking_time` je Etappe; bei langen Etappen `sun_times`.
 7. Möchte der Nutzer mit Bahn bzw. öffentlichen Verkehrsmitteln an- oder abreisen, `find_train_connections`:
    Anreise vom Wohn- bzw. Abfahrtsort zum Tourstart am ersten Tag (`arrive_by`, Ankunft mit genug Zeit für die
    erste Etappe), Rückreise vom Tourziel am letzten Tag (Abfahrt nach dem geschätzten Etappenende). Übernimm je eine
    passende Verbindung in `outbound_journey` bzw. `return_journey` und berücksichtige die Ankunftszeit bei der
-   ersten Etappe. Fehlt der Abfahrtsort, frage danach. Bei Rad- und MTB-Touren mit `search_knowledge` nach Regeln
-   zur Fahrradmitnahme suchen (die weitere Suche aus Schritt 5) und darauf hinweisen.
+   ersten Etappe. Fehlt der Abfahrtsort, frage danach. Bei Rad- und MTB-Touren die Regeln zur Fahrradmitnahme
+   als `extra_topic` in Schritt 5 recherchieren und darauf hinweisen.
 
 ## Regeln
 - Verwende nur Fakten aus Tool-Ergebnissen. Unterkünfte ausschließlich aus `find_accommodation` bzw.
@@ -400,7 +372,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             Tool(get_weather),
             Tool(find_accommodation),
             Tool(plan_hut_tour),
-            Tool(search_knowledge),
+            Tool(research_knowledge),
             Tool(sun_times),
             Tool(find_train_connections),
         ],
@@ -433,9 +405,10 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             return check_train_trip(ctx, output)
         if not isinstance(output, AdventurePlan):
             return output
-        if not used_tool(ctx, "search_knowledge"):
+        # search_knowledge: frühere Abenteuer, in denen der Planer die Wissensbasis noch selbst durchsucht hat
+        if not used_tool(ctx, "research_knowledge") and not used_tool(ctx, "search_knowledge"):
             raise ModelRetry(
-                "Bevor Du den Plan ausgibst, durchsuche mit `search_knowledge` die Wissensbasis nach Regeln und Tipps "
+                "Bevor Du den Plan ausgibst, recherchiere mit `research_knowledge` in der Wissensbasis Regeln und Tipps "
                 "zu Fortbewegungsart, Übernachtung und Region und berücksichtige sie im Plan."
             )
         if output.start_date < ctx.deps.today:

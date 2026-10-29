@@ -42,8 +42,8 @@ export function AdminDocumentsPage() {
     <div className="page">
       <h1>Wissensbasis</h1>
       <p className="muted">
-        Dokumente werden in Abschnitte zerlegt, eingebettet und in pgvector gespeichert. Der Agent durchsucht sie mit dem
-        Tool <code>search_knowledge</code>. Gleicher Dateiname ersetzt die vorhandene Version.
+        Dokumente werden in Abschnitte zerlegt, eingebettet und in pgvector gespeichert. Der Recherche-Agent durchsucht sie mit dem
+        Tool <code>search_knowledge</code> im Auftrag des Planers. Gleicher Dateiname ersetzt die vorhandene Version.
       </p>
       {error && <p className="error">{error}</p>}
       <form className="card row wrap" onSubmit={upload}>

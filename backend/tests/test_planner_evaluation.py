@@ -28,13 +28,16 @@ def test_plan_checks() -> None:
     data["stages"][0]["accommodation"] = {"name": "Meilerhütte", "type": "hut", "lat": 47.4, "lon": 11.1}
     plan = AdventurePlan.model_validate(data)
     found = ModelRequest(parts=[ToolReturnPart("find_accommodation", {"results": [{"name": "Meilerhütte"}]})])
-    messages = [call("search_knowledge"), call("search_knowledge"), found]
+    research = ModelRequest(parts=[ToolReturnPart("research_knowledge", {"queries": ["Harz", "Ausrüstung"]})])
+    messages = [call("research_knowledge"), found, research]
 
     checks = check_output(case, plan, messages, deps({"r-1": []}))
 
     assert checks.pop("packing_and_safety") is False  # keine safety_notes
     assert all(checks.values()), checks
-    assert check_output(case, plan, messages[1:], deps({"r-1": []}))["knowledge_searches"] is False
+    # Nur eine Suche des Recherche-Agenten statt der beiden Pflichtsuchen
+    single = ModelRequest(parts=[ToolReturnPart("research_knowledge", {"queries": ["Harz"]})])
+    assert check_output(case, plan, [found, single], deps({"r-1": []}))["knowledge_searches"] is False
 
 
 def test_other_outputs() -> None:

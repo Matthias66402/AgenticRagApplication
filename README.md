@@ -1,6 +1,6 @@
 # AgenticRAG-Abenteuerplaner
 
-Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage Hüttenwanderung von Garmisch nach Innsbruck ab Freitag, Anreise mit der Bahn aus München“. Ein Agent entscheidet dann selbst, welche Tools er aufruft: Wissensbasis (RAG), Geocoding, Routing, Wetter, Unterkunftssuche, Hüttentouren mit Hütten auf dem Weg, Gehzeit, Sonnenzeiten und Bahnverbindungen. Fehlen Angaben, fragt er nach. Den fertigen Plan prüft er auf Plausibilität.
+Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage Hüttenwanderung von Garmisch nach Innsbruck ab Freitag, Anreise mit der Bahn aus München“. Ein Planer-Agent entscheidet dann selbst, welche Tools er aufruft: Wissensbasis (RAG, über einen eigenen Recherche-Agenten), Geocoding, Routing, Wetter, Unterkunftssuche, Hüttentouren mit Hütten auf dem Weg, Gehzeit, Sonnenzeiten und Bahnverbindungen. Fehlen Angaben, fragt er nach. Den fertigen Plan prüft er auf Plausibilität.
 
 **Funktionen**
 
@@ -73,7 +73,9 @@ Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-
 
 ## Wie die Wissensbasis durchsucht wird
 
-`backend/app/rag/` – das Tool `search_knowledge` durchläuft vier Schritte:
+Der Planer delegiert die Suche an einen **Recherche-Agenten** (`backend/app/agent/research.py`, Tool `research_knowledge`). Dieser sucht zu Region, Ausrüstung und Sicherheit, Übernachtung und einem Zusatzthema und gibt dem Planer eine kurze Zusammenfassung samt Dokumenttiteln zurück, statt aller Fundstellen. Warum nur die Recherche ein eigener Agent ist: [docs/agentic-rag.md](docs/agentic-rag.md#der-recherche-agent-agent-als-tool).
+
+`backend/app/rag/` – jede seiner Suchen mit `search_knowledge` durchläuft vier Schritte:
 
 1. **Chunking beim Einlesen** (`ingest.py`): Dokumente werden an Markdown-Überschriften geteilt, Abschnitte haben höchstens 1.200 Zeichen. Jeder Abschnitt trägt seinen Überschriftenpfad und bettet ihn mit ein.
 2. **Vektorsuche** (`retrieve.py`): Die Suchanfrage wird eingebettet. pgvector liefert die 4 ähnlichsten Abschnitte (Kosinus-Ähnlichkeit).
@@ -143,7 +145,7 @@ docker compose exec backend python -m app.evaluation.planner --case bahnauskunft
 docker compose exec -e LLM_REASONING_EFFORT=low backend python -m app.evaluation.planner --label low --output /app/low.json
 ```
 
-Gemessen werden Laufzeit (davon Wartezeit auf Tools), Modellaufrufe, Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation` bzw. `plan_hut_tour`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt, und bei Fernweg-Touren eine Route ohne Teilstücke abseits des Fernwegs. Ein Durchlauf kostet etwa 0,10-0,15 $ und dauert mit `LLM_REQUESTS_PER_MINUTE=5` rund 10-15 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
+Gemessen werden Laufzeit (davon Wartezeit auf Tools), Modellaufrufe, Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen des Recherche-Agenten in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation` bzw. `plan_hut_tour`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt, und bei Fernweg-Touren eine Route ohne Teilstücke abseits des Fernwegs. Ein Durchlauf kostet etwa 0,10-0,15 $ und dauert mit `LLM_REQUESTS_PER_MINUTE=5` rund 10-15 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
 
 Stand 23.10.2026 (gpt-5-mini, Standard-Reasoning; je Fall 2 bzw. 4 Läufe, Mittel je Anfrage). Vorher: Anweisungen ohne Hinweis auf gemeinsame Tool-Aufrufe. Nachher: mit diesem Hinweis und gedrosselt auf 5 Anfragen pro Minute.
 
@@ -172,7 +174,7 @@ Beide Downloads gibt es als Schaltflächen in der Planansicht.
 `backend/app/observability.py` – optional. Mit `LANGFUSE_PUBLIC_KEY` und `LANGFUSE_SECRET_KEY` in der `.env` (Projekt anlegen auf [cloud.langfuse.com](https://cloud.langfuse.com), Keys unter *Settings → API Keys*) und einem Neustart des Backends (`docker compose up -d backend`) landet jede Chat-Nachricht als Trace in Langfuse:
 
 - **Ein Trace je Nachricht** mit der Wurzel `chat-turn`: Eingabe ist die Nutzernachricht, Ausgabe die Antwort bzw. der Plantext, Metadaten enthalten das Ergebnis (`plan`, `question`, `answer`, `error`) und die Zahl der Tool-Aufrufe. Fehlgeschlagene Läufe sind als `ERROR` markiert.
-- **Darunter:** der Agent `adventure-planner` mit jedem Modellaufruf als Generation (Modell, Tokens, Kosten, Reasoning-Zusammenfassung), die Tool-Aufrufe, die Wissenssuche `retrieve-knowledge` (Anfrage, Treffer mit Ähnlichkeit, Embedding) und die Relevanzprüfung `relevance-grader`.
+- **Darunter:** der Agent `adventure-planner` mit jedem Modellaufruf als Generation (Modell, Tokens, Kosten, Reasoning-Zusammenfassung), die Tool-Aufrufe, darunter der Recherche-Agent `knowledge-researcher` mit der Wissenssuche `retrieve-knowledge` (Anfrage, Treffer mit Ähnlichkeit, Embedding) und die Relevanzprüfung `relevance-grader`.
 - **Sessions und Nutzer:** Alle Nachrichten eines Abenteuers bilden die Session `adventure-<id>`; als Nutzer wird die numerische ID übertragen, nicht die E-Mail.
 - **Maskierte Wohnadresse:** Straße und Hausnummer aus dem Profil werden vor dem Export durch `[Adresse]` bzw. `[Straße]` ersetzt (auch in Tool-Argumenten, Geocoding-Ergebnissen und Reasoning). Ort und Koordinaten bleiben sichtbar, abgekürzte Schreibweisen wie „Nelkenstr.“ werden nicht erkannt.
 
@@ -191,8 +193,9 @@ Wer eine Einstellung in `config.py` ergänzt, trägt sie also auch in `.env.exam
 | Variable | Bedeutung |
 |---|---|
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
-| `LLM_REQUESTS_PER_MINUTE` | Anfragelimit des API-Keys für den Planer; er sendet höchstens so viele Modellaufrufe je Minute und wartet sonst. 0 = nicht drosseln. |
+| `LLM_REQUESTS_PER_MINUTE` | Anfragelimit des API-Keys je Modell; Planer, Recherche-Agent und Relevanzprüfung senden höchstens so viele Modellaufrufe je Minute und Modell und warten sonst. 0 = nicht drosseln. |
 | `LLM_REASONING_EFFORT` | Optional: Reasoning-Aufwand des Planers bei Reasoning-Modellen (`minimal`, `low`, `medium`, `high`). Leer = Standard des Modells; `low` spart Tokens, verschlechterte aber die Planung (siehe „Planer messen“). |
+| `RESEARCH_MODEL` | Modell des Recherche-Agenten, an den der Planer die Suche in der Wissensbasis delegiert (Standard `openai:gpt-4.1-mini`). |
 | `RELEVANCE_MODEL` | Kleines Modell, das die Treffer von `search_knowledge` vor der Weitergabe an den Agenten auf Relevanz prüft (Standard `openai:gpt-4.1-mini`, ein Aufruf je Suche). Leer = nur Mindestähnlichkeit. Bei einem Fehler gehen die Treffer ungeprüft weiter. |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | Bei einem Wechsel: `EMBEDDING_DIM` anpassen, Migration für die Vektorspalte erzeugen, `python -m app.seed --force` |
 | `ORS_API_KEY` | Optional, kostenlos unter openrouteservice.org (Free-Tarif: 200 Routen/Tag). Routing-Kette: ORS → BRouter (ohne Key) → weitere ORS-Profile → Luftlinien-Schätzung. Ohne Key wird direkt BRouter genutzt. |
@@ -209,9 +212,9 @@ Hinweis zu OpenAI: Ein Projekt mit niedrigem Ratenlimit (z. B. 5 Anfragen pro Mi
 
 ```
 backend/app/
-  agent/       planner.py (Agent), runner.py (Event-Streaming), plan_schema.py, deps.py,
-               rate_limit.py (Drosselung auf das Anfragelimit)
-    tools/     geocode, routing (+ Gehzeit), weather, accommodation, knowledge, sun, transit
+  agent/       planner.py (Planer-Agent), research.py (Recherche-Agent), runner.py (Event-Streaming),
+               plan_schema.py, deps.py, models.py, rate_limit.py (Drosselung auf das Anfragelimit)
+    tools/     geocode, routing (+ Gehzeit), weather, accommodation, huts, knowledge, research, sun, transit
   rag/         ingest.py (Chunking), embeddings.py, retrieve.py (pgvector-Suche), relevance.py (Relevanzprüfung),
                attribution.py + wikivoyage.py (Quellenangaben)
   evaluation/  retrieval.py + retrieval_cases.json (Messung der Suchqualität),

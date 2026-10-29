@@ -34,7 +34,7 @@ Der Abruf passiert genau einmal und immer vor dem LLM-Aufruf, und gesucht wird m
 - **wonach**: Die Suchanfragen formuliert er selbst, oft mehrere gezielte,
 - **ob das Ergebnis reicht**, oder ob er nachfragen, umplanen oder sich korrigieren muss.
 
-Die Wissensbasis ist dabei **ein Tool unter mehreren** (`search_knowledge`). Gerade das Zusammenspiel macht den Ansatz aus: Fakten aus Dokumenten (Regeln, Tipps) werden mit Live-Daten (Route, Wetter, Unterkünfte) zu einem strukturierten Plan kombiniert.
+Die Wissensbasis ist dabei **ein Tool unter mehreren** (`research_knowledge`, siehe [Der Recherche-Agent](#der-recherche-agent-agent-als-tool)). Gerade das Zusammenspiel macht den Ansatz aus: Fakten aus Dokumenten (Regeln, Tipps) werden mit Live-Daten (Route, Wetter, Unterkünfte) zu einem strukturierten Plan kombiniert.
 
 ---
 
@@ -58,7 +58,8 @@ run_planner()                                 agent/runner.py
 │   → find_accommodation(..., camping) je Etappenende           │
 │   → plan_route mit Campingplätzen als Wegpunkte               │
 │   → get_weather(...)                                          │
-│   → search_knowledge("Wildcampen Deutschland Regeln")   ← RAG │
+│   → research_knowledge("Ulm", cycling, camping)       ← RAG │
+│       └ Recherche-Agent: search_knowledge(...) je Thema       │
 │   → find_train_connections(...)   falls An-/Abreise per Bahn  │
 │   → final_plan(AdventurePlan) | ask_user(Frage)               │
 │     | answer_user(Text, z. B. reine Bahnauskunft)             │
@@ -94,7 +95,7 @@ Alle Pfade beziehen sich auf `backend/app/`.
 
 Ein Plan wird nur angenommen, wenn er mehrere Prüfungen besteht. Sonst wirft der Validator `ModelRetry` mit einer konkreten Begründung. PydanticAI schickt diese ans LLM zurück, das den Plan überarbeitet (bis zu `retries=3`):
 
-- Vor jedem Plan muss **mindestens eine Suche in der Wissensbasis** stattgefunden haben. Das garantiert, dass RAG tatsächlich genutzt wird.
+- Vor jedem Plan muss **eine Recherche in der Wissensbasis** (`research_knowledge`) stattgefunden haben. Das garantiert, dass RAG tatsächlich genutzt wird. Ältere Abenteuer mit eigenen `search_knowledge`-Aufrufen des Planers gelten ebenfalls.
 - Das **Startdatum** darf nicht in der Vergangenheit liegen.
 - Keine Etappe darf länger sein als das Limit der Fortbewegungsart (`MAX_STAGE_KM` in `plan_schema.py`, z. B. Wandern 35 km, Rad 160 km).
 - Eine mehrtägige **Hüttenwanderung** mit verschiedenem Start und Ziel muss über `plan_hut_tour` geplant sein (`check_hut_tour`).
@@ -103,11 +104,25 @@ Ein Plan wird nur angenommen, wenn er mehrere Prüfungen besteht. Sonst wirft de
 
 Das Modell steht in der `.env` (`LLM_MODEL`, z. B. `openai:gpt-5-mini`). Da PydanticAI anbieter-agnostisch ist, lässt sich der Anbieter ohne Codeänderung wechseln, z. B. `groq:openai/gpt-oss-120b`. Voraussetzung ist, dass das Paket-Extra installiert und der API-Key gesetzt ist.
 
-**Ratenlimit:** Der genutzte API-Key erlaubt nur 5 Anfragen pro Minute. Beim Streaming meldet OpenAI ein überschrittenes Limit nicht als HTTP 429, sondern als Fehler im schon geöffneten Stream; weder das SDK noch ein HTTP-Transport können die Anfrage dann wiederholen. Mit `LLM_REQUESTS_PER_MINUTE` wickelt `build_model()` das Modell deshalb in `RateLimitedModel` (`agent/rate_limit.py`): Es sendet höchstens so viele Anfragen in jedem 60-Sekunden-Fenster und wartet sonst vor dem Senden. Kommt trotzdem ein 429 (z. B. weil eine Evaluation parallel dasselbe Limit nutzt), zeigt der Chat einen Hinweis, es in einer Minute erneut zu versuchen.
+**Ratenlimit:** Der genutzte API-Key erlaubt nur 5 Anfragen pro Minute. Beim Streaming meldet OpenAI ein überschrittenes Limit nicht als HTTP 429, sondern als Fehler im schon geöffneten Stream; weder das SDK noch ein HTTP-Transport können die Anfrage dann wiederholen. Mit `LLM_REQUESTS_PER_MINUTE` wickelt `build_model()` (`agent/models.py`) das Modell deshalb in `RateLimitedModel` (`agent/rate_limit.py`): Es sendet höchstens so viele Anfragen in jedem 60-Sekunden-Fenster und wartet sonst vor dem Senden. OpenAI zählt das Limit je Modell; Agenten mit demselben Modell (Recherche-Agent und Relevanzprüfung, beide `gpt-4.1-mini`) teilen sich deshalb ein Budget (`shared_budget()`). Kommt trotzdem ein 429 (z. B. weil eine Evaluation parallel dasselbe Limit nutzt), zeigt der Chat einen Hinweis, es in einer Minute erneut zu versuchen.
 
 Weil jeder Modellaufruf zählt, bitten die Anweisungen das Modell, voneinander unabhängige Tools im selben Schritt aufzurufen; PydanticAI führt sie parallel aus. Das halbierte die Modellaufrufe einer dreitägigen Hüttenwanderung (Messwerte in der README unter „Planer messen“).
 
 **Reasoning-Aufwand:** `LLM_REASONING_EFFORT` setzt bei Reasoning-Modellen `openai_reasoning_effort`. Mit `low` sinken die Ausgabe-Tokens auf etwa ein Viertel, der Planer fragte bei einer Radtour mit Zug-Anreise aber nach Uhrzeiten, statt sie selbst zu wählen. Daher bleibt es beim Standard des Modells.
+
+### Der Recherche-Agent (Agent als Tool)
+
+**Dateien:** [`backend/app/agent/research.py`](../backend/app/agent/research.py), [`backend/app/agent/tools/research.py`](../backend/app/agent/tools/research.py)
+
+Die Suche in der Wissensbasis hat der Planer an einen zweiten Agenten abgegeben. Der Planer ruft das Tool `research_knowledge(region, transport, accommodation_type, extra_topic)` auf. Darin läuft der Agent `knowledge-researcher` (`RESEARCH_MODEL`, Standard `gpt-4.1-mini`) mit eigener Schleife und eigenem Tool `search_knowledge`:
+
+1. Er stellt kurze Suchen zu je einem Thema (Region bzw. Route, Ausrüstung und Sicherheit, Übernachtung, Zusatzthema), parallel in einer Runde, und formuliert eine Suche ohne Treffer höchstens einmal um.
+2. Er fasst die geprüften Fundstellen als `ResearchBrief` zusammen: `region_notes`, `rules`, `packing_tips`, `safety_notes`.
+3. Das Tool ergänzt deterministisch aus dem Verlauf des Recherche-Agenten die gestellten Suchen (`queries`) und die Titel der gefundenen Dokumente (`documents`). Daraus entstehen die Quellenangaben (`rag/attribution.py`) und die Prüfung der Evaluation, nicht aus Angaben des LLM.
+
+Der Planer sieht nur Auftrag und Zusammenfassung, nicht die einzelnen Fundstellen. Sein Kontext bleibt kleiner, denn die Fundstellen lagen vorher in jedem weiteren Modellaufruf des Planers erneut im Verlauf. `usage=ctx.usage` zählt die Anfragen des Recherche-Agenten zum Limit des Planer-Laufs (`USAGE_LIMITS`). Im Tracing hängt der Span `knowledge-researcher` unter dem Tool-Aufruf des Planers.
+
+**Warum nur die Recherche:** Sie ist eine abgeschlossene Teilaufgabe mit klarer Schnittstelle. Route, Etappenorte und Unterkünfte hängen dagegen eng zusammen (deshalb plant `plan_hut_tour` sie gemeinsam). Getrennte Agenten müssten sich ständig abstimmen. Bei 5 Anfragen pro Minute kostet jeder weitere Agent spürbar Zeit. Die Prüfungen bleiben deterministischer Code statt eines Kritiker-Agenten.
 
 **Länge der Anweisungen:** Eine um ein Viertel gekürzte Fassung brachte kaum Ersparnis (die Anweisungen kommen fast immer aus dem Prompt-Cache), verschlechterte aber dieselbe Anfrage: Das Modell behandelte sie als reine Bahnauskunft. Die Abgrenzung zwischen Bahnauskunft und Tour ist für gpt-5-mini empfindlich, Änderungen daran sollten mit `python -m app.evaluation.planner` geprüft werden.
 
@@ -137,7 +152,7 @@ Jedes Tool ist eine normale Python-Funktion. PydanticAI erzeugt aus **Docstring 
 
 | Tool | Datei | Quelle | Wann typischerweise |
 |---|---|---|---|
-| `search_knowledge` | `knowledge.py` | **eigene Wissensbasis (RAG)**: Vektorsuche, Mindestähnlichkeit, Relevanzprüfung durch ein kleines LLM (`rag/relevance.py`) | Regeln, Tipps, Ausrüstung, Sicherheit |
+| `research_knowledge` | `research.py` | **Recherche-Agent** mit dem Tool `search_knowledge` (`knowledge.py`) auf der eigenen Wissensbasis (RAG): Vektorsuche, Mindestähnlichkeit, Relevanzprüfung durch ein kleines LLM (`rag/relevance.py`) | Regeln, Tipps, Ausrüstung, Sicherheit |
 | `geocode` | `geocode.py` | Nominatim (OSM) | Start, Ziel, Etappenorte |
 | `plan_route` | `routing.py`, `named_route.py` | OpenRouteService → BRouter → Schätzung; mit `route_name` Verlauf des Fernwegs aus OSM (Overpass) | Strecke, Höhenmeter, Werte je Etappe |
 | `find_accommodation` | `accommodation.py` | Nominatim-Kategoriesuche → Overpass | Hütten, Camping, Hotels nahe Etappenenden |
@@ -182,7 +197,7 @@ Tools werfen bei Problemen keine Exceptions, sondern geben einen lesbaren Fehler
 
 ### Als Tool: `agent/tools/knowledge.py`
 
-`search_knowledge(query)` verbindet RAG und Agent. Entscheidend: **Den Suchtext formuliert das LLM**, passend zur aktuellen Planungssituation, z. B. „Wildcampen Österreich Biwak Regeln“ statt der Originalfrage des Nutzers. Das LLM kann auch mehrmals mit unterschiedlichen Anfragen suchen.
+`search_knowledge(query)` verbindet RAG und Agent. Entscheidend: **Den Suchtext formuliert das LLM**, passend zur aktuellen Planungssituation, z. B. „Wildcampen Österreich Biwak Regeln“ statt der Originalfrage des Nutzers. Das Tool gehört dem Recherche-Agenten. Er sucht mehrmals mit unterschiedlichen Anfragen und gibt dem Planer eine Zusammenfassung (siehe [Der Recherche-Agent](#der-recherche-agent-agent-als-tool)).
 
 ### Quellen der Wissensbasis
 
@@ -232,7 +247,7 @@ Der komplette PydanticAI-Nachrichtenverlauf wird als `agent_history` am Abenteue
 | `plan_hut_tour` | Sucht der Agent Hütten rund um Talorte, liegen sie oft abseits: als Sackgasse über dem Tal, quer zur Laufrichtung oder als Alm ohne Übernachtung, und die Route verbindet sie durchs Tal. Das Tool sucht deshalb alle Hütten im Abstand von höchstens 8-10 km zur Luftlinie Start–Ziel, auch rund um Start und Ziel (Kreissuchen, weil Nominatim je Suche höchstens 40 Treffer liefert). Zwischen nahen Talorten liegen oft keine Hütten auf der Achse: Bei Garmisch–Mittenwald liegt die Meilerhütte 7 km seitlich, die Brunnsteinhütte oberhalb des Ziels und fasst Einträge unter 400 m Abstand zusammen. Eine dynamische Programmierung wählt je Nacht eine Hütte in Laufrichtung (nur zum Ziel darf es zurückgehen), sodass die geschätzten Etappen (Luftlinie × 1,4) möglichst gleich lang, mindestens etwa 10 km und höchstens 22 km lang sind. Hütten ohne Hinweis auf Übernachtung (Bettenzahl, Alpenverein als Betreiber oder Hüttenname, aber keine Alm, kein Winterraum) kosten einen hohen Aufschlag. Danach wird die Kette geroutet. Ist eine Etappe länger als 26 km, mehr als 2,2-mal so lang wie die Luftlinie oder steigt sie mehr als 800 m unter beide Enden ab (z. B. Wank-Haus → Meilerhütte über Garmisch), wird genau diese Verbindung gesperrt und die Kette neu gewählt; von bis zu 3 Versuchen gewinnt der mit den wenigsten solchen Etappen. `plan_route` meldet beim Wandern je Etappe den tiefsten Punkt (`lowest_m`); Etappen, die mehr als 500 m unter beide Hütten absteigen, nennt das Ergebnis als Talabstieg. |
 | `geocode` | Drosselung auf 1 Anfrage/s (Nominatim-Richtlinie), Cache |
 | `find_train_connections` | Fehler oder fehlende Verbindungen als Tool-Ergebnis; der Agent plant ohne konkrete An- und Abreise weiter. Transitous übernimmt den neuen Jahresfahrplan der DB erst um den Fahrplanwechsel (zweiter Sonntag im Dezember); bis dahin fehlen danach oft alle Züge, übrig bleiben Busketten zu ganz anderen Uhrzeiten. Liegt das Datum nach dem nächsten Fahrplanwechsel und keine Verbindung innerhalb von 3 Stunden um die Wunschzeit, gilt der Fahrplan als noch nicht verfügbar: keine Verbindungen, stattdessen ein vorausgefüllter Link zur Verbindungssuche auf bahn.de (Orte als Koordinaten, Datum, Ab- bzw. Ankunftszeit). Das Backend hängt ihn selbst an, unter `answer_user` bzw. im Plan als `timetable_links` (Planansicht und PDF unter „An- und Abreise“); das LLM muss keine URL abschreiben. Die Links stammen aus allen Bahnabfragen des Verlaufs mit Reisedatum vom Tag vor dem Tourstart bis zum Tag nach der letzten Etappe, denn oft fragt der Agent die Bahn in einer Nachricht ab und gibt den Plan erst später aus; nach einer reinen Antwort mit neuer Bahnabfrage aktualisiert das Backend die Links des bestehenden Plans. Verbindungen in Plan und Reisekarte prüft der Validator gegen die Ergebnisse von `find_train_connections`. Passende Verbindungen nach dem Fahrplanwechsel erscheinen mit Hinweis und demselben Link zum Prüfen. Eine DB-Schnittstelle gibt es dafür nicht: Die offizielle Timetables-API kennt nur Abfahrtstafeln, inoffizielle Zugänge (db-rest) sperrt die DB. |
-| `search_knowledge` | Fehler (z. B. Embedding-Anbieter nicht erreichbar) als Tool-Ergebnis; der Agent plant ohne RAG-Inhalte weiter. Fällt die Relevanzprüfung aus, gehen die Treffer ungeprüft weiter |
+| `research_knowledge` | Fehler des Recherche-Agenten oder keine Treffer als Tool-Ergebnis; der Planer plant ohne RAG-Inhalte weiter. `search_knowledge` meldet dem Recherche-Agenten Fehler (z. B. Embedding-Anbieter nicht erreichbar) ebenso als Ergebnis. Fällt die Relevanzprüfung aus, gehen die Treffer ungeprüft weiter |
 
 ---
 
@@ -243,7 +258,8 @@ Der komplette PydanticAI-Nachrichtenverlauf wird als `agent_history` am Abenteue
 Die Agenten-Tests ersetzen das LLM durch ein **geskriptetes `FunctionModel`**. Es ruft Tools in festgelegter Reihenfolge auf und gibt bewusst fehlerhafte Pläne aus. So lässt sich die Schleife deterministisch prüfen:
 
 - Rückfrage bei fehlenden Angaben (`ask_user`)
-- Selbstkorrektur: erst Ablehnung ohne Wissenssuche, dann wegen zu langer Etappe, schließlich Annahme
+- Selbstkorrektur: erst Ablehnung ohne Recherche, dann wegen zu langer Etappe, schließlich Annahme
+- Der Recherche-Agent läuft dabei mit einem `TestModel` (`conftest.fake_research`); seine eigenen Tests stehen in `test_research.py`
 - Folgenachrichten sehen den Verlauf der vorherigen
 - Fremde Abenteuer sind nicht erreichbar
 

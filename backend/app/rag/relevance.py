@@ -12,6 +12,7 @@ from functools import lru_cache
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ToolOutput
 
+from app.agent.models import build_model
 from app.config import get_settings
 from app.rag.retrieve import RetrievedChunk
 
@@ -55,8 +56,10 @@ class GradedHits:
 @lru_cache
 def get_relevance_agent() -> Agent[None, RelevanceResult]:
     """In Tests: ``with get_relevance_agent().override(model=FunctionModel(...))``."""
+    settings = get_settings()
+    # Gleiches Modell wie der Recherche-Agent, der die Suchen auslöst: beide teilen sich das Anfragelimit
     return Agent(
-        get_settings().relevance_model or None,
+        build_model(settings.relevance_model, settings.llm_requests_per_minute) if settings.relevance_model else None,
         name="relevance-grader",  # Name des Agent-Spans im Tracing
         output_type=ToolOutput(RelevanceResult, name="bewertung", strict=True),
         instructions=INSTRUCTIONS,

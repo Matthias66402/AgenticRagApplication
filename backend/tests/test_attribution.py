@@ -60,3 +60,11 @@ def test_merge_keeps_previous_attributions() -> None:
     old = {"url": "https://a", "title": "A"}
     new = {"url": "https://b", "title": "B"}
     assert merge_attributions([old], [new, old]) == [old, new]
+
+
+def test_retrieved_documents_from_research_agent() -> None:
+    research = {"kind": "request", "parts": [
+        {"part_kind": "tool-return", "tool_name": "research_knowledge", "content": {"documents": ["Testradweg"]}},
+        {"part_kind": "tool-return", "tool_name": "research_knowledge", "content": {"error": "nichts Passendes"}},
+    ]}  # fmt: skip
+    assert retrieved_documents([research, knowledge_return("Hüttenknigge")]) == ["Testradweg", "Hüttenknigge"]

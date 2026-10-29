@@ -16,7 +16,8 @@ from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, ModelR
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
-from app.agent.planner import build_model, check_route_wish, model_settings, planner_agent
+from app.agent.models import build_model, model_settings
+from app.agent.planner import check_route_wish, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
@@ -25,6 +26,8 @@ from app.config import get_settings
 from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, add_test_route, one_trip
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
+# Auftrag an den Recherche-Agenten (in Tests per conftest.fake_research ohne LLM)
+RESEARCH = {"region": "Garmisch", "transport": "hiking"}
 
 
 def _tomorrow_same_local_time(match: re.Match[str]) -> str:
@@ -170,8 +173,8 @@ async def test_plan_with_tool_call_and_self_correction(
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     model = scripted_model(
         ("estimate_hiking_time", {"distance_km": 15, "ascent_m": 600}),
-        ("final_plan", make_plan(distance_km=15)),  # ohne RAG-Suche → Validator verlangt search_knowledge
-        ("search_knowledge", {"query": "Tageswanderung Ausrüstung"}),
+        ("final_plan", make_plan(distance_km=15)),  # ohne Recherche → Validator verlangt research_knowledge
+        ("research_knowledge", RESEARCH),
         ("final_plan", make_plan(distance_km=80)),  # unplausibel lange Etappe → erneute Korrektur
         ("final_plan", make_plan(distance_km=15)),
     )
@@ -188,7 +191,7 @@ async def test_plan_with_tool_call_and_self_correction(
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
     assert stored["status"] == "planned"
     assert stored["title"] == "Testtour"
-    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["estimate_hiking_time", "search_knowledge"]
+    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["estimate_hiking_time", "research_knowledge"]
 
 
 JOURNEY = {
@@ -233,7 +236,7 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
         "to_name": "Garmisch", "to_lat": 47.49, "to_lon": 11.09, "date": TOMORROW.isoformat(),
     }  # fmt: skip
     model = scripted_model(
-        ("search_knowledge", {"query": "Anreise Bahn"}),
+        ("research_knowledge", RESEARCH),
         ("final_plan", plan),  # Verbindung ohne Fahrplanabfrage → Validator verlangt find_train_connections
         ("find_train_connections", connection_args),
         # nicht gefundene Verbindung → Validator verlangt eine gefundene
@@ -249,7 +252,7 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
     assert events[-2]["plan"]["outbound_journey"]["legs"][0]["line"] == "RB6"
     assert events[-2]["plan"]["return_journey"] is None
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
-    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["search_knowledge", "find_train_connections"]
+    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["research_knowledge", "find_train_connections"]
 
 
 @respx.mock
@@ -282,7 +285,7 @@ async def test_plan_links_bahn_search_without_timetable(client: httpx.AsyncClien
         ("find_train_connections", outside),
         ("ask_user", {"question": "Wie lange?"}),
     )
-    await send("Einen Tag", ("search_knowledge", {"query": "Anreise Bahn"}), ("final_plan", plan))
+    await send("Einen Tag", ("research_knowledge", RESEARCH), ("final_plan", plan))
     [link] = await links()
     assert link["label"] == f"München → Garmisch · {WEEKDAYS[start.weekday()]} {start:%d.%m.%Y}, ab 06:00"
     assert link["url"].startswith("https://www.bahn.de/buchung/fahrplan/suche#")
@@ -548,7 +551,7 @@ async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient,
     steps: list[Callable[[list[ModelMessage]], Step]] = [
         lambda _: ("plan_route", {"waypoints": [START.model_dump(), END.model_dump()], "transport": "hiking"}),
         lambda _: ("ask_user", {"question": "Wann möchtest Du los?"}),
-        lambda _: ("search_knowledge", {"query": "Tageswanderung Ausrüstung"}),
+        lambda _: ("research_knowledge", RESEARCH),
         lambda messages: ("final_plan", make_plan() | {"route_ids": [route_id(messages)]}),
     ]
     calls = iter(steps)
@@ -591,7 +594,7 @@ async def test_plan_must_use_route_along_long_distance_route(
     steps: list[Callable[[list[ModelMessage]], Step]] = [
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling"}),
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling", "route_name": "Testweg"}),
-        lambda _: ("search_knowledge", {"query": "Ausrüstung Radtour"}),
+        lambda _: ("research_knowledge", RESEARCH),
         lambda messages: plan(messages, 0),  # ältere Route ohne Fernweg
         lambda messages: plan(messages, 1),
     ]

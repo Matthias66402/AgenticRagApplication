@@ -28,12 +28,14 @@ class Settings(BaseSettings):
     llm_model: str = "openai:gpt-5-mini"
     # Reasoning-Aufwand des Planers (minimal, low, medium, high); leer = Standard des Modells
     llm_reasoning_effort: str = ""
-    # Anfragelimit des API-Keys für den Planer (Anfragen pro Minute); 0 = nicht drosseln
+    # Anfragelimit des API-Keys je Modell (Anfragen pro Minute) für alle Agenten; 0 = nicht drosseln
     llm_requests_per_minute: int = 0
     embedding_model: str = "openai:text-embedding-3-small"
     embedding_dim: int = 1536
     # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit
     relevance_model: str = "openai:gpt-4.1-mini"
+    # Recherche-Agent, an den der Planer die Suche in der Wissensbasis delegiert (app.agent.research)
+    research_model: str = "openai:gpt-4.1-mini"
 
     ors_api_key: str = ""
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"

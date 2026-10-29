@@ -4,6 +4,7 @@ Manche API-Keys erlauben nur wenige Anfragen pro Minute (Projektlimit). Beim Str
 überschrittenes Limit nicht als HTTP 429, sondern als Fehler im bereits geöffneten Stream; weder das SDK noch ein
 HTTP-Transport können die Anfrage dann wiederholen. Deshalb wird vor dem Senden gewartet, statt das Limit zu reißen.
 Das gilt je Prozess: Laufen App und Evaluation gleichzeitig, teilen sie sich das Limit trotzdem.
+OpenAI zählt das Limit je Modell; Agenten mit demselben Modell teilen sich deshalb ein Budget (shared_budget).
 """
 
 import asyncio
@@ -59,12 +60,23 @@ class RequestBudget:
             return waited
 
 
+_shared_budgets: dict[str, RequestBudget] = {}
+
+
+def shared_budget(model: str, per_minute: int) -> RequestBudget:
+    """Ein Budget je Modellname und Prozess, z. B. für Recherche-Agent und Relevanzprüfung mit demselben Modell."""
+    budget = _shared_budgets.get(model)
+    if budget is None or budget.per_minute != per_minute:
+        budget = _shared_budgets[model] = RequestBudget(per_minute)
+    return budget
+
+
 class RateLimitedModel(WrapperModel):
     """Modell, das jede Anfrage erst sendet, wenn das Budget es erlaubt."""
 
-    def __init__(self, wrapped: Model | str, per_minute: int) -> None:
+    def __init__(self, wrapped: Model | str, per_minute: int, budget: RequestBudget | None = None) -> None:
         super().__init__(wrapped)
-        self.budget = RequestBudget(per_minute)
+        self.budget = budget or RequestBudget(per_minute)
 
     async def request(
         self,

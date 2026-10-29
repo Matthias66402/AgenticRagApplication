@@ -43,7 +43,7 @@ OUTPUT_NAMES = {
     ClarificationQuestion: "ask_user",
     TextAnswer: "answer_user",
 }
-# Pflichtsuchen vor jedem neuen Plan (Region + Ausrüstung/Sicherheit, siehe INSTRUCTIONS)
+# Pflichtsuchen des Recherche-Agenten vor jedem neuen Plan (Region + Ausrüstung/Sicherheit, app.agent.research)
 MIN_KNOWLEDGE_SEARCHES = 2
 # (Tool, Ergebnisliste) mit Unterkünften, die der Plan übernehmen darf
 ACCOMMODATION_RESULTS = [("find_accommodation", "results"), ("plan_hut_tour", "huts"), ("plan_hut_tour", "other_huts")]
@@ -104,7 +104,11 @@ def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage]
     if isinstance(output, AdventurePlan):
         checks["transport"] = output.transport.value == case.get("transport", output.transport.value)
         checks["duration_days"] = output.duration_days == case.get("duration_days", output.duration_days)
-        checks["knowledge_searches"] = calls.count("search_knowledge") >= MIN_KNOWLEDGE_SEARCHES
+        searches = sum(
+            len(result.get("queries", [])) for result in tool_returns(messages, "research_knowledge")
+            if isinstance(result, dict)
+        )
+        checks["knowledge_searches"] = searches >= MIN_KNOWLEDGE_SEARCHES
         checks["packing_and_safety"] = bool(output.packing_tips) and bool(output.safety_notes)
         checks["sources"] = bool(output.sources)
         checks["route_ids"] = bool(output.route_ids) and all(r in deps.routes for r in output.route_ids)
