@@ -1,8 +1,9 @@
 [
   {"name": "Ostseeküsten-Radweg", "route_type": "bicycle", "relation_ids": [16413681],
    "aliases": ["Ostseeradweg", "Ostseeküstenroute", "Ostsee-Radweg", "D2", "D-Route 2", "EuroVelo 10", "EV10"]},
-  {"name": "Nordseeküsten-Radweg", "route_type": "bicycle", "relation_ids": [9890960],
-   "aliases": ["Nordseeradweg", "Nordseeküstenroute", "Nordsee-Radweg", "D1", "D-Route 1", "EuroVelo 12", "EV12"]},
+  {"name": "Nordseeküsten-Radweg", "route_type": "bicycle", "relation_ids": [9890960, 162016],
+   "aliases": ["Nordseeradweg", "Nordseeküstenroute", "Nordsee-Radweg", "D1", "D-Route 1", "EuroVelo 12", "EV12",
+               "Vestkystruten", "Nordseeküsten-Radweg Dänemark", "Westküstenroute"]},
   {"name": "Elberadweg", "route_type": "bicycle", "relation_ids": [22328, 22327],
    "aliases": ["Elbe-Radweg", "Elberoute", "D10", "D-Route 10"]},
   {"name": "Weser-Radweg", "route_type": "bicycle", "relation_ids": [1731515],
