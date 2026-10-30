@@ -46,7 +46,9 @@ BBOX_GRID_DEG = 0.5
 OVERPASS_TIMEOUT_SECONDS = 90
 
 GRID_DEG = 0.01  # Zellgröße des Suchrasters (~1 km)
-MAX_SNAP_KM = 5.0  # weiter entfernte Wegpunkte (z. B. Unterkunft im Hinterland) werden normal angebunden
+# Wegpunkte bis zu dieser Entfernung werden normal zum Fernweg hin angebunden, das Teilstück folgt dann dem Fernweg
+# (Tønder und Hurup liegen 8-9 km von der Vestkystruten); weiter entfernte Teilstücke werden direkt geroutet
+MAX_SNAP_KM = 15.0
 GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden überbrückt
 # Pfad länger als 6 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll (z. B. nur über das andere
 # Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
@@ -294,6 +296,22 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
             off_route_legs.append(leg + 1)
         dense.append(b)
     return Guide(dense, on_route_km, off_route_legs, reasons)
+
+
+async def catalog_overview(deps: AgentDeps) -> str:
+    """Importierte Fernwege mit weiteren Namen für die Instructions; leer ohne Katalog.
+
+    Ohne diese Liste rät das Modell Namen wie "North Sea Cycle Route", die erst eine langsame Live-Suche auslösen.
+    """
+    columns = (LongDistanceRoute.name, LongDistanceRoute.aliases, LongDistanceRoute.route_type)
+    try:
+        async with deps.session_factory() as session:
+            rows = (await session.execute(select(*columns).order_by(LongDistanceRoute.name))).all()
+    except SQLAlchemyError:
+        return ""
+    return "\n".join(
+        f"- {r.name} ({r.route_type})" + (f", auch: {', '.join(r.aliases)}" if r.aliases else "") for r in rows
+    )
 
 
 # Katalog-ID -> (Importzeitpunkt, Graph); ein neuer Import ersetzt den Graphen

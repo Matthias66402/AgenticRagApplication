@@ -482,6 +482,25 @@ async def test_agent_knows_home_and_default_transport(client: httpx.AsyncClient,
     assert "- Standard-Fortbewegungsart: Radtour (transport=cycling)." in instructions[1]
 
 
+async def test_agent_knows_imported_long_distance_routes(
+    client: httpx.AsyncClient, user_headers: dict[str, str]
+) -> None:
+    """Ohne die Namen aus dem Katalog rät das Modell Fernwegnamen, die eine langsame Live-Suche auslösen."""
+    await add_test_route()
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    instructions: list[str] = []
+
+    def respond(messages: list[ModelMessage]) -> Step:
+        instructions.append(messages[-1].instructions or "")
+        return ("ask_user", {"question": "Wann?"})
+
+    with planner_agent.override(model=streaming_model(respond)):
+        await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Tour"})
+
+    assert "Fernwege mit vorab importiertem Verlauf" in instructions[0]
+    assert "- Testweg (bicycle), auch: Testradweg, T1" in instructions[0]
+
+
 async def set_default_transport(client: httpx.AsyncClient, headers: dict[str, str], transport: str | None) -> None:
     await client.patch("/api/users/me", headers=headers, json={"default_transport": transport})
 
@@ -570,7 +589,10 @@ async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient,
 async def test_plan_must_use_route_along_long_distance_route(
     client: httpx.AsyncClient, user_headers: dict[str, str]
 ) -> None:
-    """Ist eine Route entlang des Fernwegs berechnet, weicht der Plan nicht auf eine ältere Route ohne Fernweg aus."""
+    """Ist eine Route entlang des Fernwegs berechnet, weicht der Plan nicht auf eine ältere Route ohne Fernweg aus.
+
+    Eine ältere Route entlang des Fernwegs (z. B. mit besser passenden Etappen) ist dagegen in Ordnung.
+    """
     await add_test_route()
     respx.post(url__startswith="https://api.openrouteservice.org/").respond(status_code=503)
     respx.get(BROUTER_URL).respond(json=BROUTER_OK)
@@ -594,9 +616,10 @@ async def test_plan_must_use_route_along_long_distance_route(
     steps: list[Callable[[list[ModelMessage]], Step]] = [
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling"}),
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling", "route_name": "Testweg"}),
+        lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling", "route_name": "Testweg"}),
         lambda _: ("research_knowledge", RESEARCH),
         lambda messages: plan(messages, 0),  # ältere Route ohne Fernweg
-        lambda messages: plan(messages, 1),
+        lambda messages: plan(messages, 1),  # ältere Route entlang des Fernwegs
     ]
     calls = iter(steps)
     with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
@@ -605,7 +628,8 @@ async def test_plan_must_use_route_along_long_distance_route(
         )
 
     assert parse_sse(response.text)[-2]["plan"]["route_ids"] == [route_ids[1]]
-    assert any("ältere Route statt der Route entlang Testweg" in text for text in retries), retries
+    assert any("Route ohne Fernweg statt der Route entlang Testweg" in text for text in retries), retries
+    assert len(retries) == 1
 
 
 async def test_cannot_chat_in_foreign_adventure(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

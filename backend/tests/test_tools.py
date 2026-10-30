@@ -338,10 +338,20 @@ async def test_named_route_unknown_name_lists_routes_nearby(ctx) -> None:
 async def test_named_route_far_waypoint_is_routed_normally(ctx) -> None:
     respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
     respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
-    inland = Coordinate(lat=53.00, lon=8.40)  # ~11 km vom Fernweg
+    inland = Coordinate(lat=52.90, lon=8.40)  # ~22 km vom Fernweg
     result = await plan_route(ctx, [COAST_START, COAST_END, inland], TransportMode.cycling, "Testküsten-Radweg")
     assert result["named_route"]["off_route_legs"] == [2]
-    assert "Teilstück(e) 2 folgen nicht dem Fernweg (Teilstück 2: Wegpunkt 3 weiter als 5 km" in result["note"]
+    assert "Teilstück(e) 2 folgen nicht dem Fernweg (Teilstück 2: Wegpunkt 3 weiter als 15 km" in result["note"]
+
+
+def test_named_route_connects_start_and_end_in_hinterland() -> None:
+    """Start und Ziel einige km abseits (z. B. Tønder, Hurup): Anbindung zum Fernweg, dazwischen dem Fernweg folgen."""
+    bow = [(53.10, 8.20), (53.20, 8.20), (53.20, 8.30), (53.10, 8.30)]
+    graph = named_route.build_graph(["Bucht-Radweg"], [([1, 2, 3, 4], bow)])
+    start, end = (53.03, 8.20), (53.03, 8.30)  # je ~8 km südlich der Enden
+    route_guide = named_route.guide(graph, [start, end])
+    assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(28.9, abs=0.5)
+    assert route_guide.waypoints[:2] == [start, bow[0]] and route_guide.waypoints[-2:] == [bow[-1], end]
 
 
 def test_named_route_follows_long_coastal_bow() -> None:
@@ -443,6 +453,54 @@ async def test_bivouac_filters_shelter_type(ctx) -> None:
     )
     result = await find_accommodation(ctx, 47.0, 11.0, AccommodationType.bivouac)
     assert [r["name"] for r in result["results"]] == ["Biwakschachtel"]
+
+
+@respx.mock
+async def test_bivouac_finds_overnight_shelters(ctx) -> None:
+    """Dänische Shelterplätze: offene Shelter (lean_to) mit Buchungsangaben und einfache Plätze (camp_site=basic).
+
+    Offene Shelter ohne Hinweis auf Übernachtung (z. B. auf einem Klinikgelände) und private fallen weg;
+    amenity=shelter wird nur einmal abgefragt.
+    """
+    shelters = [
+        {"osm_type": "way", "osm_id": 1, "name": "", "lat": "56.0", "lon": "8.1",
+         "extratags": {"shelter_type": "lean_to", "reservation": "yes", "website": "https://www.pladsinaturen.dk/x"}},
+        {"osm_type": "way", "osm_id": 2, "name": "", "lat": "56.0", "lon": "8.1", "extratags": {"shelter_type": "lean_to"}},
+        {"osm_type": "way", "osm_id": 3, "name": "Shelter Hof", "lat": "56.0", "lon": "8.1",
+         "extratags": {"shelter_type": "lean_to", "access": "private"}},
+    ]
+    camp_sites = [
+        {"osm_type": "node", "osm_id": 4, "name": "Shelterplads ved Å", "lat": "56.01", "lon": "8.1", "extratags": {"camp_site": "basic"}},
+        {"osm_type": "node", "osm_id": 5, "name": "Ferienpark", "lat": "56.0", "lon": "8.1", "extratags": {}},
+    ]  # fmt: skip
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"]
+        return httpx.Response(200, json=shelters if "shelter" in query else camp_sites if "camp_site" in query else [])
+
+    route = respx.get(geocode_module.NOMINATIM_URL).mock(side_effect=respond)
+    result = await find_accommodation(ctx, 56.0, 8.1, AccommodationType.bivouac)
+    assert [r["name"] for r in result["results"]] == ["Shelterplads ved Å", "Unbenannt"]
+    assert result["results"][1]["website"] == "https://www.pladsinaturen.dk/x"
+    assert route.call_count == 3  # wilderness_hut, shelter, camp_site
+
+
+@respx.mock
+async def test_accommodation_fallback_types_in_order(ctx) -> None:
+    camp = {"osm_type": "node", "osm_id": 1, "name": "Klitcamping", "lat": "56.0", "lon": "8.1", "extratags": {}}
+    route = respx.get(geocode_module.NOMINATIM_URL).mock(
+        side_effect=lambda request: httpx.Response(200, json=[camp] if "camp_site" in request.url.params["q"] else [])
+    )
+    types = [AccommodationType.camping, AccommodationType.hotel]
+    result = await find_accommodation(ctx, 56.0, 8.1, AccommodationType.bivouac, fallback_types=types)
+    assert [(r["name"], r["type"]) for r in result["results"]] == [("Klitcamping", "camping")]
+    assert result["note"] == "Keine Unterkünfte vom Typ bivouac im Umkreis von 5 km."
+    assert route.call_count == 4  # bivouac (3 Kategorien), camping; Hotel nicht mehr nötig
+
+    respx.get(geocode_module.NOMINATIM_URL).respond(json=[])
+    result = await find_accommodation(ctx, 57.0, 9.0, AccommodationType.bivouac, fallback_types=types)
+    assert result["results"] == []
+    assert result["note"] == "Keine Unterkünfte vom Typ bivouac, camping, hotel im Umkreis von 5 km."
 
 
 @respx.mock

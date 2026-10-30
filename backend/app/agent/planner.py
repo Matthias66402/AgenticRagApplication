@@ -17,6 +17,7 @@ from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.geocode import geocode
 from app.agent.tools.common import haversine_km
 from app.agent.tools.huts import MIN_HUT_TOUR_KM, plan_hut_tour
+from app.agent.tools.named_route import catalog_overview
 from app.agent.tools.research import research_knowledge
 from app.agent.tools.routing import estimate_hiking_time, plan_route
 from app.agent.tools.sun import sun_times
@@ -55,7 +56,9 @@ Fortbewegungsart, Startdatum, Dauer in Tagen, Start, Ziel. Bei mehr als einem Ta
 (hut, camping, hotel, hostel, bivouac). Bei einer Rundtour ist das Ziel gleich dem Start.
 Nennt der Nutzer keine Fortbewegungsart bzw. keinen Start, gelten seine Profil-Vorgaben (siehe unten, falls
 vorhanden). Ein allgemeines "fahren" ohne Verkehrsmittel ist dann eine Tour mit der Standard-Fortbewegungsart.
-Die Dauer ergibt sich auch aus der Zahl der Übernachtungen (Tage = Übernachtungen + 1, "eine Übernachtung" = 2 Tage).
+Die Dauer ergibt sich auch aus der Zahl der Übernachtungen (Tage = Übernachtungen + 1, "eine Übernachtung" = 2 Tage)
+oder aus einer gewünschten Tagesdistanz (z. B. "täglich 50-60 km"): Dann ergeben sich die Tage aus der Strecke von
+`plan_route`; frage nicht nach der Dauer.
 Nennt der Nutzer weder Tage noch Übernachtungen und ist die Tour an einem Tag machbar (z. B. ein Ausflug "und
 zurück"), ist es eine Tagestour; frage dann nicht nach der Dauer.
 Lässt der Nutzer mehrere Übernachtungsarten zu (z. B. "Hostel oder Hotel"), ist das keine offene Angabe: suche beide
@@ -105,7 +108,8 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
    Tagesdistanz und suche Unterkünfte dort (`find_accommodation`, max. 5 km), statt Orte zu raten. Findet das Tool
    den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der Plan nutzt dann diese Route;
    passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
-3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart. Danach `plan_route`
+3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart (Ausweichwünsche wie
+   "sonst Camping, sonst Hotel" als `fallback_types`, alle Etappenenden im selben Schritt). Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
    Hüttenwanderung (Wandern, Übernachtung hut bzw. bivouac, Start ungleich Ziel): statt Schritt 2 und 3 nach
    `geocode` gleich `plan_hut_tour` mit Anzahl der Nächte (= Tage - 1). Es wählt Hütten, die auf dem Weg liegen, und
@@ -263,9 +267,10 @@ def check_access(ctx: RunContext[AgentDeps], access: AccessRoute, journey: Journ
 
 
 def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
-    """Wurde eine Route entlang eines Fernwegs berechnet, darf der Plan keine ältere Route nutzen.
+    """Wurde eine Route entlang eines Fernwegs berechnet, darf der Plan keine ältere Route ohne Fernweg nutzen.
 
     Sonst weicht das Modell gern auf eine kürzere Route ohne Fernweg aus, wenn die Strecke nicht in die Tage passt.
+    Eine ältere Route entlang des Fernwegs ist in Ordnung, z. B. mit besser passenden Etappen.
     """
     results = [
         part.content
@@ -278,11 +283,11 @@ def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
     order = {result["route_id"]: index for index, result in enumerate(results)}
     named = [index for index, result in enumerate(results) if "named_route" in result]
     used = [order[route_id] for route_id in output.route_ids if route_id in order]
-    if not named or not used or max(used) >= named[-1]:
+    if not named or not used or max(used) >= named[-1] or set(used) & set(named):
         return
     latest = results[named[-1]]
     raise ModelRetry(
-        f"Der Plan nutzt eine ältere Route statt der Route entlang {', '.join(latest['named_route']['routes'])} "
+        f"Der Plan nutzt eine Route ohne Fernweg statt der Route entlang {', '.join(latest['named_route']['routes'])} "
         f"(route_id {latest['route_id']}, {latest['distance_km']:g} km). Übernimm diese route_id und die Etappenwerte "
         "aus ihren segments. Passt die Strecke nicht in die gewünschten Tage, kürze nicht über eine andere Route ab, "
         "sondern frage mit `ask_user` nach mehr Tagen oder einem näheren Ziel."
@@ -381,7 +386,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
     )
 
     @agent.instructions
-    def current_context(ctx: RunContext[AgentDeps]) -> str:
+    async def current_context(ctx: RunContext[AgentDeps]) -> str:
         deps = ctx.deps
         lines = [f"Heute ist {deps.today.isoformat()} ({deps.today:%A}). Der Nutzer heißt {deps.user_name}."]
         if deps.home or deps.default_transport:
@@ -393,6 +398,12 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         if deps.default_transport:
             label = TRANSPORT_LABELS.get(deps.default_transport, deps.default_transport)
             lines.append(f"- Standard-Fortbewegungsart: {label} (transport={deps.default_transport}).")
+        if catalog := await catalog_overview(deps):
+            lines.append(
+                "Fernwege mit vorab importiertem Verlauf (als `route_name` sofort verfügbar; nimm einen dieser Namen, "
+                "wenn er den Wunsch abdeckt, andere Namen lösen eine Live-Suche von ein bis zwei Minuten aus):\n"
+                + catalog
+            )
         return "\n".join(lines)
 
     @agent.output_validator

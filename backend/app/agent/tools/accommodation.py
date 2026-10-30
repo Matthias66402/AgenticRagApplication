@@ -25,8 +25,25 @@ OSM_FILTERS: dict[AccommodationType, list[OsmFilter]] = {
     AccommodationType.camping: [("tourism", "camp_site", {})],
     AccommodationType.hotel: [("tourism", "hotel", {}), ("tourism", "guest_house", {})],
     AccommodationType.hostel: [("tourism", "hostel", {})],
-    AccommodationType.bivouac: [("tourism", "wilderness_hut", {}), ("amenity", "shelter", {"shelter_type": "basic_hut"})],
+    # lean_to und camp_site=basic: offene Shelter bzw. einfache Plätze, z. B. die dänischen "Shelterpladser"
+    AccommodationType.bivouac: [
+        ("tourism", "wilderness_hut", {}),
+        ("amenity", "shelter", {"shelter_type": "basic_hut"}),
+        ("amenity", "shelter", {"shelter_type": "lean_to"}),
+        ("tourism", "camp_site", {"camp_site": "basic"}),
+    ],
 }
+
+# Offene Shelter (lean_to) stehen auch als Grillplatz oder Unterstand auf Schul- und Klinikgeländen. Zum Übernachten
+# gedachte tragen meist Buchungs- bzw. Platzangaben (in Dänemark importiert aus udinaturen.dk, pladsinaturen.dk).
+OVERNIGHT_HINTS = {"reservation", "capacity:persons", "capacity", "fee", "website", "url", "name", "operator", "overnight"}
+NO_ACCESS = {"private", "no"}
+
+
+def _usable(tags: dict[str, str]) -> bool:
+    if tags.get("access") in NO_ACCESS:
+        return False
+    return tags.get("shelter_type") != "lean_to" or bool(OVERNIGHT_HINTS & tags.keys())
 
 # Ausgewählte OSM-Tags → Feldnamen im Tool-Ergebnis
 DETAIL_TAGS = [
@@ -86,17 +103,21 @@ async def search_nominatim(
 ) -> list[dict[str, Any]]:
     south, west, north, east = _bbox(lat, lon, radius_km)
     found: dict[tuple[str, int], dict[str, Any]] = {}
+    results: dict[str, list[dict[str, Any]]] = {}  # je Kategorie eine Abfrage, auch bei mehreren Tag-Bedingungen
     for key, value, conditions in OSM_FILTERS[accommodation_type]:
-        items = await nominatim_search(ctx, {
-            "q": f"[{key}={value}]",
-            "viewbox": f"{west:.5f},{south:.5f},{east:.5f},{north:.5f}",
-            "bounded": 1,
-            "limit": NOMINATIM_LIMIT,
-            "extratags": 1,
-        })  # fmt: skip
-        for item in items:
+        query = f"[{key}={value}]"
+        if query not in results:
+            results[query] = await nominatim_search(ctx, {
+                "q": query,
+                "viewbox": f"{west:.5f},{south:.5f},{east:.5f},{north:.5f}",
+                "bounded": 1,
+                "limit": NOMINATIM_LIMIT,
+                "extratags": 1,
+            })  # fmt: skip
+        for item in results[query]:
             tags = item.get("extratags") or {}
-            if not _matches(tags, conditions):
+            # Nominatim liefert den Namen getrennt von den extratags
+            if not _matches(tags, conditions) or not _usable(tags | ({"name": item["name"]} if item.get("name") else {})):
                 continue
             entry = _entry(item.get("name"), float(item["lat"]), float(item["lon"]), tags, (lat, lon), accommodation_type)
             # Erster Treffer gewinnt (behält seine Detail-Tags, falls ein Objekt mehrfach auftaucht)
@@ -165,7 +186,7 @@ async def search_overpass(
     for element in data.get("elements", []):
         el_lat = element.get("lat") or element.get("center", {}).get("lat")
         el_lon = element.get("lon") or element.get("center", {}).get("lon")
-        if el_lat is not None and el_lon is not None:
+        if el_lat is not None and el_lon is not None and _usable(element.get("tags", {})):
             found.append(_entry(None, el_lat, el_lon, element.get("tags", {}), (lat, lon), accommodation_type))
     return found
 
@@ -176,6 +197,7 @@ async def find_accommodation(
     lon: float,
     accommodation_type: AccommodationType,
     radius_km: float = 5.0,
+    fallback_types: list[AccommodationType] | None = None,
 ) -> dict[str, Any]:
     """Sucht Unterkünfte in der Nähe eines Punktes (OpenStreetMap).
 
@@ -185,10 +207,28 @@ async def find_accommodation(
     Args:
         lat: Breitengrad des Suchmittelpunkts.
         lon: Längengrad des Suchmittelpunkts.
-        accommodation_type: hut, camping, hotel, hostel oder bivouac.
+        accommodation_type: hut, camping, hotel, hostel oder bivouac (auch Shelter).
         radius_km: Suchradius in km (0.5-30).
+        fallback_types: Weitere Arten in Reihenfolge des Wunsches, falls die vorherige nichts findet
+            (z. B. "Shelter, sonst Camping, sonst Hotel": bivouac mit [camping, hotel]) – spart Aufrufe.
     """
     radius_km = max(0.5, min(radius_km, 30))
+    types = list(dict.fromkeys([accommodation_type, *(fallback_types or [])]))
+    empty = []
+    for current in types:
+        result = await _find(ctx, lat, lon, current, radius_km)
+        if result.get("results") or "error" in result:
+            if empty and "error" not in result:
+                result["note"] = f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km."
+            return result
+        empty.append(current.value)
+    result["note"] = f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km."
+    return result
+
+
+async def _find(
+    ctx: RunContext[AgentDeps], lat: float, lon: float, accommodation_type: AccommodationType, radius_km: float
+) -> dict[str, Any]:
     try:
         found, source = await search_nominatim(ctx, accommodation_type, lat, lon, radius_km), "Nominatim"
     except httpx.HTTPError as nominatim_exc:
