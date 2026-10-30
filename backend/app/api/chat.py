@@ -47,7 +47,8 @@ def build_stored_plan(
         access = outcome.plan.access
         routes = {access.route_id: known_routes[access.route_id]} if access and access.route_id in known_routes else {}
         return outcome.plan.model_dump(mode="json") | {"kind": PLAN_KIND_TRAIN_TRIP, "routes": routes}
-    route_ids = [rid for rid in outcome.plan.route_ids if rid in known_routes]
+    # Ohne Duplikate: Das Modell nennt dieselbe Route mitunter je Tag, Profil und GPX hängen die Tracks aneinander
+    route_ids = [rid for rid in dict.fromkeys(outcome.plan.route_ids) if rid in known_routes]
     if not route_ids and deps.routes:
         # Modell hat route_ids vergessen → die zuletzt berechnete Route ist in der Regel die finale
         route_ids = [list(deps.routes)[-1]]

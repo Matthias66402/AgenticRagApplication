@@ -571,7 +571,8 @@ async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient,
         lambda _: ("plan_route", {"waypoints": [START.model_dump(), END.model_dump()], "transport": "hiking"}),
         lambda _: ("ask_user", {"question": "Wann möchtest Du los?"}),
         lambda _: ("research_knowledge", RESEARCH),
-        lambda messages: ("final_plan", make_plan() | {"route_ids": [route_id(messages)]}),
+        # Dieselbe Route je Tag genannt → nur einmal im Plan, sonst erscheint das Höhenprofil doppelt
+        lambda messages: ("final_plan", make_plan() | {"route_ids": [route_id(messages)] * 2}),
     ]
     calls = iter(steps)
     with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
