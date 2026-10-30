@@ -1,8 +1,10 @@
 """Verlauf ausgeschilderter Fernwege (OSM-Routenrelationen, z. B. Ostseeküsten-Radweg) als Leitlinie fürs Routing.
 
 Quelle ist zuerst der vorab importierte Katalog (Tabelle long_distance_routes, app.seed.long_distance_routes): sofort
-verfügbar und mit weiteren Namen wie "Ostseeradweg". Fehlt der Fernweg dort, sucht Overpass live die passenden
-Relationen nahe den Wegpunkten, die übrigen Abschnitte derselben Superroute und deren Wege (oft ein bis zwei Minuten).
+verfügbar und mit weiteren Namen wie "Ostseeradweg". Fehlt der Fernweg dort, liefert Waymarked Trails die Routen nahe
+den Wegpunkten und den Verlauf der passenden (meist in unter einer Sekunde, aufbereitete OSM-Daten). Ist Waymarked
+Trails nicht erreichbar, sucht Overpass live die passenden Relationen, die übrigen Abschnitte derselben Superroute
+und deren Wege (oft ein bis zwei Minuten, die öffentlichen Server sind häufig überlastet).
 Aus den Wegen entsteht ein Graph; zwischen den Wegpunkten wird der kürzeste Pfad innerhalb des Fernwegs gesucht.
 `plan_route` gibt diesen Pfad als dichte Stützpunkte an den Router, der Höhen und Fahrzeiten liefert. Die Wege einer
 Relation sind in OSM ungeordnet und enthalten Varianten; der Graph braucht keine Reihenfolge.
@@ -16,6 +18,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
 from pydantic_ai import RunContext
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,6 +47,17 @@ SEARCH_RADIUS_M = 3000
 BBOX_MARGIN_DEG = 0.3
 BBOX_GRID_DEG = 0.5
 OVERPASS_TIMEOUT_SECONDS = 90
+
+# Waymarked Trails (https://waymarkedtrails.org): je Fortbewegungsart eine Instanz, MTB-Touren auch auf Radrouten
+WAYMARKED_URLS: dict[TransportMode, list[str]] = {
+    TransportMode.cycling: ["https://cycling.waymarkedtrails.org/api/v1"],
+    TransportMode.mtb: ["https://mtb.waymarkedtrails.org/api/v1", "https://cycling.waymarkedtrails.org/api/v1"],
+    TransportMode.hiking: ["https://hiking.waymarkedtrails.org/api/v1"],
+}
+WAYMARKED_GROUP_RANK = {"INT": 0, "NAT": 1, "REG": 2, "LOC": 3}
+WAYMARKED_TIMEOUT_SECONDS = 60  # Verlauf sehr langer Routen (EuroVelo 12: 12 MB) braucht einige Sekunden
+MAX_AREA_QUERIES = 6  # Gebietssuchen je Fernweg: Start, Ziel und gleichmäßig verteilte Zwischenpunkte
+EARTH_RADIUS_M = 6378137.0  # Web-Mercator (EPSG:3857), Koordinatensystem der Waymarked-Trails-API
 
 GRID_DEG = 0.01  # Zellgröße des Suchrasters (~1 km)
 # Wegpunkte bis zu dieser Entfernung werden normal zum Fernweg hin angebunden, das Teilstück folgt dann dem Fernweg
@@ -211,6 +225,114 @@ def overpass_ways(data: dict[str, Any]) -> list[Way]:
     return ways
 
 
+def to_mercator(lat: float, lon: float) -> tuple[float, float]:
+    return math.radians(lon) * EARTH_RADIUS_M, math.log(math.tan(math.pi / 4 + math.radians(lat) / 2)) * EARTH_RADIUS_M
+
+
+def from_mercator(x: float, y: float) -> Point:
+    lat = math.degrees(2 * math.atan(math.exp(y / EARTH_RADIUS_M)) - math.pi / 2)
+    return round(lat, 6), round(math.degrees(x / EARTH_RADIUS_M), 6)
+
+
+def area_bbox(point: Point, radius_km: float) -> str:
+    """Quadrat um den Punkt in Web-Mercator (West, Süd, Ost, Nord) für `list/by_area`."""
+    dlat = radius_km / 111.0
+    dlon = radius_km / (111.0 * max(math.cos(math.radians(point[0])), 0.1))
+    west, south = to_mercator(point[0] - dlat, point[1] - dlon)
+    east, north = to_mercator(point[0] + dlat, point[1] + dlon)
+    return f"{west:.0f},{south:.0f},{east:.0f},{north:.0f}"
+
+
+def spread(points: list[Point], count: int) -> list[Point]:
+    """Start, Ziel und gleichmäßig verteilte Zwischenpunkte, höchstens `count`."""
+    if len(points) <= count:
+        return points
+    return list(dict.fromkeys(points[round(i * (len(points) - 1) / (count - 1))] for i in range(count)))
+
+
+def waymarked_ways(details: dict[str, Any], ways: dict[int, Way]) -> None:
+    """Wege aus `details/relation/{id}` in `ways` (nach Weg-ID, Abschnitte mehrerer Relationen nur einmal).
+
+    Die API liefert keine Knoten-IDs; gemeinsame Knoten benachbarter Wege haben aber dieselben Koordinaten.
+    """
+
+    def walk(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, dict):
+            geometry = node.get("geometry")
+            if isinstance(geometry, dict) and geometry.get("type") == "LineString" and "id" in node:
+                coords = [from_mercator(x, y) for x, y in geometry["coordinates"]]
+                ways.setdefault(node["id"], ([hash(p) for p in coords], coords))
+                return
+            for key, value in node.items():
+                if key != "tags":
+                    walk(value)
+
+    walk(details.get("route"))
+
+
+async def waymarked_get(
+    http: httpx.AsyncClient, user_agent: str, url: str, params: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    response = await http.get(url, params=params, headers={"User-Agent": user_agent}, timeout=WAYMARKED_TIMEOUT_SECONDS)
+    response.raise_for_status()
+    return response.json()
+
+
+async def waymarked_relation_ways(
+    http: httpx.AsyncClient, user_agent: str, base: str, relation_ids: list[int]
+) -> list[Way]:
+    """Wege der Relationen (samt Abschnitten) aus Waymarked Trails; auch für den Import des Katalogs.
+
+    Raises:
+        httpx.HTTPError: Waymarked Trails nicht erreichbar.
+    """
+    ways: dict[int, Way] = {}
+    for relation_id in relation_ids:
+        waymarked_ways(await waymarked_get(http, user_agent, f"{base}/details/relation/{relation_id}"), ways)
+    return list(ways.values())
+
+
+def not_found_message(name: str, ranked: list[tuple[int, str]]) -> str:
+    """Hinweis mit den Routen nahe den Wegpunkten, Fernwege zuerst (international, national, regional, lokal)."""
+    candidates = list(dict.fromkeys(n for _, n in sorted(ranked) if n))[:MAX_CANDIDATES]
+    names = ", ".join(f"„{n}“" for n in candidates)
+    return (
+        f"Keine ausgeschilderte Route „{name}“ nahe den Wegpunkten gefunden (OpenStreetMap). "
+        + (f"Routen dort: {names}. Erneut mit einem dieser Namen bzw. einem Teil davon aufrufen" if names else "")
+        + " oder ohne route_name routen."
+    )
+
+
+async def waymarked_graph(
+    ctx: RunContext[AgentDeps], name: str, transport: TransportMode, waypoints: list[Point]
+) -> RouteGraph | str:
+    """Graph aus Waymarked Trails: Routen im Umkreis der Wegpunkte, davon die passenden mit ihrem Verlauf.
+
+    `list/by_area` liefert nur die obersten Relationen (Superrouten mit allen Abschnitten).
+
+    Raises:
+        httpx.HTTPError: Waymarked Trails nicht erreichbar.
+    """
+    http, user_agent = ctx.deps.http, ctx.deps.settings.nominatim_user_agent
+    near: dict[tuple[str, int], dict[str, Any]] = {}
+    for base in WAYMARKED_URLS[transport]:
+        for point in spread(waypoints, MAX_AREA_QUERIES):
+            params = {"bbox": area_bbox(point, MAX_SNAP_KM), "limit": 100}
+            for result in (await waymarked_get(http, user_agent, f"{base}/list/by_area", params)).get("results", []):
+                near.setdefault((base, result["id"]), result)
+    found = {key: r for key, r in near.items() if matches(name, {"name": r.get("name", ""), "ref": r.get("ref", "")})}
+    if not found:
+        return not_found_message(name, [(WAYMARKED_GROUP_RANK.get(r.get("group"), 4), short_name(r)) for r in near.values()])
+
+    ways: list[Way] = []
+    for base in dict.fromkeys(base for base, _ in found):
+        ways += await waymarked_relation_ways(http, user_agent, base, [rid for b, rid in found if b == base])
+    return build_graph(sorted({short_name(r) for r in found.values()} - {""}), ways)
+
+
 def build_graph(names: list[str], ways: list[Way]) -> RouteGraph:
     graph = RouteGraph(names=names)
     node_way: dict[int, int] = {}
@@ -333,25 +455,47 @@ async def catalog_graph(ctx: RunContext[AgentDeps], name: str, transport: Transp
                 return cached[1]
             ways = await session.scalar(select(LongDistanceRoute.ways).where(LongDistanceRoute.id == match.id))
     except SQLAlchemyError:
-        return None  # z. B. Tabelle fehlt (Migration nicht ausgeführt) → live über Overpass
+        return None  # z. B. Tabelle fehlt (Migration nicht ausgeführt) → live über Waymarked Trails bzw. Overpass
     graph = build_graph([match.name], [(nodes, [(lat, lon) for lat, lon in coords]) for nodes, coords in ways or []])
     _catalog_graphs[match.id] = (match.imported_at, graph)
     return graph
 
 
+async def overpass_graph(
+    ctx: RunContext[AgentDeps], name: str, transport: TransportMode, waypoints: list[Point],
+    bbox: tuple[float, float, float, float],
+) -> RouteGraph | str:  # fmt: skip
+    """Graph aus Overpass (Ersatz für Waymarked Trails): Relationen nahe den Wegpunkten, Wege in der Bounding Box.
+
+    Raises:
+        httpx.HTTPError: Overpass nicht erreichbar.
+    """
+    data = await query_overpass(ctx, relation_query(transport, waypoints), timeout=OVERPASS_TIMEOUT_SECONDS)
+    relations = [r for r in data.get("elements", []) if r.get("type") == "relation"]
+    found = [r for r in relations if matches(name, r.get("tags", {}))]
+    if not found:
+        tags = [r.get("tags", {}) for r in relations]
+        return not_found_message(name, [(NETWORK_RANK.get(t.get("network", ""), 3), short_name(t)) for t in tags])
+
+    query = way_query(sorted(r["id"] for r in found), bbox)
+    ways = await query_overpass(ctx, query, timeout=OVERPASS_TIMEOUT_SECONDS + 10, cache=False)
+    names = sorted({short_name(r.get("tags", {})) for r in found} - {""})
+    return build_graph(names, overpass_ways(ways))
+
+
 # (Name normalisiert, Fortbewegungsart, Bounding Box) -> (Ablaufzeitpunkt, Graph). Spätere Aufrufe derselben Tour
-# (z. B. mit den gewählten Unterkünften als Wegpunkte) brauchen so keine Overpass-Abfrage mehr.
+# (z. B. mit den gewählten Unterkünften als Wegpunkte) brauchen so keine erneute Abfrage mehr.
 _graphs: dict[tuple[str, TransportMode, tuple[float, ...]], tuple[float, RouteGraph]] = {}
 
 
 async def load_route_graph(
     ctx: RunContext[AgentDeps], name: str, transport: TransportMode, waypoints: list[Point]
 ) -> RouteGraph | str:
-    """Graph des Fernwegs aus dem Katalog, sonst live aus Overpass im Bereich der Wegpunkte; Text mit
-    Namensvorschlägen, wenn keine Relation passt.
+    """Graph des Fernwegs aus dem Katalog, sonst live aus Waymarked Trails bzw. Overpass im Bereich der Wegpunkte;
+    Text mit Namensvorschlägen, wenn keine Relation passt.
 
     Raises:
-        httpx.HTTPError: Overpass nicht erreichbar.
+        httpx.HTTPError: Weder Waymarked Trails noch Overpass erreichbar.
     """
     if graph := await catalog_graph(ctx, name, transport):
         return graph
@@ -362,25 +506,12 @@ async def load_route_graph(
     if cached and cached[0] > time.monotonic():
         return cached[1]
 
-    data = await query_overpass(ctx, relation_query(transport, waypoints), timeout=OVERPASS_TIMEOUT_SECONDS)
-    relations = [r for r in data.get("elements", []) if r.get("type") == "relation"]
-    found = [r for r in relations if matches(name, r.get("tags", {}))]
-    if not found:
-        # Fernwege zuerst (international, national, regional, lokal), je Name einmal
-        tags = [r.get("tags", {}) for r in relations]
-        ranked = sorted((NETWORK_RANK.get(t.get("network", ""), 3), short_name(t)) for t in tags)
-        candidates = list(dict.fromkeys(n for _, n in ranked if n))[:MAX_CANDIDATES]
-        names = ", ".join(f"„{n}“" for n in candidates)
-        return (
-            f"Keine ausgeschilderte Route „{name}“ nahe den Wegpunkten gefunden (OpenStreetMap). "
-            + (f"Routen dort: {names}. Erneut mit einem dieser Namen bzw. einem Teil davon aufrufen" if names else "")
-            + " oder ohne route_name routen."
-        )
-
-    query = way_query(sorted(r["id"] for r in found), bbox)
-    ways = await query_overpass(ctx, query, timeout=OVERPASS_TIMEOUT_SECONDS + 10, cache=False)
-    names = sorted({short_name(r.get("tags", {})) for r in found} - {""})
-    graph = build_graph(names, overpass_ways(ways))
+    try:
+        graph = await waymarked_graph(ctx, name, transport, waypoints)
+    except (httpx.HTTPError, ValueError, KeyError):  # nicht erreichbar oder unerwartete Antwort
+        graph = await overpass_graph(ctx, name, transport, waypoints, bbox)
+    if isinstance(graph, str):
+        return graph
     if len(_graphs) >= MAX_CACHED_GRAPHS:
         _graphs.pop(next(iter(_graphs)))
     _graphs[key] = (time.monotonic() + CACHE_SECONDS, graph)

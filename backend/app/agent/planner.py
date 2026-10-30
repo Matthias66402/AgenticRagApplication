@@ -401,7 +401,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         if catalog := await catalog_overview(deps):
             lines.append(
                 "Fernwege mit vorab importiertem Verlauf (als `route_name` sofort verfügbar; nimm einen dieser Namen, "
-                "wenn er den Wunsch abdeckt, andere Namen lösen eine Live-Suche von ein bis zwei Minuten aus):\n"
+                "wenn er den Wunsch abdeckt, andere Namen lösen eine Live-Suche aus, die langsamer ist und fehlschlagen kann):\n"
                 + catalog
             )
         return "\n".join(lines)

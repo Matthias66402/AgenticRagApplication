@@ -362,8 +362,8 @@ async def plan_route(
         waypoints: Mindestens 2 Koordinaten in Reihenfolge: Start, optionale Zwischenpunkte, Ziel.
         transport: Fortbewegungsart.
         route_name: Ausgeschilderter Fernweg, dem die Route folgen soll (Rad, MTB, Wandern), z. B.
-            "Ostseeküsten-Radweg", "Elberadweg", "Rennsteig". Verlauf aus OpenStreetMap; der erste Aufruf für eine
-            Region kann ein bis zwei Minuten dauern. Passt kein Name, nennt der Fehler die Routen in der Nähe.
+            "Ostseeküsten-Radweg", "Elberadweg", "Rennsteig". Verlauf aus OpenStreetMap (Katalog bzw. Waymarked
+            Trails, meist wenige Sekunden). Passt kein Name, nennt der Fehler die Routen in der Nähe.
 
     Returns:
         route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments

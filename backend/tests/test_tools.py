@@ -1,6 +1,7 @@
 import datetime as dt
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -245,6 +246,35 @@ def overpass_coast(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json=COAST_RELATIONS if "rel%28bw%29" in query else COAST_WAYS)
 
 
+WAYMARKED_CYCLING = named_route.WAYMARKED_URLS[TransportMode.cycling][0]
+
+
+def waymarked_down() -> respx.Route:
+    """Waymarked Trails nicht erreichbar → Overpass als Ersatz."""
+    return respx.get(url__startswith=WAYMARKED_CYCLING).respond(status_code=503)
+
+
+def waymarked_way(way: dict[str, Any]) -> dict[str, Any]:
+    """Weg wie in `details/relation/{id}`: Web-Mercator-Koordinaten, keine Knoten-IDs."""
+    coords = [list(named_route.to_mercator(p["lat"], p["lon"])) for p in way["geometry"]]
+    return {"route_type": "base", "id": way["id"], "tags": {}, "geometry": {"type": "LineString", "coordinates": coords}}
+
+
+def waymarked_coast(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/list/by_area"):
+        return httpx.Response(200, json={"results": [
+            {"type": "relation", "id": 3, "name": "Moortour", "group": "LOC"},
+            {"type": "relation", "id": 1, "ref": "D2", "name": "D2 Testküsten-Radweg - Abschnitt Nord", "group": "NAT"},
+            {"type": "relation", "id": 2, "name": "Nord-Testküsten-Weg", "group": "REG"},
+        ]})  # fmt: skip
+    assert request.url.path.endswith("/details/relation/1")
+    first, second = (waymarked_way(w) for w in COAST_WAYS["elements"])
+    # Superroute mit Abschnitten; ein Weg zusätzlich als Anhang (Variante) → nur einmal im Graphen
+    return httpx.Response(200, json={"route": {"route_type": "route", "main": [
+        {"route_type": "linear", "ways": [first]}, {"route_type": "linear", "ways": [second]},
+    ], "appendices": [{"route_type": "appendix", "ways": [second]}]}})  # fmt: skip
+
+
 def brouter_echo(request: httpx.Request) -> httpx.Response:
     """BRouter-Antwort mit geraden Linien zwischen den übergebenen Punkten."""
     points = [[float(v) for v in p.split(",")] for p in request.url.params["lonlats"].split("|")]
@@ -264,7 +294,41 @@ def test_named_route_matching() -> None:
 
 
 @respx.mock
+async def test_route_follows_named_route_from_waymarked_trails(ctx) -> None:
+    waymarked = respx.get(url__startswith=WAYMARKED_CYCLING).mock(side_effect=waymarked_coast)
+    overpass = respx.post(url__startswith="https://overpass").respond(status_code=504)
+    brouter = respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    result = await plan_route(ctx, [COAST_START, COAST_VIA, COAST_END], TransportMode.cycling, "Testküsten-Radweg")
+
+    assert overpass.call_count == 0
+    assert waymarked.call_count == 4  # Gebietssuche je Wegpunkt, Verlauf der passenden Relation
+    assert "8.250000,53.150000" in brouter.calls[0].request.url.params["lonlats"]  # Bogen nach Norden
+    assert result["named_route"]["routes"] == ["D2 Testküsten-Radweg"]
+    assert result["named_route"]["off_route_legs"] == []
+    assert result["named_route"]["on_route_km"] == pytest.approx(19.8, abs=0.5)
+
+    # Weitere Aufrufe derselben Tour nutzen den gespeicherten Graphen
+    await plan_route(ctx, [COAST_START, COAST_END], TransportMode.cycling, "Testküsten-Radweg")
+    assert waymarked.call_count == 4
+
+
+@respx.mock
+async def test_named_route_unknown_name_lists_routes_from_waymarked_trails(ctx) -> None:
+    respx.get(url__startswith=WAYMARKED_CYCLING).mock(side_effect=waymarked_coast)
+    result = await plan_route(ctx, [COAST_START, COAST_END], TransportMode.cycling, "Küstenradweg")
+    assert "„D2 Testküsten-Radweg“, „Nord-Testküsten-Weg“, „Moortour“" in result["error"]
+
+
+def test_waymarked_trails_coordinates() -> None:
+    lat, lon = named_route.from_mercator(*named_route.to_mercator(56.751, 8.418))
+    assert (lat, lon) == (56.751, 8.418)
+    assert named_route.spread([(float(i), 0.0) for i in range(11)], 3) == [(0.0, 0.0), (5.0, 0.0), (10.0, 0.0)]
+
+
+@respx.mock
 async def test_route_follows_named_route(ctx) -> None:
+    """Overpass als Ersatz, wenn Waymarked Trails nicht erreichbar ist."""
+    waymarked_down()
     overpass = respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
     brouter = respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
     result = await plan_route(ctx, [COAST_START, COAST_VIA, COAST_END], TransportMode.cycling, "Testküsten-Radweg")
@@ -320,14 +384,16 @@ async def test_named_route_from_catalog_without_overpass(ctx) -> None:
         "checkpoints": [{"km": 12, "lat": 53.0, "lon": 8.25}],  # Stützpunkt der Echo-Geometrie
     }  # fmt: skip
     assert result["source"] == "BRouter trekking entlang Testweg (Verlauf: © OpenStreetMap-Mitwirkende)"
-    # Wandern sucht nur Wanderwege im Katalog → live über Overpass (hier nicht erreichbar)
+    # Wandern sucht nur Wanderwege im Katalog → live über Waymarked Trails bzw. Overpass (hier nicht erreichbar)
     respx.post(url__startswith="https://api.openrouteservice.org/").respond(status_code=503)
+    respx.get(url__startswith=named_route.WAYMARKED_URLS[TransportMode.hiking][0]).respond(status_code=503)
     result = await plan_route(ctx, [START, END], TransportMode.hiking, "Testradweg")
     assert "named_route" not in result and overpass.call_count > 0
 
 
 @respx.mock
 async def test_named_route_unknown_name_lists_routes_nearby(ctx) -> None:
+    waymarked_down()
     respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
     result = await plan_route(ctx, [COAST_START, COAST_END], TransportMode.cycling, "Küstenradweg")
     # Fernwege zuerst, Abschnittsangaben gekürzt
@@ -336,7 +402,7 @@ async def test_named_route_unknown_name_lists_routes_nearby(ctx) -> None:
 
 @respx.mock
 async def test_named_route_far_waypoint_is_routed_normally(ctx) -> None:
-    respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
+    respx.get(url__startswith=WAYMARKED_CYCLING).mock(side_effect=waymarked_coast)
     respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
     inland = Coordinate(lat=52.90, lon=8.40)  # ~22 km vom Fernweg
     result = await plan_route(ctx, [COAST_START, COAST_END, inland], TransportMode.cycling, "Testküsten-Radweg")
@@ -376,6 +442,7 @@ def test_checkpoints_along_route() -> None:
 @respx.mock
 async def test_named_route_without_overpass_routes_normally(ctx) -> None:
     ctx.deps.settings = ctx.deps.settings.model_copy(update={"ors_api_key": ""})
+    waymarked_down()
     respx.post(url__startswith="https://overpass").respond(status_code=400)
     respx.get(BROUTER_URL).respond(json=BROUTER_OK)
     result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testküsten-Radweg")

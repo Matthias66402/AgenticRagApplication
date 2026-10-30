@@ -1,7 +1,8 @@
-"""Importiert den Verlauf von Fernwegen aus OpenStreetMap (Overpass) in die Tabelle long_distance_routes.
+"""Importiert den Verlauf von Fernwegen aus OpenStreetMap in die Tabelle long_distance_routes.
 
+Quelle ist Waymarked Trails (aufbereitete OSM-Routen, schnell); nur wenn es nicht erreichbar ist, Overpass.
 Der Katalog steht in long_distance_routes.json (Name, weitere Namen, OSM-Relationen). Beim Planen mit `route_name`
-nutzt `plan_route` diese Daten sofort, statt Overpass live abzufragen (dauert oft ein bis zwei Minuten).
+nutzt `plan_route` diese Daten sofort, ohne Live-Abfrage.
 
 Aufruf:
     python -m app.seed.long_distance_routes                       # alle noch fehlenden Fernwege
@@ -19,8 +20,9 @@ from typing import Any
 import httpx
 from sqlalchemy import select
 
+from app.agent.plan_schema import TransportMode
 from app.agent.tools.common import haversine_km
-from app.agent.tools.named_route import normalize
+from app.agent.tools.named_route import WAYMARKED_URLS, normalize, waymarked_relation_ways
 from app.config import get_settings
 from app.db import SessionLocal, engine
 from app.models import LongDistanceRoute
@@ -30,6 +32,13 @@ OVERPASS_TIMEOUT_SECONDS = 300
 ATTEMPTS = 5
 RETRY_WAIT_SECONDS = 30
 RETRYABLE_STATUS = {429, 502, 503, 504}
+# Instanz von Waymarked Trails je route_type des Katalogs
+WAYMARKED_BASE = {
+    "bicycle": WAYMARKED_URLS[TransportMode.cycling][0],
+    "mtb": WAYMARKED_URLS[TransportMode.mtb][0],
+    "hiking": WAYMARKED_URLS[TransportMode.hiking][0],
+    "foot": WAYMARKED_URLS[TransportMode.hiking][0],
+}
 
 
 def load_catalog() -> list[dict[str, Any]]:
@@ -45,8 +54,20 @@ def ways_query(relation_ids: list[int]) -> str:
     )
 
 
-async def fetch_ways(http: httpx.AsyncClient, relation_ids: list[int]) -> list[list[Any]]:
-    """Wege als [[Knoten-IDs], [[lat, lon], ...]]; wartet bei überlasteten Overpass-Servern und versucht es erneut."""
+async def fetch_ways(http: httpx.AsyncClient, route_type: str, relation_ids: list[int]) -> tuple[list[list[Any]], str]:
+    """Wege als [[Knoten-IDs], [[lat, lon], ...]] und Quelle; aus Waymarked Trails, sonst Overpass."""
+    try:
+        ways = await waymarked_relation_ways(
+            http, get_settings().nominatim_user_agent, WAYMARKED_BASE[route_type], relation_ids
+        )
+        return [[nodes, [list(p) for p in coords]] for nodes, coords in ways if len(nodes) >= 2], "Waymarked Trails"
+    except (httpx.HTTPError, ValueError, KeyError) as exc:
+        print(f"    Waymarked Trails: {type(exc).__name__}, weiter mit Overpass")
+    return await fetch_overpass_ways(http, relation_ids), "Overpass"
+
+
+async def fetch_overpass_ways(http: httpx.AsyncClient, relation_ids: list[int]) -> list[list[Any]]:
+    """Wege aus Overpass; wartet bei überlasteten Servern und versucht es erneut."""
     settings = get_settings()
     urls = settings.overpass_url_list
     for attempt in range(ATTEMPTS):
@@ -111,7 +132,7 @@ async def import_routes(names: list[str], force: bool) -> None:
                     continue
                 print(f"  lade {entry['name']} (Relation {', '.join(map(str, entry['relation_ids']))}) …")
                 try:
-                    ways = await fetch_ways(http, entry["relation_ids"])
+                    ways, source = await fetch_ways(http, entry["route_type"], entry["relation_ids"])
                 except httpx.HTTPError as exc:
                     print(f"  FEHLER {entry['name']}: {exc!r}")
                     continue
@@ -126,7 +147,7 @@ async def import_routes(names: list[str], force: bool) -> None:
                 route.length_km = round(ways_length_km(ways), 1)
                 session.add(route)
                 await session.commit()
-                print(f"  importiert: {entry['name']} ({len(ways)} Wege, {route.length_km:g} km Wege)")
+                print(f"  importiert: {entry['name']} ({len(ways)} Wege, {route.length_km:g} km Wege, {source})")
     await engine.dispose()
 
 
