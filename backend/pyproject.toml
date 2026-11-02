@@ -1,7 +1,7 @@
 [project]
 name = "adventure-planner"
 version = "0.1.0"
-description = "AgenticRAG-Abenteuerplaner (FastAPI + PydanticAI + pgvector)"
+description = "AgenticRAG-Abenteuerplaner (FastAPI + LangGraph + PydanticAI + pgvector)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.150",
@@ -13,6 +13,7 @@ dependencies = [
     "pydantic[email]>=2.14",
     "pydantic-settings>=2.16",
     "pydantic-ai-slim[openai]>=2.61",
+    "langgraph>=1.2",
     "langfuse>=5.0.4",
     "pwdlib[argon2]>=0.3",
     "pyjwt>=2.15",
