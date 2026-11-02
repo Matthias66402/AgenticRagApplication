@@ -83,9 +83,9 @@ async def test_run_case_measures_planner_and_research() -> None:
             run = await run_case(case, 1, http)
     assert run.error is None and run.output == "final_plan"
     assert run.tool_calls == {"research_knowledge": 1, "final_plan": 1}
-    # 2 Planer-Aufrufe (FunctionModel) + Recherche-Agent (TestModel aus conftest: Suche + Zusammenfassung)
-    assert run.requests_by_model == {"function::stream": 2, "test": 2}
-    assert run.requests == 4
+    # 2 Planer-Aufrufe (FunctionModel) + Intake (1) und Recherche-Agent (2: Suche + Zusammenfassung), beide TestModel
+    assert run.requests_by_model == {"function::stream": 2, "test": 3}
+    assert run.requests == 5
 
 
 def test_parallel_tool_time_counts_once() -> None:

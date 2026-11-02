@@ -5,7 +5,7 @@ Aufruf: ``python -m app.evaluation.planner [--repeat 2] [--case ID] [--label NAM
 Jede Anfrage läuft wie im Chat über den LangGraph-Graphen (echte Modelle, echte Tools) als erste Nachricht eines
 neuen Abenteuers. Gemessen:
 - Aufwand: Laufzeit, Modellaufrufe (auch je Modell, wegen des Anfragelimits je Modell), Eingabe-/Cache-/Ausgabe-/
-  Reasoning-Tokens und Kosten von Planer und Recherche-Agent (ohne die Relevanzprüfung der Wissensbasis)
+  Reasoning-Tokens und Kosten von Intake, Planer und Recherche-Agent (ohne die Relevanzprüfung der Wissensbasis)
 - Wiederholungen: Rückmeldungen an das Modell durch Validatoren oder Schemafehler
 - Qualität: erwarteter Ausgabetyp und fallabhängige Prüfungen (Pflichtsuchen, Tipps, Unterkünfte, Verbindungen)
 
@@ -37,6 +37,7 @@ from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
 from app.agent.graph import planner_graph
+from app.agent.intake import intake_agent
 from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
 from app.agent.planner import planner_agent
 from app.agent.research import research_agent
@@ -207,7 +208,7 @@ class RecordingModel(WrapperModel):
 
 
 # Agenten, deren Aufwand zählt (die Relevanzprüfung bewertet die Wissensbasis und wird separat evaluiert)
-MEASURED_AGENTS: list[Agent[AgentDeps, Any]] = [planner_agent, research_agent]
+MEASURED_AGENTS: list[Agent[Any, Any]] = [intake_agent, planner_agent, research_agent]
 
 
 @contextmanager
@@ -351,6 +352,7 @@ async def main(argv: list[str]) -> int:
             "label": args.label,
             "llm_model": settings.llm_model,
             "research_model": settings.research_model,
+            "intake_model": settings.intake_model or None,
             "reasoning_effort": settings.llm_reasoning_effort or None,
             "repeat": args.repeat,
         },
