@@ -64,7 +64,7 @@ def fake_research() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def no_prefetch() -> Iterator[None]:
     """Intake ohne LLM und ohne Vorab-Suche: Der Planer läuft wie ohne Intake (Tests mit Vorab-Suche: test_graph)."""
-    with intake_agent.override(model=TestModel(custom_output_args={"places": []})):
+    with intake_agent.override(model=TestModel(custom_output_args={"places": [], "research": None})):
         yield
 
 

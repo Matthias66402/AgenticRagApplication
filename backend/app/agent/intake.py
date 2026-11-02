@@ -1,10 +1,13 @@
-"""Intake: Ein kleines LLM bestimmt vorab die Orte, die der Planer für die aktuelle Nachricht nachschlagen muss.
+"""Intake: Ein kleines LLM bestimmt vorab, was der Planer für die aktuelle Nachricht sicher braucht: die Orte, die er
+nachschlagen muss, und bei einer neuen Tour den Auftrag für die Recherche in der Wissensbasis.
 
-Der Graph (app.agent.graph) sucht diese Orte per `geocode`, bevor der Planer startet, und fügt Aufrufe und Ergebnisse
-in dessen Verlauf ein. Das spart dem Planer die erste Runde, in der er sonst nur Start und Ziel nachschlägt. Ein
-Fehler hier ist unkritisch: Der Planer kann jeden Ort selbst (erneut) suchen.
+Der Graph (app.agent.graph) führt `geocode` und `research_knowledge` damit parallel aus, bevor der Planer startet,
+und fügt Aufrufe und Ergebnisse in dessen Verlauf ein. Das spart dem Planer Runden, und die vor jedem Plan
+verlangte Recherche steht sicher im Verlauf. Ein Fehler hier ist unkritisch: Der Planer kann jedes Tool selbst
+(erneut) aufrufen.
 """
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -12,7 +15,11 @@ from pydantic_ai import Agent, ToolOutput
 
 from app.agent.deps import AgentDeps
 from app.agent.models import build_model
+from app.agent.plan_schema import AccommodationType, TransportMode
 from app.config import get_settings
+
+# Recherche-Tools im Verlauf; search_knowledge: frühere Abenteuer, in denen der Planer noch selbst gesucht hat
+RESEARCH_TOOLS = {"research_knowledge", "search_knowledge"}
 
 MAX_OUTPUT_TOKENS = 1000
 # Intake darf die Planung nicht ausbremsen: ohne Wiederholungen nach kurzer Zeit ohne Vorab-Suche weiter
@@ -38,6 +45,16 @@ Zusätze wie "Bahnhof von". Setze `country_codes`, wenn das Land eindeutig ist (
 Gib eine leere Liste aus, wenn die Nachricht keinen Ort nennt oder offen lässt, welcher gemeint ist, und bei
 Folgenachrichten, die nur einen bestehenden Plan ändern, ohne neue Orte zu nennen (z. B. "Tag 2 kürzer").
 Orte, die laut Kontext schon nachgeschlagen wurden, nicht noch einmal ausgeben.
+
+Recherche (`research`): Vor jedem neuen Tourenplan durchsucht ein Recherche-Agent die Wissensbasis. Fülle
+`research` nur, wenn der Nutzer eine Tour (Wandern, Rad, MTB, Kanu, Auto) plant und sowohl Region bzw. Route als
+auch Fortbewegungsart feststehen (auch aus dem Kontext oder der Standard-Fortbewegungsart des Profils); sonst null,
+insbesondere bei reiner Bahnauskunft, bei Rad bzw. Fußweg nur zum Bahnhof und wenn die Region noch offen ist.
+- `region`: Ortsname bzw. Name des Fernwegs, z. B. "Oldenburg", "Harz" oder "Nordseeküsten-Radweg" (bei einer Tour
+  entlang einer Küste oder eines Flusses der passende Fernweg, z. B. "entlang der Elbe" → "Elberadweg").
+- `accommodation_type`: bei mehrtägigen Touren die gewünschte Übernachtungsart (bei mehreren die erste), sonst null.
+- `extra_topic`: höchstens ein Zusatzthema, sonst null. Bei Rad- oder MTB-Touren mit An- oder Abreise per Bahn
+  "Fahrradmitnahme in der Bahn", bei Wildcampen bzw. Shelter-Übernachtung "Wildcampen in <Land>".
 """
 
 
@@ -46,8 +63,25 @@ class PlaceQuery(BaseModel):
     country_codes: str | None = Field(default=None, description="Kommagetrennte ISO-Ländercodes, z. B. \"de\"")
 
 
+class ResearchRequest(BaseModel):
+    """Argumente für research_knowledge (app.agent.tools.research)."""
+
+    region: str = Field(description="Region, Ort oder Route, z. B. \"Harz\" oder \"Nordseeküsten-Radweg\"")
+    transport: TransportMode
+    accommodation_type: AccommodationType | None = None
+    extra_topic: str | None = Field(default=None, description="Höchstens ein Zusatzthema")
+
+
 class IntakeResult(BaseModel):
     places: list[PlaceQuery] = Field(description="Orte, die der Planer für diese Nachricht nachschlagen muss")
+    research: ResearchRequest | None = Field(description="Recherche für eine neue Tour, sonst null")
+
+
+class Prefetch(BaseModel):
+    """Was der Graph vor dem Planer ausführt."""
+
+    places: list[PlaceQuery] = Field(default_factory=list)
+    research: ResearchRequest | None = None
 
 
 def build_intake_agent() -> Agent[None, IntakeResult]:
@@ -65,31 +99,39 @@ def build_intake_agent() -> Agent[None, IntakeResult]:
 intake_agent = build_intake_agent()
 
 
-def conversation_context(history_json: list[Any]) -> tuple[list[str], str | None, set[str]]:
-    """Aus dem gespeicherten Verlauf (PydanticAI-JSON): letzte Nutzernachrichten, letzte Rückfrage des Planers und
-    bereits nachgeschlagene Orte (klein geschrieben)."""
-    user_messages: list[str] = []
-    question: str | None = None
-    geocoded: set[str] = set()
+@dataclass
+class ConversationContext:
+    """Aus dem gespeicherten Verlauf (PydanticAI-JSON) für das Intake."""
+
+    user_messages: list[str] = field(default_factory=list)  # letzte Nutzernachrichten, älteste zuerst
+    question: str | None = None  # letzte Rückfrage des Planers
+    geocoded: set[str] = field(default_factory=set)  # bereits nachgeschlagene Orte, klein geschrieben
+    researched: bool = False  # Wissensbasis schon durchsucht
+
+
+def conversation_context(history_json: list[Any]) -> ConversationContext:
+    context = ConversationContext()
     for message in history_json:
         for part in message.get("parts", []):
             kind = part.get("part_kind")
             if kind == "user-prompt" and isinstance(part.get("content"), str):
-                user_messages.append(part["content"])
+                context.user_messages.append(part["content"])
             elif kind == "tool-call":
+                tool_name = part.get("tool_name")
+                context.researched |= tool_name in RESEARCH_TOOLS
                 args = part.get("args")
-                if isinstance(args, str):
+                if not isinstance(args, dict):
                     continue  # unvollständige Argumente; für den Kontext unwichtig
-                if part.get("tool_name") == "ask_user":
-                    question = (args or {}).get("question")
-                elif part.get("tool_name") == "geocode" and (args or {}).get("place_name"):
-                    geocoded.add(args["place_name"].strip().lower())
-    return user_messages[-RECENT_USER_MESSAGES:], question, geocoded
+                if tool_name == "ask_user":
+                    context.question = args.get("question")
+                elif tool_name == "geocode" and args.get("place_name"):
+                    context.geocoded.add(args["place_name"].strip().lower())
+    context.user_messages = context.user_messages[-RECENT_USER_MESSAGES:]
+    return context
 
 
-def intake_prompt(message: str, history_json: list[Any], deps: AgentDeps) -> tuple[str, set[str]]:
-    """Prompt für das Intake und die schon nachgeschlagenen Orte."""
-    earlier, question, geocoded = conversation_context(history_json)
+def intake_prompt(message: str, context: ConversationContext, deps: AgentDeps) -> str:
+    earlier, question, geocoded = context.user_messages, context.question, context.geocoded
     lines = ["Profil-Vorgaben:"]
     lines.append(f"- Wohnadresse: {deps.home or 'keine'}")
     lines.append(f"- Standard-Fortbewegungsart: {deps.default_transport or 'keine'}")
@@ -101,18 +143,25 @@ def intake_prompt(message: str, history_json: list[Any], deps: AgentDeps) -> tup
     if geocoded:
         lines.append("Schon nachgeschlagen: " + ", ".join(sorted(geocoded)))
     lines.append(f"NEUE Nachricht: {message}")
-    return "\n".join(lines), geocoded
+    return "\n".join(lines)
 
 
-async def places_to_geocode(message: str, history_json: list[Any], deps: AgentDeps) -> list[PlaceQuery]:
-    """Orte für die Vorab-Suche; ohne Intake-Modell leer. Fehler gibt der Aufrufer weiter (Graph fängt sie ab)."""
+async def plan_prefetch(message: str, history_json: list[Any], deps: AgentDeps) -> Prefetch:
+    """Was vor dem Planer laufen soll; ohne Intake-Modell nichts. Fehler gibt der Aufrufer weiter (Graph fängt sie ab).
+
+    Bereits nachgeschlagene Orte und eine Recherche, die schon im Verlauf steht, filtert der Code heraus, nicht das LLM.
+    """
     if not get_settings().intake_model:
-        return []
-    prompt, geocoded = intake_prompt(message, history_json, deps)
-    result = await intake_agent.run(prompt)
+        return Prefetch()
+    context = conversation_context(history_json)
+    result = await intake_agent.run(intake_prompt(message, context, deps))
     unique: dict[tuple[str, str | None], PlaceQuery] = {}
     for place in result.output.places:
         name = place.place_name.strip()
-        if name and name.lower() not in geocoded:
-            unique.setdefault((name.lower(), place.country_codes), PlaceQuery(place_name=name, country_codes=place.country_codes))
-    return list(unique.values())
+        if name and name.lower() not in context.geocoded:
+            key = (name.lower(), place.country_codes)
+            unique.setdefault(key, PlaceQuery(place_name=name, country_codes=place.country_codes))
+    research = result.output.research
+    if research is not None and (context.researched or not research.region.strip()):
+        research = None
+    return Prefetch(places=list(unique.values()), research=research)

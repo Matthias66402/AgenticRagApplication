@@ -14,13 +14,14 @@ from pydantic_ai.models.test import TestModel
 
 from app.agent.deps import AgentDeps
 from app.agent.graph import planner_graph
-from app.agent.intake import conversation_context, intake_agent, intake_prompt, places_to_geocode
+from app.agent.intake import conversation_context, intake_agent, intake_prompt, plan_prefetch
+from app.agent.plan_schema import TransportMode
 from app.agent.planner import planner_agent
 from app.agent.tools import geocode as geocode_module
 from app.agent.runner import RunOutcome, run_planner
 from app.config import get_settings
 from app.db import SessionLocal
-from tests.test_agent import scripted_model
+from tests.test_agent import RESEARCH, make_plan, scripted_model
 
 QUESTION = ("ask_user", {"question": "Wo startest Du?", "missing_fields": ["start"]})
 
@@ -109,8 +110,8 @@ async def test_runner_reports_agent_errors(deps: AgentDeps) -> None:
 GARMISCH = {"display_name": "Garmisch-Partenkirchen", "lat": "47.49", "lon": "11.09", "category": "place", "type": "town"}
 
 
-def intake_finds(*places: dict[str, Any]) -> Any:
-    return intake_agent.override(model=TestModel(custom_output_args={"places": list(places)}))
+def intake_finds(*places: dict[str, Any], research: dict[str, Any] | None = None) -> Any:
+    return intake_agent.override(model=TestModel(custom_output_args={"places": list(places), "research": research}))
 
 
 @respx.mock
@@ -176,22 +177,59 @@ def test_intake_context_from_history(deps: AgentDeps) -> None:
             {"part_kind": "tool-call", "tool_name": "ask_user", "args": {"question": "Wohin soll es gehen?"}},
         ]},
     ]  # fmt: skip
-    earlier, question, geocoded = conversation_context(history)
-    assert (earlier, question, geocoded) == (["Wanderung morgen"], "Wohin soll es gehen?", {"garmisch-partenkirchen"})
+    context = conversation_context(history)
+    assert context.user_messages == ["Wanderung morgen"] and context.question == "Wohin soll es gehen?"
+    assert context.geocoded == {"garmisch-partenkirchen"} and context.researched is False
     deps.home = "Nelkenstraße 10, 26121 Oldenburg"
-    prompt, _ = intake_prompt("Nach Mittenwald", history, deps)
+    prompt = intake_prompt("Nach Mittenwald", context, deps)
     assert "Wohnadresse: Nelkenstraße 10" in prompt and "Letzte Rückfrage des Planers: Wohin" in prompt
     assert prompt.endswith("NEUE Nachricht: Nach Mittenwald")
 
 
-async def test_already_geocoded_places_are_skipped(deps: AgentDeps) -> None:
-    history = [{"kind": "response", "parts": [
-        {"part_kind": "tool-call", "tool_name": "geocode", "args": {"place_name": "Garmisch-Partenkirchen"}},
-    ]}]  # fmt: skip
+GEOCODED_AND_RESEARCHED = [{"kind": "response", "parts": [
+    {"part_kind": "tool-call", "tool_name": "geocode", "args": {"place_name": "Garmisch-Partenkirchen"}},
+    {"part_kind": "tool-call", "tool_name": "research_knowledge", "args": RESEARCH},
+]}]  # fmt: skip
+
+
+async def test_prefetch_skips_what_history_already_has(deps: AgentDeps) -> None:
     found = ({"place_name": "garmisch-partenkirchen"}, {"place_name": "Mittenwald"}, {"place_name": " Mittenwald "})
-    with intake_finds(*found):
-        places = await places_to_geocode("Weiter nach Mittenwald", history, deps)
-    assert [p.place_name for p in places] == ["Mittenwald"]
+    with intake_finds(*found, research=RESEARCH):
+        prefetch = await plan_prefetch("Weiter nach Mittenwald", GEOCODED_AND_RESEARCHED, deps)
+    assert [p.place_name for p in prefetch.places] == ["Mittenwald"]
+    assert prefetch.research is None  # Recherche steht schon im Verlauf
+    with intake_finds(research=RESEARCH):
+        prefetch = await plan_prefetch("Wanderung ab Garmisch", [], deps)
+    assert prefetch.research is not None and prefetch.research.transport == TransportMode.hiking
+
+
+@respx.mock
+async def test_prefetched_research_satisfies_planner(deps: AgentDeps) -> None:
+    """Geocoding und Recherche laufen parallel vor dem Planer; der Plan besteht den Validator, ohne dass der Planer
+    selbst recherchiert."""
+    respx.get(geocode_module.NOMINATIM_URL).respond(json=[GARMISCH])
+    geocode_module._cache.clear()
+    seen: dict[str, Any] = {}
+
+    async def planner_step(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[DeltaToolCalls]:
+        seen["messages"] = messages
+        yield {0: DeltaToolCall(name="final_plan", json_args=json.dumps(make_plan()))}
+
+    with intake_finds({"place_name": "Garmisch-Partenkirchen"}, research=RESEARCH):
+        with planner_agent.override(model=FunctionModel(stream_function=planner_step)):
+            nodes = await visited_nodes(deps, "Tageswanderung ab Garmisch morgen")
+            events, outcome = await collect("Tageswanderung ab Garmisch morgen", deps)
+
+    assert len(nodes) == 5 and nodes[0] == "intake" and nodes[-2:] == ["planner", "finish_plan"]  # Planer nur einmal
+    assert sorted(nodes[1:3]) == ["prefetch_geocode", "prefetch_research"]  # parallel, Reihenfolge beliebig
+    # Feste Reihenfolge im Verlauf: Orte vor Recherche
+    call_names = [p.tool_name for p in seen["messages"][1].parts]
+    assert call_names == ["geocode", "research_knowledge"]
+    research_call = seen["messages"][1].parts[1]
+    assert research_call.args == {"region": "Garmisch", "transport": "hiking"}  # JSON wie vom Modell
+    assert outcome.plan is not None and outcome.error is None
+    assert sorted(c["tool"] for c in outcome.tool_calls) == ["geocode", "research_knowledge"]
+    assert {e["type"] for e in events} == {"tool_call", "tool_result"}
 
 
 async def test_runner_keeps_partial_outcome_when_client_disconnects(deps: AgentDeps) -> None:
