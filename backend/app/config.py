@@ -38,9 +38,10 @@ class Settings(BaseSettings):
     relevance_model: str = "openai:gpt-4o-mini"
     # Recherche-Agent, an den der Planer die Suche in der Wissensbasis delegiert (app.agent.research)
     research_model: str = "openai:gpt-4.1-mini"
-    # Bestimmt vorab die Orte, die der Graph vor dem Planer nachschlägt (app.agent.intake); leer = aus.
-    # Eigenes Modell, weil OpenAI das Anfragelimit je Modell zählt und gpt-4.1-mini schon Recherche und Relevanz trägt.
-    intake_model: str = "openai:gpt-4o-mini"
+    # Bestimmt vorab, was der Graph vor dem Planer ausführt (app.agent.intake); leer = aus.
+    # OpenAI zählt das Anfragelimit je Modell: Auf gpt-4.1-mini läuft sonst nur der Recherche-Agent (~1-2 Anfragen je
+    # Nachricht), die Relevanzprüfung auf gpt-4o-mini braucht bis zu 5 je Recherche.
+    intake_model: str = "openai:gpt-4.1-mini"
 
     ors_api_key: str = ""
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"
