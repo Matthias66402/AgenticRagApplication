@@ -2,9 +2,10 @@
 
 Aufruf: ``python -m app.evaluation.planner [--repeat 2] [--case ID] [--label NAME] [--output bericht.json]``
 
-Jede Anfrage läuft wie im Chat (echtes Modell, echte Tools) als erste Nachricht eines neuen Abenteuers. Gemessen:
-- Aufwand: Laufzeit, Modellaufrufe, Eingabe-/Cache-/Ausgabe-/Reasoning-Tokens und Kosten des Planers
-  (ohne die Relevanzprüfung der Wissensbasis)
+Jede Anfrage läuft wie im Chat über den LangGraph-Graphen (echte Modelle, echte Tools) als erste Nachricht eines
+neuen Abenteuers. Gemessen:
+- Aufwand: Laufzeit, Modellaufrufe (auch je Modell, wegen des Anfragelimits je Modell), Eingabe-/Cache-/Ausgabe-/
+  Reasoning-Tokens und Kosten von Planer und Recherche-Agent (ohne die Relevanzprüfung der Wissensbasis)
 - Wiederholungen: Rückmeldungen an das Modell durch Validatoren oder Schemafehler
 - Qualität: erwarteter Ausgabetyp und fallabhängige Prüfungen (Pflichtsuchen, Tipps, Unterkünfte, Verbindungen)
 
@@ -19,20 +20,26 @@ import json
 import statistics
 import sys
 import time
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import ExitStack, asynccontextmanager, contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 import httpx
 from pydantic_ai import (
-    AgentRunResultEvent, FunctionToolCallEvent, FunctionToolResultEvent, ModelMessage, ModelRequest, ModelResponse,
-    RetryFeedbackPart, ToolCallPart, ToolReturnPart,
+    Agent, ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, RetryFeedbackPart, RunContext,
+    ToolCallPart, ToolReturnPart,
 )  # fmt: skip
+from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
+from pydantic_ai.models.wrapper import WrapperModel
+from pydantic_ai.settings import ModelSettings
 
 from app.agent.deps import AgentDeps
+from app.agent.graph import planner_graph
 from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
 from app.agent.planner import planner_agent
-from app.agent.runner import USAGE_LIMITS
+from app.agent.research import research_agent
 from app.config import get_settings
 from app.db import SessionLocal, engine
 
@@ -59,6 +66,8 @@ class CaseRun:
     error: str | None = None
     seconds: float = 0.0
     requests: int = 0
+    # Modellname -> Aufrufe; OpenAI zählt das Anfragelimit je Modell
+    requests_by_model: dict[str, int] = field(default_factory=dict)
     input_tokens: int = 0
     cache_read_tokens: int = 0
     output_tokens: int = 0
@@ -140,23 +149,76 @@ def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage]
 
 
 def measure(run: CaseRun, messages: list[ModelMessage]) -> None:
+    """Tool-Aufrufe und Retries aus dem Verlauf des Planers (inkl. vom Graphen eingefügter Tool-Aufrufe)."""
     for message in messages:
         if isinstance(message, ModelResponse):
-            usage = message.usage
-            run.requests += 1
-            run.input_tokens += usage.input_tokens
-            run.cache_read_tokens += usage.cache_read_tokens
-            run.output_tokens += usage.output_tokens
-            run.reasoning_tokens += usage.details.get("reasoning_tokens", 0)
-            try:
-                run.cost_usd += float(message.cost().total_price)
-            except Exception:  # Modell ohne Preisangabe (z. B. in Tests)
-                pass
             for part in message.parts:
                 if isinstance(part, ToolCallPart):
                     run.tool_calls[part.tool_name] = run.tool_calls.get(part.tool_name, 0) + 1
         else:
             run.retries += sum(retry_feedback(part) is not None for part in message.parts)
+
+
+def measure_usage(run: CaseRun, responses: list[ModelResponse]) -> None:
+    """Aufrufe, Tokens und Kosten aller aufgezeichneten Modellantworten (Planer, Recherche-Agent, …)."""
+    for response in responses:
+        usage = response.usage
+        run.requests += 1
+        model = response.model_name or "unbekannt"
+        run.requests_by_model[model] = run.requests_by_model.get(model, 0) + 1
+        run.input_tokens += usage.input_tokens
+        run.cache_read_tokens += usage.cache_read_tokens
+        run.output_tokens += usage.output_tokens
+        run.reasoning_tokens += usage.details.get("reasoning_tokens", 0)
+        try:
+            run.cost_usd += float(response.cost().total_price)
+        except Exception:  # Modell ohne Preisangabe (z. B. in Tests)
+            pass
+
+
+class RecordingModel(WrapperModel):
+    """Zeichnet jede Modellantwort auf, auch die von Agenten, die als Tool oder eigener Knoten laufen."""
+
+    def __init__(self, wrapped: Model | str, responses: list[ModelResponse]) -> None:
+        super().__init__(wrapped)
+        self.responses = responses
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        response = await super().request(messages, model_settings, model_request_parameters)
+        self.responses.append(response)
+        return response
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        run_context: RunContext[Any] | None = None,
+    ) -> AsyncGenerator[StreamedResponse]:
+        async with super().request_stream(messages, model_settings, model_request_parameters, run_context) as stream:
+            yield stream
+        self.responses.append(stream.get())
+
+
+# Agenten, deren Aufwand zählt (die Relevanzprüfung bewertet die Wissensbasis und wird separat evaluiert)
+MEASURED_AGENTS: list[Agent[AgentDeps, Any]] = [planner_agent, research_agent]
+
+
+@contextmanager
+def recording(responses: list[ModelResponse]) -> Iterator[None]:
+    with ExitStack() as stack:
+        for agent in MEASURED_AGENTS:
+            # Das gerade wirksame Modell inkl. eines äußeren override (z. B. in Tests); agent.model kennt das nicht.
+            # Private Methode von PydanticAI, öffentlich gibt es dafür nichts.
+            model = agent._get_model_outside_run()  # pyright: ignore[reportPrivateUsage]
+            stack.enter_context(agent.override(model=RecordingModel(model, responses)))
+        yield
 
 
 def covered_seconds(spans: list[tuple[float, float]]) -> float:
@@ -175,36 +237,37 @@ async def run_case(case: dict[str, Any], number: int, http: httpx.AsyncClient) -
     started = time.perf_counter()
     tool_started: dict[str, float] = {}
     tool_spans: list[tuple[float, float]] = []
-    result = None
+    responses: list[ModelResponse] = []
+    state: dict[str, Any] = {}
     try:
-        async with planner_agent.run_stream_events(
-            case["message"], deps=deps, usage_limits=USAGE_LIMITS
-        ) as events:
-            async for event in events:
-                if isinstance(event, FunctionToolCallEvent):
-                    tool_started[event.part.tool_call_id] = time.perf_counter()
-                elif isinstance(event, FunctionToolResultEvent) and event.part.tool_call_id in tool_started:
-                    tool_spans.append((tool_started.pop(event.part.tool_call_id), time.perf_counter()))
-                elif isinstance(event, AgentRunResultEvent):
-                    result = event.result
+        with recording(responses):
+            graph_input = {"message": case["message"], "history_json": []}
+            async for mode, chunk in planner_graph.astream(graph_input, context=deps, stream_mode=["custom", "values"]):
+                if mode == "values":
+                    state = chunk
+                elif chunk["type"] == "tool_call":
+                    tool_started[chunk["id"]] = time.perf_counter()
+                elif chunk["type"] == "tool_result" and chunk["id"] in tool_started:
+                    tool_spans.append((tool_started.pop(chunk["id"]), time.perf_counter()))
     except Exception as exc:  # Abbruch zählt als nicht bestanden, die übrigen Fälle laufen weiter
         run.error = f"{type(exc).__name__}: {exc}"
     run.seconds = round(time.perf_counter() - started, 1)
     run.tool_seconds = round(covered_seconds(tool_spans), 1)
-    if result is None:
-        run.error = run.error or "Kein Ergebnis"
+    measure_usage(run, responses)
+    run.cost_usd = round(run.cost_usd, 4)
+    output = state.get("output")
+    if output is None or not state.get("new_history_json"):
+        run.error = run.error or state.get("error") or "Kein Ergebnis"
         return run
-    messages = result.all_messages()
+    messages = ModelMessagesTypeAdapter.validate_python(state["new_history_json"])
     measure(run, messages)
-    run.output = OUTPUT_NAMES.get(type(result.output))
-    output = result.output
+    run.output = OUTPUT_NAMES.get(type(output))
     run.text = (
         output.question if isinstance(output, ClarificationQuestion)
         else output.message if isinstance(output, TextAnswer)
         else output.title
     )  # fmt: skip
-    run.checks = check_output(case, result.output, messages, deps)
-    run.cost_usd = round(run.cost_usd, 4)
+    run.checks = check_output(case, output, messages, deps)
     return run
 
 
@@ -212,6 +275,7 @@ def summarize(runs: list[CaseRun]) -> dict[str, Any]:
     def mean(attr: str) -> float:
         return round(statistics.mean(getattr(r, attr) for r in runs), 1) if runs else 0.0
 
+    models = sorted({model for r in runs for model in r.requests_by_model})
     return {
         "runs": len(runs),
         "passed": sum(r.passed for r in runs),
@@ -220,6 +284,9 @@ def summarize(runs: list[CaseRun]) -> dict[str, Any]:
         "mean_seconds": mean("seconds"),
         "mean_tool_seconds": mean("tool_seconds"),
         "mean_requests": mean("requests"),
+        "mean_requests_by_model": {
+            model: round(statistics.mean(r.requests_by_model.get(model, 0) for r in runs), 1) for model in models
+        },
         "mean_input_tokens": mean("input_tokens"),
         "mean_cache_read_tokens": mean("cache_read_tokens"),
         "mean_output_tokens": mean("output_tokens"),
@@ -250,6 +317,8 @@ def print_report(report: dict[str, Any]) -> None:
           f"{s['mean_requests']:.1f} Aufrufe · "
           f"Eingabe {s['mean_input_tokens']:.0f} (Cache {s['mean_cache_read_tokens']:.0f}) · "
           f"Ausgabe {s['mean_output_tokens']:.0f} (Reasoning {s['mean_reasoning_tokens']:.0f})")  # fmt: skip
+    by_model = " · ".join(f"{model} {n:.1f}" for model, n in s["mean_requests_by_model"].items())
+    print(f"Mittlere Aufrufe je Modell: {by_model or '–'}")
     print(f"\n{'Fall':18} {'Lauf':>4} {'Zeit':>6} {'Tools':>6} {'Aufr.':>5} {'Eingabe':>8} {'Ausgabe':>8} {'Reas.':>6} "
           f"{'Wdh.':>4}  Ergebnis")  # fmt: skip
     for r in report["cases"]:
@@ -281,6 +350,7 @@ async def main(argv: list[str]) -> int:
         "config": {
             "label": args.label,
             "llm_model": settings.llm_model,
+            "research_model": settings.research_model,
             "reasoning_effort": settings.llm_reasoning_effort or None,
             "repeat": args.repeat,
         },
