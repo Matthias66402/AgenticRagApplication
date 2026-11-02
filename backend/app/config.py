@@ -39,9 +39,10 @@ class Settings(BaseSettings):
     # Recherche-Agent, an den der Planer die Suche in der Wissensbasis delegiert (app.agent.research)
     research_model: str = "openai:gpt-4.1-mini"
     # Bestimmt vorab, was der Graph vor dem Planer ausführt (app.agent.intake); leer = aus.
-    # OpenAI zählt das Anfragelimit je Modell: Auf gpt-4.1-mini läuft sonst nur der Recherche-Agent (~1-2 Anfragen je
-    # Nachricht), die Relevanzprüfung auf gpt-4o-mini braucht bis zu 5 je Recherche.
-    intake_model: str = "openai:gpt-4.1-mini"
+    # gpt-4o-mini ordnet Übernachtungsarten zuverlässiger zu als gpt-4.1-mini (z. B. Shelter → bivouac statt hut).
+    # Es teilt sich das Anfragelimit mit der Relevanzprüfung, die seit der gebündelten Bewertung nur 1-2 Anfragen je
+    # Recherche braucht.
+    intake_model: str = "openai:gpt-4o-mini"
 
     ors_api_key: str = ""
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"

@@ -31,7 +31,8 @@ async def search_knowledge(ctx: RunContext[AgentDeps], query: str) -> list[dict[
         retrieval.update(output=[{"document": c.document, "heading": c.heading, "score": c.score} for c in chunks])
     if not chunks:
         return tool_error("Nichts Passendes in der Wissensbasis gefunden.")
-    graded = await grade_hits(query, chunks)
+    # Parallele Suchen desselben Chat-Durchlaufs (eigene deps je Durchlauf) gemeinsam in einem Aufruf bewerten
+    graded = await grade_hits(query, chunks, batch_key=id(ctx.deps))
     if not graded.kept:
         titles = ", ".join(dict.fromkeys(f"„{c.document}“" for c in graded.discarded))
         return tool_error(

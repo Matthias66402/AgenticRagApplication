@@ -9,7 +9,8 @@ Für jede Testfrage werden die besten RANK_DEPTH Abschnitte ohne Mindestähnlich
 - Fehlkontext: Anteil der nicht beantwortbaren Fragen, für die trotzdem Abschnitte über der Mindestähnlichkeit kommen
 - Schwellen-Sweep: Recall und Fehlkontext für verschiedene Mindestähnlichkeiten
 - mit --grade zusätzlich Recall und Fehlkontext nach der Relevanzprüfung (app/rag/relevance.py), wie sie
-  search_knowledge anwendet; kostet je Frage einen Aufruf von RELEVANCE_MODEL
+  search_knowledge anwendet; kostet je Frage einen Aufruf von RELEVANCE_MODEL. Mit --batch N werden je N Fragen
+  gemeinsam bewertet, wie die parallelen Suchen einer Recherche (z. B. --batch 4)
 """
 
 import argparse
@@ -27,7 +28,7 @@ from sqlalchemy import func, select
 from app.config import get_settings
 from app.db import SessionLocal, engine
 from app.models import Chunk, Document
-from app.rag.relevance import grade_hits
+from app.rag.relevance import GradeRequest, grade_batch, grade_hits
 from app.rag.retrieve import MIN_SCORE, TOP_K, RetrievedChunk, search_chunks
 
 CASES_FILE = Path(__file__).parent / "retrieval_cases.json"
@@ -165,33 +166,62 @@ async def grade_with_retry(query: str, hits: list[RetrievedChunk]) -> tuple[list
     return hits, failures
 
 
-async def run(grade: bool = False) -> dict[str, Any]:
+async def grade_batch_with_retry(requests: list[GradeRequest]) -> tuple[list[list[RetrievedChunk]], int]:
+    """Wie grade_with_retry für mehrere Suchanfragen in einem Aufruf (wie bei einer Recherche)."""
+    failures = 0
+    for attempt in range(GRADE_ATTEMPTS):
+        graded = await grade_batch(requests)
+        if not any(g.failed for g in graded):
+            return [g.kept for g in graded], failures
+        failures += 1
+        if attempt < GRADE_ATTEMPTS - 1:
+            await asyncio.sleep(GRADE_RETRY_SECONDS)
+    return [hits for _, hits in requests], failures
+
+
+def batch_groups(count: int, size: int) -> list[list[int]]:
+    """Fragen reihum auf Gruppen verteilen: Jede Gruppe mischt wie eine Recherche verschiedene Themen (die Testfälle
+    stehen nach Kategorie sortiert)."""
+    groups = -(-count // size)
+    return [list(range(start, count, groups)) for start in range(groups)]
+
+
+async def run(grade: bool = False, batch: int = 1) -> dict[str, Any]:
     cases = json.loads(CASES_FILE.read_text(encoding="utf-8"))["cases"]
     settings = get_settings()
     async with SessionLocal() as session:
         documents = await session.scalar(select(func.count(Document.id)))
         chunks = await session.scalar(select(func.count(Chunk.id)))
-        results = []
-        grade_failures = 0
-        ungraded = 0
-        for number, case in enumerate(cases, start=1):
-            retrieved = await search_chunks(session, case["query"], top_k=RANK_DEPTH, min_score=0.0)
-            kept = None
-            if grade:
-                # Was search_knowledge weitergibt: Top-k über der Mindestähnlichkeit, danach Relevanzprüfung
-                delivered_hits = [c for c in retrieved[:TOP_K] if c.score >= MIN_SCORE]
-                kept_hits, failures = await grade_with_retry(case["query"], delivered_hits)
-                grade_failures += failures
-                ungraded += failures == GRADE_ATTEMPTS
-                kept = {i for i, c in enumerate(retrieved) if any(c is k for k in kept_hits)}
-                print(f"  {number}/{len(cases)} {case['id']}" + (f" ({failures} Fehlversuche)" if failures else ""),
-                      file=sys.stderr, flush=True)  # fmt: skip
-            results.append(evaluate_case(case, retrieved, kept))
+        retrieved_all = [
+            await search_chunks(session, case["query"], top_k=RANK_DEPTH, min_score=0.0) for case in cases
+        ]
+    kept_all: list[set[int] | None] = [None] * len(cases)
+    grade_failures = 0
+    ungraded = 0
+    if grade:
+        for number, group in enumerate(batch_groups(len(cases), batch), start=1):
+            # Was search_knowledge weitergibt: Top-k über der Mindestähnlichkeit, danach Relevanzprüfung
+            requests = [
+                (cases[i]["query"], [c for c in retrieved_all[i][:TOP_K] if c.score >= MIN_SCORE]) for i in group
+            ]
+            if batch == 1:
+                kept_hits, failures = await grade_with_retry(*requests[0])
+                kept_lists = [kept_hits]
+            else:
+                kept_lists, failures = await grade_batch_with_retry(requests)
+            grade_failures += failures
+            ungraded += len(group) if failures == GRADE_ATTEMPTS else 0
+            for i, kept_hits in zip(group, kept_lists, strict=True):
+                kept_all[i] = {n for n, c in enumerate(retrieved_all[i]) if any(c is k for k in kept_hits)}
+            ids = ", ".join(cases[i]["id"] for i in group)
+            print(f"  {number} {ids}" + (f" ({failures} Fehlversuche)" if failures else ""), file=sys.stderr, flush=True)
+    results = [evaluate_case(case, retrieved, kept) for case, retrieved, kept in zip(cases, retrieved_all, kept_all)]
     return {
         "created_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "config": {
             "embedding_model": settings.embedding_model,
             "relevance_model": settings.relevance_model if grade else None,
+            "grade_batch": batch if grade else None,
             "grade_failures": grade_failures if grade else None,
             "ungraded_cases": ungraded if grade else None,
             "top_k": TOP_K,
@@ -214,7 +244,8 @@ def print_report(report: dict[str, Any]) -> None:
           f"Fehlkontext bei nicht beantwortbaren Fragen: {s['false_context_rate']:.0%}")  # fmt: skip
     if "recall_graded" in s:
         c = report["config"]
-        print(f"Nach Relevanzprüfung ({c['relevance_model']}): Recall {s['recall_graded']:.0%} · "
+        print(f"Nach Relevanzprüfung ({c['relevance_model']}, {c.get('grade_batch') or 1} Fragen je Aufruf): "
+              f"Recall {s['recall_graded']:.0%} · "
               f"Fehlkontext {s['false_context_graded']:.0%} · {c['grade_failures']} Fehlversuche, "
               f"{c['ungraded_cases']} Fragen ungeprüft")  # fmt: skip
         for case in report["cases"]:
@@ -237,11 +268,14 @@ async def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, help="Bericht zusätzlich als JSON speichern")
     parser.add_argument("--grade", action="store_true", help="Auch die Relevanzprüfung messen (LLM-Aufrufe)")
+    parser.add_argument(
+        "--batch", type=int, default=1, help="Mit --grade: so viele Fragen je Aufruf bewerten, wie bei einer Recherche"
+    )
     args = parser.parse_args(argv)
     # Fehlversuche zählt die Auswertung selbst; die Warnung je Fehlschlag würde die Ausgabe überfluten
     logging.getLogger("app.rag.relevance").setLevel(logging.ERROR)
     try:
-        report = await run(grade=args.grade)
+        report = await run(grade=args.grade, batch=max(1, args.batch))
     finally:
         await engine.dispose()
     print_report(report)
