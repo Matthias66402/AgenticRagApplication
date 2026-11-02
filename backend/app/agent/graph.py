@@ -195,6 +195,8 @@ def planner_history(state: PlannerState) -> tuple[str | None, list[ModelMessage]
 async def planner(state: PlannerState, runtime: Runtime[AgentDeps]) -> PlannerState:
     """Führt den PydanticAI-Planer aus und streamt dessen Arbeit als UI-Events."""
     prompt, history = planner_history(state)
+    # Startdatum aus dem Intake: über die Anweisungen dieses Laufs, nicht als Teil der Nutzernachricht
+    runtime.context.intake_note = (state.get("prefetch") or Prefetch()).planner_note()
     try:
         async with planner_agent.run_stream_events(
             prompt, deps=runtime.context, message_history=history, usage_limits=USAGE_LIMITS

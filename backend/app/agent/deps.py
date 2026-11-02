@@ -26,3 +26,6 @@ class AgentDeps:
     routes: dict[str, list[list[float]]] = field(default_factory=dict)
     # Fahrplanabfragen dieses Laufs: Schlüssel aus den Suchparametern -> Abfrage samt Verbindungen
     train_queries: dict[tuple[Any, ...], dict[str, Any]] = field(default_factory=dict)
+    # Hinweis aus dem Intake für die Anweisungen des Planers in diesem Lauf (z. B. aufgelöstes Startdatum); nicht in
+    # der Nutzernachricht, weil er nur für die aktuelle Nachricht gilt und spätere Läufe ihn sonst als Nutzertext läsen
+    intake_note: str | None = None

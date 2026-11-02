@@ -88,6 +88,8 @@ class CaseRun:
     # fertig war (s ab Start), z. B. Ende der Vorab-Phase und des Planers
     tool_durations: dict[str, float] = field(default_factory=dict)
     node_done_seconds: dict[str, float] = field(default_factory=dict)
+    # Was das Intake erkannt hat (Orte, Recherche-Auftrag, Startdatum, Dauer)
+    intake: dict[str, Any] | None = None
 
     @property
     def passed(self) -> bool:
@@ -296,6 +298,8 @@ async def run_case(case: dict[str, Any], number: int, http: httpx.AsyncClient) -
     run.seconds = round(time.perf_counter() - started, 1)
     run.tool_seconds = round(covered_seconds(tool_spans), 1)
     run.tool_durations = tool_durations
+    if (prefetch := state.get("prefetch")) is not None:
+        run.intake = prefetch.model_dump(mode="json")
     measure_usage(run, responses)
     run.cost_usd = round(run.cost_usd, 4)
     output = state.get("output")

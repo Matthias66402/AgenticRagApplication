@@ -7,6 +7,7 @@ verlangte Recherche steht sicher im Verlauf. Ein Fehler hier ist unkritisch: Der
 (erneut) aufrufen.
 """
 
+import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,6 +21,7 @@ from app.config import get_settings
 
 # Recherche-Tools im Verlauf; search_knowledge: frühere Abenteuer, in denen der Planer noch selbst gesucht hat
 RESEARCH_TOOLS = {"research_knowledge", "search_knowledge"}
+WEEKDAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
 MAX_OUTPUT_TOKENS = 1000
 # Intake darf die Planung nicht ausbremsen: ohne Wiederholungen nach kurzer Zeit ohne Vorab-Suche weiter
@@ -59,6 +61,10 @@ insbesondere bei reiner Bahnauskunft, bei Rad bzw. Fußweg nur zum Bahnhof und w
   "Fahrradmitnahme in der Bahn". Bei Shelter- bzw. Wildcamping-Übernachtung "Wildcampen in <Land>" mit dem
   ausgeschriebenen Namen des Landes, in dem die Tour liegt, abgeleitet aus ihren Orten (z. B. eine Tour von Bergen
   nach Ålesund → "Wildcampen in Norwegen"), nicht aus der Sprache der Nachricht.
+
+Startdatum (`start_date`), für Touren und Bahnfahrten, auch aus dem Kontext: das Datum, an dem es losgeht,
+aufgelöst anhand des heutigen Datums ("morgen", "nächsten Samstag", "am 3.5."). Eine relative Zeitangabe wie
+"in zehn Tagen" oder "in zwei Wochen" ist das Startdatum (heute plus diese Spanne). Ohne Datumsangabe null.
 """
 
 
@@ -79,13 +85,29 @@ class ResearchRequest(BaseModel):
 class IntakeResult(BaseModel):
     places: list[PlaceQuery] = Field(description="Orte, die der Planer für diese Nachricht nachschlagen muss")
     research: ResearchRequest | None = Field(description="Recherche für eine neue Tour, sonst null")
+    start_date: dt.date | None = Field(description="Startdatum laut Nachricht (YYYY-MM-DD), sonst null")
 
 
 class Prefetch(BaseModel):
-    """Was der Graph vor dem Planer ausführt."""
+    """Was der Graph vor dem Planer ausführt bzw. ihm mitgibt."""
 
     places: list[PlaceQuery] = Field(default_factory=list)
     research: ResearchRequest | None = None
+    start_date: dt.date | None = None
+
+    def planner_note(self) -> str | None:
+        """Hinweis zum Startdatum für die Anweisungen des Planers; None, wenn die Nachricht keins nennt.
+
+        Der Planer las relative Zeitangaben ("in … Tagen") gelegentlich zugleich als Startdatum und als Dauer. Die Dauer
+        gibt das Intake bewusst nicht mit: gpt-4o-mini erfand sie in 3 von 5 Läufen, der Planer übernahm sie dann.
+        """
+        if self.start_date is None:
+            return None
+        return (
+            f"Vorab-Auswertung der aktuellen Nachricht (prüfe sie, maßgeblich ist die Nachricht): Startdatum "
+            f"{self.start_date.isoformat()} ({WEEKDAYS[self.start_date.weekday()]}). Eine relative Zeitangabe "
+            "(\"in … Tagen\") ist das Startdatum, keine Dauer."
+        )
 
 
 def build_intake_agent() -> Agent[None, IntakeResult]:
@@ -136,7 +158,7 @@ def conversation_context(history_json: list[Any]) -> ConversationContext:
 
 def intake_prompt(message: str, context: ConversationContext, deps: AgentDeps) -> str:
     earlier, question, geocoded = context.user_messages, context.question, context.geocoded
-    lines = ["Profil-Vorgaben:"]
+    lines = [f"Heute ist {deps.today.isoformat()} ({WEEKDAYS[deps.today.weekday()]}).", "Profil-Vorgaben:"]
     lines.append(f"- Wohnadresse: {deps.home or 'keine'}")
     lines.append(f"- Standard-Fortbewegungsart: {deps.default_transport or 'keine'}")
     if earlier:
@@ -168,4 +190,4 @@ async def plan_prefetch(message: str, history_json: list[Any], deps: AgentDeps) 
     research = result.output.research
     if research is not None and (context.researched or not research.region.strip()):
         research = None
-    return Prefetch(places=list(unique.values()), research=research)
+    return Prefetch(places=list(unique.values()), research=research, start_date=result.output.start_date)

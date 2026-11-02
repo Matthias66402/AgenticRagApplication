@@ -402,6 +402,8 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         if deps.default_transport:
             label = TRANSPORT_LABELS.get(deps.default_transport, deps.default_transport)
             lines.append(f"- Standard-Fortbewegungsart: {label} (transport={deps.default_transport}).")
+        if deps.intake_note:
+            lines.append(deps.intake_note)
         if catalog := await catalog_overview(deps):
             lines.append(
                 "Fernwege mit vorab importiertem Verlauf (als `route_name` sofort verfügbar; nimm einen dieser Namen, "

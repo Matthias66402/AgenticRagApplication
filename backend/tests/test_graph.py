@@ -1,5 +1,6 @@
 """LangGraph-Steuerung (app.agent.graph) und Runner mit geskriptetem Modell statt echtem LLM."""
 
+import datetime as dt
 import json
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -14,7 +15,7 @@ from pydantic_ai.models.test import TestModel
 
 from app.agent.deps import AgentDeps
 from app.agent.graph import planner_graph
-from app.agent.intake import conversation_context, intake_agent, intake_prompt, plan_prefetch
+from app.agent.intake import Prefetch, conversation_context, intake_agent, intake_prompt, plan_prefetch
 from app.agent.plan_schema import TransportMode
 from app.agent.planner import planner_agent
 from app.agent.tools import geocode as geocode_module
@@ -110,8 +111,37 @@ async def test_runner_reports_agent_errors(deps: AgentDeps) -> None:
 GARMISCH = {"display_name": "Garmisch-Partenkirchen", "lat": "47.49", "lon": "11.09", "category": "place", "type": "town"}
 
 
-def intake_finds(*places: dict[str, Any], research: dict[str, Any] | None = None) -> Any:
-    return intake_agent.override(model=TestModel(custom_output_args={"places": list(places), "research": research}))
+def intake_finds(
+    *places: dict[str, Any], research: dict[str, Any] | None = None, start_date: str | None = None
+) -> Any:
+    output = {"places": list(places), "research": research, "start_date": start_date}
+    return intake_agent.override(model=TestModel(custom_output_args=output))
+
+
+def test_planner_note_for_start_date() -> None:
+    assert Prefetch().planner_note() is None
+    note = Prefetch(start_date=dt.date(2026, 11, 10)).planner_note()
+    assert note is not None and "Startdatum 2026-11-10 (Dienstag)" in note and "keine Dauer" in note
+
+
+async def test_intake_note_reaches_planner_instructions_only(deps: AgentDeps) -> None:
+    """Der Hinweis zum Startdatum steht in den Anweisungen dieses Laufs, nicht in der Nutzernachricht."""
+    seen: list[str | None] = []
+
+    async def planner_step(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[DeltaToolCalls]:
+        seen.append(info.instructions)
+        yield {0: DeltaToolCall(name=QUESTION[0], json_args=json.dumps(QUESTION[1]))}
+
+    with planner_agent.override(model=FunctionModel(stream_function=planner_step)):
+        with intake_finds(start_date="2026-11-10"):
+            _, outcome = await collect("Radtour in einer Woche", deps)
+        with intake_finds():
+            await collect("Ab Oldenburg", deps, outcome.history_json)
+    assert seen[0] and "Vorab-Auswertung der aktuellen Nachricht" in seen[0] and "2026-11-10" in seen[0]
+    assert seen[1] and "Vorab-Auswertung" not in seen[1]  # nur für die Nachricht, zu der er gehört
+    # PydanticAI speichert Anweisungen je Anfrage mit (wie Datum und Profil); in Nutzernachrichten steht er nicht
+    prompts = [p["content"] for m in outcome.history_json or [] for p in m["parts"] if p["part_kind"] == "user-prompt"]
+    assert prompts == ["Radtour in einer Woche"]
 
 
 @respx.mock
