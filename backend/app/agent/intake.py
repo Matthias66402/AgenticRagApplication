@@ -52,9 +52,13 @@ auch Fortbewegungsart feststehen (auch aus dem Kontext oder der Standard-Fortbew
 insbesondere bei reiner Bahnauskunft, bei Rad bzw. Fußweg nur zum Bahnhof und wenn die Region noch offen ist.
 - `region`: Ortsname bzw. Name des Fernwegs, z. B. "Oldenburg", "Harz" oder "Nordseeküsten-Radweg" (bei einer Tour
   entlang einer Küste oder eines Flusses der passende Fernweg, z. B. "entlang der Elbe" → "Elberadweg").
-- `accommodation_type`: bei mehrtägigen Touren die gewünschte Übernachtungsart (bei mehreren die erste), sonst null.
+- `accommodation_type`: bei mehrtägigen Touren die gewünschte Übernachtungsart (bei mehreren die zuerst genannte),
+  sonst null. Zuordnung: Shelter, Biwak, Zelt in der Natur, Wildcampen → "bivouac"; Campingplatz → "camping";
+  "hut" nur, wenn der Nutzer ausdrücklich Hütten nennt (Berghütte, Alpenvereinshütte, Hüttenwanderung).
 - `extra_topic`: höchstens ein Zusatzthema, sonst null. Bei Rad- oder MTB-Touren mit An- oder Abreise per Bahn
-  "Fahrradmitnahme in der Bahn", bei Wildcampen bzw. Shelter-Übernachtung "Wildcampen in <Land>".
+  "Fahrradmitnahme in der Bahn". Bei Shelter- bzw. Wildcamping-Übernachtung "Wildcampen in <Land>" mit dem
+  ausgeschriebenen Namen des Landes, in dem die Tour liegt, abgeleitet aus ihren Orten (z. B. eine Tour von Bergen
+  nach Ålesund → "Wildcampen in Norwegen"), nicht aus der Sprache der Nachricht.
 """
 
 
