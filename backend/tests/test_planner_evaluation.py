@@ -11,7 +11,8 @@ from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnsw
 from app.config import get_settings
 from app.agent.planner import planner_agent
 from app.evaluation.planner import (
-    CASES_FILE, OUTPUT_NAMES, CaseRun, check_output, covered_seconds, measure, measure_usage, run_case, summarize,
+    CASES_FILE, OUTPUT_NAMES, CaseRun, check_output, covered_seconds, measure, measure_usage, phase_seconds,
+    run_case, summarize, tool_time_stats,
 )  # fmt: skip
 from tests.test_agent import RESEARCH, make_plan, scripted_model
 
@@ -88,6 +89,30 @@ async def test_run_case_measures_planner_and_research() -> None:
     # 2 Planer-Aufrufe (FunctionModel) + Intake (1) und Recherche-Agent (2: Suche + Zusammenfassung), beide TestModel
     assert run.requests_by_model == {"function::stream": 2, "test": 3}
     assert run.requests == 5
+    # Zeiten: Dauer des Tool-Aufrufs (Ausgabe-Tools wie final_plan haben keine) und Ende der Graph-Knoten
+    research, final = run.calls
+    assert research["seconds"] >= 0 and "seconds" not in final
+    assert list(run.node_done_seconds) == ["intake", "planner", "finish_plan"]
+    assert run.node_done_seconds["intake"] <= run.node_done_seconds["planner"] <= run.seconds
+
+
+def test_tool_and_phase_times() -> None:
+    run = CaseRun(id="t", run=1, seconds=30)
+    run.calls = [
+        {"tool": "geocode", "id": "pre_1", "seconds": 1.0},
+        {"tool": "research_knowledge", "id": "pre_2", "seconds": 9.0},
+        {"tool": "geocode", "id": "call_1", "seconds": 2.0},
+        {"tool": "geocode", "id": "call_2", "seconds": 4.0},
+        {"tool": "final_plan", "id": "call_3"},
+    ]
+    run.node_done_seconds = {"intake": 2.0, "prefetch_geocode": 3.5, "prefetch_research": 11.0, "planner": 29.0}
+    assert phase_seconds(run) == {"intake": 2.0, "prefetch": 11.0, "planner": 18.0}
+    stats = tool_time_stats([run])
+    assert list(stats) == ["vorab:research_knowledge", "geocode", "vorab:geocode"]  # nach Summe absteigend
+    assert stats["geocode"] == {"calls": 2, "mean_s": 3.0, "max_s": 4.0, "total_s": 6.0}
+    summary = summarize([run])
+    assert summary["mean_phase_seconds"] == {"intake": 2.0, "prefetch": 11.0, "planner": 18.0}
+    assert summary["tool_seconds"]["vorab:geocode"]["calls"] == 1
 
 
 def test_parallel_tool_time_counts_once() -> None:

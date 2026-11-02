@@ -82,6 +82,10 @@ class CaseRun:
     # Zum Nachvollziehen: Tool-Aufrufe in Reihenfolge (Argumente, Ergebnis gekürzt) und Rückmeldungen der Retries
     calls: list[dict[str, Any]] = field(default_factory=list)
     feedback: list[str] = field(default_factory=list)
+    # Dauer je Tool-Aufruf (tool_call_id -> s, vom Aufruf bis zum Ergebnis) und Zeitpunkt, zu dem jeder Graph-Knoten
+    # fertig war (s ab Start), z. B. Ende der Vorab-Phase und des Planers
+    tool_durations: dict[str, float] = field(default_factory=dict)
+    node_done_seconds: dict[str, float] = field(default_factory=dict)
 
     @property
     def passed(self) -> bool:
@@ -262,22 +266,30 @@ async def run_case(case: dict[str, Any], number: int, http: httpx.AsyncClient) -
     started = time.perf_counter()
     tool_started: dict[str, float] = {}
     tool_spans: list[tuple[float, float]] = []
+    tool_durations: dict[str, float] = {}
     responses: list[ModelResponse] = []
     state: dict[str, Any] = {}
+    modes = ["custom", "values", "updates"]
     try:
         with recording(responses):
             graph_input = {"message": case["message"], "history_json": []}
-            async for mode, chunk in planner_graph.astream(graph_input, context=deps, stream_mode=["custom", "values"]):
+            async for mode, chunk in planner_graph.astream(graph_input, context=deps, stream_mode=modes):
+                now = time.perf_counter()
                 if mode == "values":
                     state = chunk
+                elif mode == "updates":
+                    for node in chunk:  # Knoten fertig; parallele Knoten melden sich einzeln
+                        run.node_done_seconds[node] = round(now - started, 1)
                 elif chunk["type"] == "tool_call":
-                    tool_started[chunk["id"]] = time.perf_counter()
+                    tool_started[chunk["id"]] = now
                 elif chunk["type"] == "tool_result" and chunk["id"] in tool_started:
-                    tool_spans.append((tool_started.pop(chunk["id"]), time.perf_counter()))
+                    tool_spans.append((tool_started[chunk["id"]], now))
+                    tool_durations[chunk["id"]] = round(now - tool_started.pop(chunk["id"]), 1)
     except Exception as exc:  # Abbruch zählt als nicht bestanden, die übrigen Fälle laufen weiter
         run.error = f"{type(exc).__name__}: {exc}"
     run.seconds = round(time.perf_counter() - started, 1)
     run.tool_seconds = round(covered_seconds(tool_spans), 1)
+    run.tool_durations = tool_durations
     measure_usage(run, responses)
     run.cost_usd = round(run.cost_usd, 4)
     output = state.get("output")
@@ -292,8 +304,43 @@ async def run_case(case: dict[str, Any], number: int, http: httpx.AsyncClient) -
         else output.message if isinstance(output, TextAnswer)
         else output.title
     )  # fmt: skip
+    for call in run.calls:
+        if (seconds := tool_durations.get(call["id"])) is not None:
+            call["seconds"] = seconds
     run.checks = check_output(case, output, messages, deps)
     return run
+
+
+PREFETCH_NODES = ("intake", "prefetch_geocode", "prefetch_research")
+
+
+def phase_seconds(run: CaseRun) -> dict[str, float]:
+    """Dauer der Phasen eines Laufs: Vorab-Phase (Intake und prefetch_*) und Planer."""
+    done = run.node_done_seconds
+    prefetch_end = max((done[n] for n in PREFETCH_NODES if n in done), default=0.0)
+    phases = {"intake": done.get("intake", 0.0), "prefetch": prefetch_end}
+    if "planner" in done:
+        phases["planner"] = round(done["planner"] - prefetch_end, 1)
+    return phases
+
+
+def tool_time_stats(runs: list[CaseRun]) -> dict[str, dict[str, float]]:
+    """Je Tool: Anzahl Aufrufe, mittlere und längste Dauer, Summe (s); Vorab-Aufrufe getrennt mit Präfix 'vorab:'."""
+    durations: dict[str, list[float]] = {}
+    for r in runs:
+        for call in r.calls:
+            if "seconds" in call:
+                name = ("vorab:" if call["id"].startswith("pre_") else "") + call["tool"]
+                durations.setdefault(name, []).append(call["seconds"])
+    return {
+        name: {
+            "calls": len(values),
+            "mean_s": round(statistics.mean(values), 1),
+            "max_s": round(max(values), 1),
+            "total_s": round(sum(values), 1),
+        }
+        for name, values in sorted(durations.items(), key=lambda item: -sum(item[1]))
+    }
 
 
 def summarize(runs: list[CaseRun]) -> dict[str, Any]:
@@ -317,6 +364,11 @@ def summarize(runs: list[CaseRun]) -> dict[str, Any]:
         "mean_output_tokens": mean("output_tokens"),
         "mean_reasoning_tokens": mean("reasoning_tokens"),
         "total_cost_usd": round(sum(r.cost_usd for r in runs), 3),
+        "mean_phase_seconds": {
+            phase: round(statistics.mean(phase_seconds(r).get(phase, 0.0) for r in runs), 1)
+            for phase in ("intake", "prefetch", "planner")
+        } if runs else {},
+        "tool_seconds": tool_time_stats(runs),
     }
 
 
@@ -344,6 +396,13 @@ def print_report(report: dict[str, Any]) -> None:
           f"Ausgabe {s['mean_output_tokens']:.0f} (Reasoning {s['mean_reasoning_tokens']:.0f})")  # fmt: skip
     by_model = " · ".join(f"{model} {n:.1f}" for model, n in s["mean_requests_by_model"].items())
     print(f"Mittlere Aufrufe je Modell: {by_model or '–'}")
+    if phases := s.get("mean_phase_seconds"):
+        print(f"Phasen (Mittel): Intake fertig nach {phases['intake']:.0f} s · Vorab-Phase fertig nach "
+              f"{phases['prefetch']:.0f} s · Planer danach {phases['planner']:.0f} s")  # fmt: skip
+    if tools := s.get("tool_seconds"):
+        print(f"\n{'Tool':28} {'Aufrufe':>7} {'Mittel':>7} {'Max':>6} {'Summe':>7}")
+        for name, t in tools.items():
+            print(f"{name:28} {t['calls']:>7} {t['mean_s']:>6.1f}s {t['max_s']:>5.0f}s {t['total_s']:>6.0f}s")
     print(f"\n{'Fall':18} {'Lauf':>4} {'Zeit':>6} {'Tools':>6} {'Aufr.':>5} {'Eingabe':>8} {'Ausgabe':>8} {'Reas.':>6} "
           f"{'Wdh.':>4}  Ergebnis")  # fmt: skip
     for r in report["cases"]:
