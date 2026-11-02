@@ -26,8 +26,12 @@ des Nutzers per Geocoding (OpenStreetMap) nachschlagen muss, und nur diese:
 - Tour: Start und Ziel (bei einer Rundtour nur der Start), ausdrücklich genannte Zwischenziele.
 - Reine Bahnauskunft (Zug, Bahn, Bus, ÖPNV ohne Tour): Abfahrts- und Zielbahnhof. Nennt der Nutzer nur eine Stadt,
   hänge " Hbf" an (z. B. "Augsburg Hbf"); nennt er eine Adresse, übernimm sie.
-- Fahrt mit Rad oder zu Fuß zum Bahnhof: Start und Bahnhof.
+- Mit Rad oder zu Fuß zum Bahnhof und dann mit dem Zug weiter: Start, Abfahrtsbahnhof UND Zielbahnhof. Der
+  Abfahrtsbahnhof liegt im Startort, nicht am Ziel der Bahnfahrt. Beispiel: "Ich laufe von der Lindenstraße 5 in
+  Münster zum Bahnhof und fahre dann mit dem Zug nach Köln" → "Lindenstraße 5, Münster", "Münster Hbf", "Köln Hbf".
 - Start bzw. Ziel "zu Hause", "ab Haustür" o. Ä.: die Wohnadresse aus den Profil-Vorgaben, wörtlich.
+Gib die Orte in der Reihenfolge der Reise aus (Start zuerst). Lass keinen Ort der Reise aus: Eine unvollständige
+Liste führt den Planer in die Irre; lieber gar keine Orte als nur einen Teil.
 Schreibe Ortsnamen so, wie man sie in einer Karte sucht ("Garmisch-Partenkirchen", "Zwischenahner Meer"), ohne
 Zusätze wie "Bahnhof von". Setze `country_codes`, wenn das Land eindeutig ist (z. B. "de", "dk").
 

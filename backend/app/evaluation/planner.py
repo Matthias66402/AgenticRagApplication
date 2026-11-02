@@ -79,6 +79,9 @@ class CaseRun:
     tool_seconds: float = 0.0
     tool_calls: dict[str, int] = field(default_factory=dict)
     checks: dict[str, bool] = field(default_factory=dict)
+    # Zum Nachvollziehen: Tool-Aufrufe in Reihenfolge (Argumente, Ergebnis gekürzt) und Rückmeldungen der Retries
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    feedback: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
@@ -151,13 +154,34 @@ def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage]
 
 def measure(run: CaseRun, messages: list[ModelMessage]) -> None:
     """Tool-Aufrufe und Retries aus dem Verlauf des Planers (inkl. vom Graphen eingefügter Tool-Aufrufe)."""
+    calls_by_id: dict[str, dict[str, Any]] = {}
     for message in messages:
         if isinstance(message, ModelResponse):
             for part in message.parts:
                 if isinstance(part, ToolCallPart):
                     run.tool_calls[part.tool_name] = run.tool_calls.get(part.tool_name, 0) + 1
+                    call = {"tool": part.tool_name, "id": part.tool_call_id, "args": part.args_as_dict()}
+                    calls_by_id[part.tool_call_id] = call
+                    run.calls.append(call)
         else:
-            run.retries += sum(retry_feedback(part) is not None for part in message.parts)
+            for part in message.parts:
+                if (feedback := retry_feedback(part)) is not None:
+                    run.retries += 1
+                    run.feedback.append(feedback[:CALL_PREVIEW_CHARS])
+                elif isinstance(part, ToolReturnPart) and (call := calls_by_id.get(part.tool_call_id)):
+                    call["result"] = _short(part.content)
+
+
+CALL_PREVIEW_CHARS = 1500
+
+
+def _short(content: Any) -> str:
+    # Lange Checkpoint-Listen von plan_route nur zählen, damit named_route und note nicht abgeschnitten werden
+    if isinstance(content, dict) and isinstance(content.get("named_route"), dict):
+        named = content["named_route"]
+        content = content | {"named_route": named | {"checkpoints": len(named.get("checkpoints") or [])}}
+    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
+    return text if len(text) <= CALL_PREVIEW_CHARS else text[:CALL_PREVIEW_CHARS] + " …"
 
 
 def measure_usage(run: CaseRun, responses: list[ModelResponse]) -> None:

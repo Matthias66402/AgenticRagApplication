@@ -62,6 +62,8 @@ def test_measure_and_summarize() -> None:
     output_retry = RetryFeedbackPart("Etappe zu lang", retry=RetryInfo(cause="model_retry"))
     measure(run, [call("geocode"), ModelRequest(parts=[tool_retry, output_retry]), call("geocode")])
     assert run.tool_calls == {"geocode": 2} and run.retries == 2
+    assert [c["tool"] for c in run.calls] == ["geocode", "geocode"]
+    assert run.feedback and "Etappe zu lang" in run.feedback[-1]
     # Aufwand aus den aufgezeichneten Antworten aller Agenten, z. B. auch des Recherche-Agenten
     measure_usage(run, [call("geocode"), call("search_knowledge", "gpt-4.1-mini"), call("geocode")])
     assert (run.requests, run.input_tokens, run.output_tokens) == (3, 300, 30)
