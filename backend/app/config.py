@@ -32,8 +32,10 @@ class Settings(BaseSettings):
     llm_requests_per_minute: int = 0
     embedding_model: str = "openai:text-embedding-3-small"
     embedding_dim: int = 1536
-    # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit
-    relevance_model: str = "openai:gpt-4.1-mini"
+    # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit.
+    # Anderes Modell als der Recherche-Agent: Eine Recherche löst je Suche eine Bewertung aus; mit gemeinsamem
+    # Anfragelimit (je Modell) musste sie sonst oft auf das nächste Minutenfenster warten.
+    relevance_model: str = "openai:gpt-4o-mini"
     # Recherche-Agent, an den der Planer die Suche in der Wissensbasis delegiert (app.agent.research)
     research_model: str = "openai:gpt-4.1-mini"
     # Bestimmt vorab die Orte, die der Graph vor dem Planer nachschlägt (app.agent.intake); leer = aus.

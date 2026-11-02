@@ -5,7 +5,7 @@ Aufruf: ``python -m app.evaluation.planner [--repeat 2] [--case ID] [--label NAM
 Jede Anfrage läuft wie im Chat über den LangGraph-Graphen (echte Modelle, echte Tools) als erste Nachricht eines
 neuen Abenteuers. Gemessen:
 - Aufwand: Laufzeit, Modellaufrufe (auch je Modell, wegen des Anfragelimits je Modell), Eingabe-/Cache-/Ausgabe-/
-  Reasoning-Tokens und Kosten von Intake, Planer und Recherche-Agent (ohne die Relevanzprüfung der Wissensbasis)
+  Reasoning-Tokens und Kosten von Intake, Planer, Recherche-Agent und Relevanzprüfung der Wissensbasis
 - Wiederholungen: Rückmeldungen an das Modell durch Validatoren oder Schemafehler
 - Qualität: erwarteter Ausgabetyp und fallabhängige Prüfungen (Pflichtsuchen, Tipps, Unterkünfte, Verbindungen)
 
@@ -31,6 +31,7 @@ from pydantic_ai import (
     Agent, ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, RetryFeedbackPart, RunContext,
     ToolCallPart, ToolReturnPart,
 )  # fmt: skip
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
@@ -43,6 +44,7 @@ from app.agent.planner import planner_agent
 from app.agent.research import research_agent
 from app.config import get_settings
 from app.db import SessionLocal, engine
+from app.rag.relevance import get_relevance_agent
 
 CASES_FILE = Path(__file__).parent / "planner_cases.json"
 OUTPUT_NAMES = {
@@ -235,8 +237,9 @@ class RecordingModel(WrapperModel):
         self.responses.append(stream.get())
 
 
-# Agenten, deren Aufwand zählt (die Relevanzprüfung bewertet die Wissensbasis und wird separat evaluiert)
-MEASURED_AGENTS: list[Agent[Any, Any]] = [intake_agent, planner_agent, research_agent]
+# Agenten, deren Aufwand zählt. Die Relevanzprüfung gehört dazu: Sie belastet das Anfragelimit ihres Modells und
+# bremst darüber die Recherche (ihre Qualität bewertet app.evaluation.retrieval).
+MEASURED_AGENTS: list[Agent[Any, Any]] = [intake_agent, planner_agent, research_agent, get_relevance_agent()]
 
 
 @contextmanager
@@ -245,7 +248,10 @@ def recording(responses: list[ModelResponse]) -> Iterator[None]:
         for agent in MEASURED_AGENTS:
             # Das gerade wirksame Modell inkl. eines äußeren override (z. B. in Tests); agent.model kennt das nicht.
             # Private Methode von PydanticAI, öffentlich gibt es dafür nichts.
-            model = agent._get_model_outside_run()  # pyright: ignore[reportPrivateUsage]
+            try:
+                model = agent._get_model_outside_run()  # pyright: ignore[reportPrivateUsage]
+            except UserError:  # ohne Modell abgeschaltet, z. B. RELEVANCE_MODEL leer
+                continue
             stack.enter_context(agent.override(model=RecordingModel(model, responses)))
         yield
 
