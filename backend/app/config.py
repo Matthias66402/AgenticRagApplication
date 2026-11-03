@@ -32,10 +32,17 @@ class Settings(BaseSettings):
     llm_requests_per_minute: int = 0
     embedding_model: str = "openai:text-embedding-3-small"
     embedding_dim: int = 1536
-    # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit
-    relevance_model: str = "openai:gpt-4.1-mini"
+    # Bewertet Suchtreffer der Wissensbasis vor der Weitergabe an den Agenten; leer = nur Mindestähnlichkeit.
+    # Anderes Modell als der Recherche-Agent: Eine Recherche löst je Suche eine Bewertung aus; mit gemeinsamem
+    # Anfragelimit (je Modell) musste sie sonst oft auf das nächste Minutenfenster warten.
+    relevance_model: str = "openai:gpt-4o-mini"
     # Recherche-Agent, an den der Planer die Suche in der Wissensbasis delegiert (app.agent.research)
     research_model: str = "openai:gpt-4.1-mini"
+    # Bestimmt vorab, was der Graph vor dem Planer ausführt (app.agent.intake); leer = aus.
+    # gpt-4o-mini ordnet Übernachtungsarten zuverlässiger zu als gpt-4.1-mini (z. B. Shelter → bivouac statt hut).
+    # Es teilt sich das Anfragelimit mit der Relevanzprüfung, die seit der gebündelten Bewertung nur 1-2 Anfragen je
+    # Recherche braucht.
+    intake_model: str = "openai:gpt-4o-mini"
 
     ors_api_key: str = ""
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"

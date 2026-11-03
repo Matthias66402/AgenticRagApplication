@@ -1,30 +1,14 @@
-"""Führt den Agenten aus und übersetzt PydanticAI-Events in einfache, UI-taugliche Events."""
+"""Führt einen Chat-Durchlauf über den LangGraph-Graphen (app.agent.graph) aus und streamt UI-taugliche Events."""
 
-import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic_ai import (
-    AgentRunResultEvent,
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
-    ModelMessagesTypeAdapter,
-    PartDeltaEvent,
-    PartStartEvent,
-    TextPart,
-    TextPartDelta,
-    UsageLimits,
-)
-from pydantic_ai.exceptions import AgentRunError, ModelRateLimitError
-
 from app.agent.deps import AgentDeps
-from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer, TrainTripPlan
-from app.agent.planner import planner_agent
-from app.agent.tools.transit import format_train_queries
+from app.agent.graph import USAGE_LIMITS, PlannerState, planner_graph
+from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TrainTripPlan
 
-RESULT_PREVIEW_CHARS = 600
-USAGE_LIMITS = UsageLimits(request_limit=40)
+__all__ = ["USAGE_LIMITS", "RunOutcome", "run_planner"]
 
 
 @dataclass
@@ -41,61 +25,49 @@ class RunOutcome:
     error: str | None = None
 
 
-def _preview(content: Any) -> str:
-    text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
-    return text if len(text) <= RESULT_PREVIEW_CHARS else text[:RESULT_PREVIEW_CHARS] + " …"
+def _apply_state(state: PlannerState, outcome: RunOutcome) -> None:
+    output = state.get("output")
+    if isinstance(output, (AdventurePlan, TrainTripPlan)):
+        outcome.plan = output
+    elif isinstance(output, ClarificationQuestion):
+        outcome.question = output
+    outcome.answer = state.get("answer")
+    outcome.history_json = state.get("new_history_json")
+    outcome.error = state.get("error")
 
 
 async def run_planner(
     message: str, history_json: list[Any], deps: AgentDeps, outcome: RunOutcome
 ) -> AsyncIterator[dict[str, Any]]:
-    """Streamt Events: token, tool_call, tool_result, plan, question, answer, error."""
-    history = ModelMessagesTypeAdapter.validate_python(history_json) if history_json else None
-    calls_by_id: dict[str, dict[str, Any]] = {}
+    """Streamt Events: token, tool_call, tool_result, error.
 
+    Text und Tool-Aufrufe landen schon während des Streams im `outcome`, damit sie auch bei einem Abbruch durch den
+    Client erhalten bleiben; Ergebnis und Verlauf erst nach dem letzten Graph-Schritt.
+    """
+    calls_by_id: dict[str, dict[str, Any]] = {}
+    final: PlannerState | None = None
+    graph_input: PlannerState = {"message": message, "history_json": history_json}
     try:
-        async with planner_agent.run_stream_events(
-            message, deps=deps, message_history=history, usage_limits=USAGE_LIMITS
-        ) as events:
-            async for event in events:
-                if isinstance(event, PartStartEvent) and isinstance(event.part, TextPart) and event.part.content:
-                    outcome.text += event.part.content
-                    yield {"type": "token", "content": event.part.content}
-                elif isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
-                    outcome.text += event.delta.content_delta
-                    yield {"type": "token", "content": event.delta.content_delta}
-                elif isinstance(event, FunctionToolCallEvent):
-                    call = {"id": event.part.tool_call_id, "tool": event.part.tool_name, "args": event.part.args_as_dict()}
-                    calls_by_id[call["id"]] = call
-                    outcome.tool_calls.append(call)
-                    yield {"type": "tool_call", **call}
-                elif isinstance(event, FunctionToolResultEvent):
-                    content = getattr(event.part, "content", None)
-                    preview = _preview(content)
-                    failed = isinstance(content, dict) and "error" in content
-                    if call := calls_by_id.get(event.part.tool_call_id):
-                        call["result"] = preview
-                        call["failed"] = failed
-                    yield {"type": "tool_result", "id": event.part.tool_call_id, "result": preview, "failed": failed}
-                elif isinstance(event, AgentRunResultEvent):
-                    output = event.result.output
-                    outcome.history_json = json.loads(event.result.all_messages_json())
-                    if isinstance(output, (AdventurePlan, TrainTripPlan)):
-                        outcome.plan = output
-                    elif isinstance(output, ClarificationQuestion):
-                        outcome.question = output
-                    elif isinstance(output, TextAnswer):
-                        queries = list(deps.train_queries.values())
-                        outcome.answer = output.message.strip()
-                        if queries:
-                            outcome.answer += "\n\n" + format_train_queries(queries)
-    except ModelRateLimitError:
-        # Trotz Drosselung möglich, z. B. wenn ein anderer Prozess (Evaluation) dasselbe Limit nutzt
-        outcome.error = "Das Sprachmodell ist gerade ausgelastet (Anfragelimit erreicht). Bitte in einer Minute erneut senden."
-    except AgentRunError as exc:
-        outcome.error = f"Der Agent konnte die Anfrage nicht abschließen: {exc}"
-    except Exception as exc:  # Anbieter-/Netzwerkfehler sollen den Stream sauber beenden
+        async for mode, chunk in planner_graph.astream(graph_input, context=deps, stream_mode=["custom", "values"]):
+            if mode == "values":
+                final = chunk
+                continue
+            event: dict[str, Any] = chunk
+            if event["type"] == "token":
+                outcome.text += event["content"]
+            elif event["type"] == "tool_call":
+                call = {key: value for key, value in event.items() if key != "type"}
+                calls_by_id[call["id"]] = call
+                outcome.tool_calls.append(call)
+            elif event["type"] == "tool_result" and (call := calls_by_id.get(event["id"])):
+                call["result"] = event["result"]
+                call["failed"] = event["failed"]
+            yield event
+    except Exception as exc:  # Fehler im Graphen selbst; Fehler des Agenten fängt schon der Planer-Knoten ab
         outcome.error = f"Fehler bei der Planung: {type(exc).__name__}: {exc}"
+    else:
+        if final is not None:
+            _apply_state(final, outcome)
 
     if outcome.error:
         yield {"type": "error", "message": outcome.error}

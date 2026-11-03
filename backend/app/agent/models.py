@@ -10,10 +10,14 @@ from app.agent.rate_limit import RateLimitedModel, shared_budget
 # die JSON-Argumente an und braucht dafür Minuten. Das Tokenlimit fängt solche Ausreißer zusätzlich ab
 # (ein normaler Plan inkl. Reasoning braucht 2.000-5.000 Tokens).
 MAX_OUTPUT_TOKENS = 12_000
+# Timeout je Anfrage (s). Beim Streaming gilt er für die Pause zwischen zwei Datenpaketen, bricht also nur eine
+# stehende Verbindung ab, keine lange, aber laufende Antwort; das SDK wiederholt die Anfrage dann. Ohne Angabe wartet
+# das OpenAI-SDK bis zu 600 s je Versuch, ein Chat-Durchlauf hinge damit bis zu einer halben Stunde.
+REQUEST_TIMEOUT_SECONDS = 120.0
 
 
 def model_settings(model: str, reasoning_effort: str = "") -> ModelSettings:
-    settings: ModelSettings = {"max_tokens": MAX_OUTPUT_TOKENS}
+    settings: ModelSettings = {"max_tokens": MAX_OUTPUT_TOKENS, "timeout": REQUEST_TIMEOUT_SECONDS}
     provider, _, name = model.partition(":")
     # Ohne angeforderte Zusammenfassung liefern OpenAI-Reasoning-Modelle leere Thinking-Teile; mit ihr ist im Tracing
     # nachvollziehbar, warum der Agent ein Tool aufruft. Nicht-Reasoning-Modelle lehnen beide Parameter ab.

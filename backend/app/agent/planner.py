@@ -148,6 +148,10 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
 - Übernimm die `route_id` der finalen Route(n) in `route_ids`.
 - Gibt der Nutzer später Änderungswünsche, passe den bestehenden Plan an und gib ihn vollständig neu aus.
 - Rufe ein Tool nicht mehrfach mit denselben Argumenten auf; das Ergebnis ändert sich nicht.
+- Direkt nach der Nachricht des Nutzers können schon `geocode`- bzw. `research_knowledge`-Ergebnisse stehen, die das
+  System vorab ermittelt hat. Nutze sie wie eigene Ergebnisse, statt dieselben Orte bzw. dieselbe Recherche erneut
+  abzufragen; fehlt ein Ort, passt ein Treffer nicht oder fehlt ein Thema (z. B. `extra_topic`), rufe das Tool selbst
+  auf.
 - Gib das Ergebnis immer über `final_plan`, `ask_user` oder (nur ohne Tour) `final_train_trip` bzw. `answer_user`
   aus. Sobald alle Pflichtangaben einer Tour bekannt sind, gib den Plan aus, statt nur Eckdaten zu nennen oder
   nachzufragen, ob ein Plan gewünscht ist.
@@ -398,6 +402,8 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         if deps.default_transport:
             label = TRANSPORT_LABELS.get(deps.default_transport, deps.default_transport)
             lines.append(f"- Standard-Fortbewegungsart: {label} (transport={deps.default_transport}).")
+        if deps.intake_note:
+            lines.append(deps.intake_note)
         if catalog := await catalog_overview(deps):
             lines.append(
                 "Fernwege mit vorab importiertem Verlauf (als `route_name` sofort verfügbar; nimm einen dieser Namen, "

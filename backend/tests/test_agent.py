@@ -16,7 +16,8 @@ from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, ModelR
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
-from app.agent.models import build_model, model_settings
+from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
+from app.agent.research import research_agent
 from app.agent.planner import check_route_wish, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
@@ -135,6 +136,14 @@ async def test_rate_limited_model_waits_before_each_request() -> None:
 def test_model_is_throttled_only_with_limit() -> None:
     assert build_model("openai:gpt-5-mini") == "openai:gpt-5-mini"
     assert isinstance(build_model("test", requests_per_minute=5), RateLimitedModel)
+
+
+def test_request_timeout_for_planner_and_research() -> None:
+    """Ohne Timeout wartet das OpenAI-SDK bis zu 600 s je Versuch auf einen stehenden Stream."""
+    for model in ("openai:gpt-5-mini", "openai:gpt-4.1-mini", "test"):
+        assert model_settings(model)["timeout"] == REQUEST_TIMEOUT_SECONDS  # type: ignore[typeddict-item]
+    assert planner_agent.model_settings and planner_agent.model_settings["timeout"] == REQUEST_TIMEOUT_SECONDS  # type: ignore[index]
+    assert research_agent.model_settings and research_agent.model_settings["timeout"] == REQUEST_TIMEOUT_SECONDS  # type: ignore[index]
 
 
 def test_reasoning_effort_only_when_configured() -> None:
