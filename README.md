@@ -15,7 +15,7 @@ Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage H
 |---|---|
 | Frontend | React 19, TypeScript, Vite, React Router, Leaflet |
 | Backend | FastAPI, SQLAlchemy 2 (async), Alembic, JWT-Auth |
-| Agent | PydanticAI (anbieter-agnostisch, Modell per `.env`) |
+| Agent | LangGraph (Ablauf eines Chat-Durchlaufs), PydanticAI (Planer, Intake und Recherche-Agent, anbieter-agnostisch, Modell per `.env`) |
 | RAG | pgvector (HNSW, Kosinus), Embeddings über PydanticAI `Embedder`, Relevanzprüfung der Treffer durch ein kleines LLM |
 | Tracing | Langfuse (optional, OpenTelemetry über die PydanticAI-Instrumentierung) |
 | Export | fpdf2 (PDF), Pillow (Kartenhintergrund aus OSM-Kacheln), GPX 1.1 |
@@ -60,6 +60,8 @@ docker compose exec backend sh -c 'ALEMBIC_DATABASE_URL=$TEST_DATABASE_URL alemb
 ## Wie der Agent arbeitet
 
 Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-rag.md)
+
+**Ablauf als Graph** (`backend/app/agent/graph.py`, LangGraph): Zuerst bestimmt ein kleines Modell im Knoten `intake` (`backend/app/agent/intake.py`), was der Planer für diese Nachricht sicher braucht, etwa Orte und Startdatum. Danach laufen Geocoding und Recherche in der Wissensbasis parallel als Vorab-Knoten, ohne eigene Planer-Runde. Ihre Ergebnisse stehen als gewöhnliche Tool-Aufrufe im Verlauf des Planers, der jedes Tool trotzdem selbst aufrufen kann. Am Ende bereitet je ein Knoten Plan, Rückfrage, Antwort oder Fehler auf.
 
 `backend/app/agent/planner.py`
 
@@ -195,8 +197,9 @@ Wer eine Einstellung in `config.py` ergänzt, trägt sie also auch in `.env.exam
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
 | `LLM_REQUESTS_PER_MINUTE` | Anfragelimit des API-Keys je Modell; Planer, Recherche-Agent und Relevanzprüfung senden höchstens so viele Modellaufrufe je Minute und Modell und warten sonst. 0 = nicht drosseln. |
 | `LLM_REASONING_EFFORT` | Optional: Reasoning-Aufwand des Planers bei Reasoning-Modellen (`minimal`, `low`, `medium`, `high`). Leer = Standard des Modells; `low` spart Tokens, verschlechterte aber die Planung (siehe „Planer messen“). |
+| `INTAKE_MODEL` | Kleines Modell im ersten Knoten des Graphen; bestimmt vorab Orte und Startdatum, die vor dem Planer nachgeschlagen bzw. aufgelöst werden (Standard `openai:gpt-4o-mini`). Leer = aus. |
 | `RESEARCH_MODEL` | Modell des Recherche-Agenten, an den der Planer die Suche in der Wissensbasis delegiert (Standard `openai:gpt-4.1-mini`). |
-| `RELEVANCE_MODEL` | Kleines Modell, das die Treffer von `search_knowledge` vor der Weitergabe an den Agenten auf Relevanz prüft (Standard `openai:gpt-4.1-mini`, ein Aufruf je Suche). Leer = nur Mindestähnlichkeit. Bei einem Fehler gehen die Treffer ungeprüft weiter. |
+| `RELEVANCE_MODEL` | Kleines Modell, das die Treffer von `search_knowledge` vor der Weitergabe an den Agenten auf Relevanz prüft (Standard `openai:gpt-4o-mini`, eine gebündelte Bewertung je Recherche). Leer = nur Mindestähnlichkeit. Bei einem Fehler gehen die Treffer ungeprüft weiter. |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | Bei einem Wechsel: `EMBEDDING_DIM` anpassen, Migration für die Vektorspalte erzeugen, `python -m app.seed --force` |
 | `ORS_API_KEY` | Optional, kostenlos unter openrouteservice.org (Free-Tarif: 200 Routen/Tag). Routing-Kette: ORS → BRouter (ohne Key) → weitere ORS-Profile → Luftlinien-Schätzung. Ohne Key wird direkt BRouter genutzt. |
 | `NOMINATIM_USER_AGENT` | User-Agent mit Kontaktangabe für Nominatim, OSM-Kacheln und Transitous; deren Nutzungsrichtlinien verlangen ihn |
@@ -212,7 +215,8 @@ Hinweis zu OpenAI: Ein Projekt mit niedrigem Ratenlimit (z. B. 5 Anfragen pro Mi
 
 ```
 backend/app/
-  agent/       planner.py (Planer-Agent), research.py (Recherche-Agent), runner.py (Event-Streaming),
+  agent/       graph.py (LangGraph-Ablauf), intake.py (Intake), planner.py (Planer-Agent),
+               research.py (Recherche-Agent), runner.py (Event-Streaming),
                plan_schema.py, deps.py, models.py, rate_limit.py (Drosselung auf das Anfragelimit)
     tools/     geocode, routing (+ Gehzeit), weather, accommodation, huts, knowledge, research, sun, transit
   rag/         ingest.py (Chunking), embeddings.py, retrieve.py (pgvector-Suche), relevance.py (Relevanzprüfung),

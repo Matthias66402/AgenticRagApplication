@@ -7,3 +7,6 @@ node_modules/
 frontend/dist/
 .idea/
 *.tsbuildinfo
+
+# Evaluationsberichte (lokale Messläufe)
+backend/evaluation-reports/
