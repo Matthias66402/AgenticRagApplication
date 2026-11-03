@@ -71,18 +71,18 @@ Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-
 4. **Fehler als Ergebnis:** Tools geben Fehler als lesbares Ergebnis zurück, statt Exceptions zu werfen. Der Agent kann darauf reagieren, etwa mit einem anderen Routing-Anbieter, einer Luftlinien-Schätzung als letztem Ausweg oder einem Hinweis im Plan.
 5. **Gesprächsverlauf:** Der Verlauf wird pro Abenteuer gespeichert (`agent_history`). Folgenachrichten wie „Mach daraus 4 Tage“ passen deshalb den bestehenden Plan an.
 6. **Streaming:** `POST /api/chat/{id}` streamt die Arbeit als Server-Sent Events (`token`, `tool_call`, `tool_result`, `question`, `answer`, `plan`, `error`, `done`). Das Frontend zeigt die Tool-Aufrufe live an.
-7. **Robuste Ausgabe:** Die Ausgaben laufen im strict-Modus mit einem Tokenlimit pro Anfrage. Ohne den strict-Modus hängt gpt-5-mini gelegentlich zehntausende Leerzeichen an die JSON-Argumente an und braucht dafür Minuten.
+7. **Robuste Ausgabe:** Die Ausgaben laufen im strict-Modus mit einem Tokenlimit pro Anfrage. Ohne den strict-Modus hängt gpt-5-mini gelegentlich zehntausende Leerzeichen an die JSON-Argumente an und braucht dafür Minuten. Jede Modellanfrage hat außerdem ein Zeitlimit von 120 s (beim Streaming für die Pause zwischen zwei Datenpaketen), sodass eine hängende Verbindung den Durchlauf nicht blockiert.
 
 ## Wie die Wissensbasis durchsucht wird
 
-Der Planer delegiert die Suche an einen **Recherche-Agenten** (`backend/app/agent/research.py`, Tool `research_knowledge`). Dieser sucht zu Region, Ausrüstung und Sicherheit, Übernachtung und einem Zusatzthema und gibt dem Planer eine kurze Zusammenfassung samt Dokumenttiteln zurück, statt aller Fundstellen. Warum nur die Recherche ein eigener Agent ist: [docs/agentic-rag.md](docs/agentic-rag.md#der-recherche-agent-agent-als-tool).
+Die Suche übernimmt ein **Recherche-Agent** (`backend/app/agent/research.py`, Tool `research_knowledge`). Bei einer neuen Tour startet ihn der Graph schon in der Vorab-Phase, parallel zum Geocoding; der Planer kann ihn zusätzlich selbst aufrufen. Der Recherche-Agent sucht zu Region, Ausrüstung und Sicherheit, Übernachtung und einem Zusatzthema und gibt dem Planer eine kurze Zusammenfassung samt Dokumenttiteln zurück, statt aller Fundstellen. Warum nur die Recherche ein eigener Agent ist: [docs/agentic-rag.md](docs/agentic-rag.md#der-recherche-agent-agent-als-tool).
 
 `backend/app/rag/` – jede seiner Suchen mit `search_knowledge` durchläuft vier Schritte:
 
 1. **Chunking beim Einlesen** (`ingest.py`): Dokumente werden an Markdown-Überschriften geteilt, Abschnitte haben höchstens 1.200 Zeichen. Jeder Abschnitt trägt seinen Überschriftenpfad und bettet ihn mit ein.
 2. **Vektorsuche** (`retrieve.py`): Die Suchanfrage wird eingebettet. pgvector liefert die 4 ähnlichsten Abschnitte (Kosinus-Ähnlichkeit).
 3. **Mindestähnlichkeit 0,5:** Treffer darunter fallen weg.
-4. **Relevanzprüfung** (`relevance.py`): Ein kleines LLM (`RELEVANCE_MODEL`) bewertet in einem Aufruf jede Fundstelle: Beantwortet sie die Anfrage, oder ist sie nur thematisch ähnlich? Nur relevante Abschnitte erreichen den Agenten. Bleibt nichts übrig, erfährt der Agent, dass die Wissensbasis dazu nichts enthält. Fällt die Prüfung aus (Zeitlimit 10 s, z. B. bei einem Ratenlimit), gehen die Treffer ungeprüft weiter.
+4. **Relevanzprüfung** (`relevance.py`): Ein kleines LLM (`RELEVANCE_MODEL`) bewertet jede Fundstelle. Die parallelen Suchen einer Recherche werden dafür kurz gesammelt und in einem gemeinsamen Aufruf geprüft, eine Recherche kostet so meist nur eine Anfrage: Beantwortet sie die Anfrage, oder ist sie nur thematisch ähnlich? Nur relevante Abschnitte erreichen den Agenten. Bleibt nichts übrig, erfährt der Agent, dass die Wissensbasis dazu nichts enthält. Fällt die Prüfung aus (Zeitlimit 10 s, z. B. bei einem Ratenlimit), gehen die Treffer ungeprüft weiter.
 
 Schwelle und Relevanzprüfung sind mit der Evaluation unten begründet. 
 
@@ -139,7 +139,7 @@ Die Testfragen wurden mit Kenntnis der Dokumente geschrieben und die Wissensbasi
 
 ## Planer messen
 
-`backend/app/evaluation/planner_cases.json` enthält feste Anfragen an den Planungs-Agenten (Rad-Tagestour, mehrtägige Hüttenwanderung, Radtour mit Zug-Anreise, Bahnauskunft, mit dem Rad zum Bahnhof, unvollständige Anfrage). Die Auswertung schickt jede Anfrage wie im Chat an den Agenten, mit echtem Modell und echten Tools:
+`backend/app/evaluation/planner_cases.json` enthält feste Anfragen an den Planungs-Agenten (Rad-Tagestour, mehrtägige Hüttenwanderung, Radtour mit Zug-Anreise, Bahnauskunft, mit dem Rad zum Bahnhof, unvollständige Anfrage). Die Auswertung schickt jede Anfrage wie im Chat durch den LangGraph-Graphen (Intake, Vorab-Phase, Planer), mit echten Modellen und echten Tools:
 
 ```bash
 docker compose exec backend python -m app.evaluation.planner                                   # alle Fälle, je 2 Läufe
@@ -147,9 +147,23 @@ docker compose exec backend python -m app.evaluation.planner --case bahnauskunft
 docker compose exec -e LLM_REASONING_EFFORT=low backend python -m app.evaluation.planner --label low --output /app/low.json
 ```
 
-Gemessen werden Laufzeit (davon Wartezeit auf Tools), Modellaufrufe, Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen des Recherche-Agenten in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation` bzw. `plan_hut_tour`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt, und bei Fernweg-Touren eine Route ohne Teilstücke abseits des Fernwegs. Ein Durchlauf kostet etwa 0,10-0,15 $ und dauert mit `LLM_REQUESTS_PER_MINUTE=5` rund 10-15 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
+Gemessen werden Laufzeit (davon Wartezeit auf Tools), die Phasen des Graphen (Intake, Vorab-Phase, Planer), Dauer je Tool, Modellaufrufe (auch je Modell), Eingabe-, Cache-, Ausgabe- und Reasoning-Tokens, Kosten und Wiederholungen durch die Selbstprüfung. Die Qualitätsprüfungen je Fall: erwarteter Ausgabetyp, beide Pflichtsuchen des Recherche-Agenten in der Wissensbasis, Packliste und Sicherheitshinweise, Quellen, Routen-IDs aus `plan_route`, Unterkünfte nur aus `find_accommodation` bzw. `plan_hut_tour`, An- und Rückreise bzw. Weg zum Bahnhof, wo verlangt, und bei Fernweg-Touren eine Route ohne Teilstücke abseits des Fernwegs. Ein Durchlauf (alle Fälle, je 2 Läufe) kostet etwa 0,17-0,21 $ und dauert rund 20-30 Minuten. Er belegt dasselbe Ratenlimit wie die App; währenddessen die App nicht nutzen, sonst scheitern Anfragen mit „Anfragelimit erreicht“.
 
-Stand 23.10.2026 (gpt-5-mini, Standard-Reasoning; je Fall 2 bzw. 4 Läufe, Mittel je Anfrage). Vorher: Anweisungen ohne Hinweis auf gemeinsame Tool-Aufrufe. Nachher: mit diesem Hinweis und gedrosselt auf 5 Anfragen pro Minute.
+Stand 02.11.2026 (gpt-5-mini als Planer, Standard-Reasoning; 9 Fälle mit je 2 Läufen, Mittel je Anfrage). Vorher: Planer als einzelner PydanticAI-Agent. Nachher: LangGraph mit Intake (gpt-4o-mini), Geocoding und Recherche als parallele Vorab-Knoten und gebündelter Relevanzprüfung.
+
+| | vorher | nachher |
+|---|---|---|
+| Laufzeit | 87 s | 75 s |
+| Modellaufrufe gesamt | 5,7 | 5,9 |
+| davon Planer (gpt-5-mini) | 4,1 | 2,4 (−41 %) |
+| Eingabe-Tokens | 41.300 | 29.000 (−30 %) |
+| Ausgabe-Tokens | 4.280 | 3.490 |
+| Kosten je Durchlauf | 0,21 $ | 0,17 $ |
+| Qualitätsprüfungen bestanden | 17/18 | 17/18 |
+
+Die Vorab-Phase ist im Mittel nach 10 s fertig; der Planer startet dann mit Koordinaten und Rechercheergebnis und braucht weniger eigene Runden. Teurere gpt-5-mini-Aufrufe werden durch günstige kleine Modelle ersetzt. Die eine nicht bestandene Prüfung war eine Rückfrage zum Startdatum bei der Rad-Tagestour („in acht Tagen“). Seitdem löst das Intake relative Datumsangaben auf und gibt das Startdatum als Hinweis an den Planer; danach bestand der Fall 5 von 5 Läufen.
+
+Stand 23.10.2026 (vor LangGraph; gpt-5-mini, Standard-Reasoning; je Fall 2 bzw. 4 Läufe, Mittel je Anfrage). Vorher: Anweisungen ohne Hinweis auf gemeinsame Tool-Aufrufe. Nachher: mit diesem Hinweis und gedrosselt auf 5 Anfragen pro Minute.
 
 | | vorher | nachher |
 |---|---|---|
@@ -176,7 +190,7 @@ Beide Downloads gibt es als Schaltflächen in der Planansicht.
 `backend/app/observability.py` – optional. Mit `LANGFUSE_PUBLIC_KEY` und `LANGFUSE_SECRET_KEY` in der `.env` (Projekt anlegen auf [cloud.langfuse.com](https://cloud.langfuse.com), Keys unter *Settings → API Keys*) und einem Neustart des Backends (`docker compose up -d backend`) landet jede Chat-Nachricht als Trace in Langfuse:
 
 - **Ein Trace je Nachricht** mit der Wurzel `chat-turn`: Eingabe ist die Nutzernachricht, Ausgabe die Antwort bzw. der Plantext, Metadaten enthalten das Ergebnis (`plan`, `question`, `answer`, `error`) und die Zahl der Tool-Aufrufe. Fehlgeschlagene Läufe sind als `ERROR` markiert.
-- **Darunter:** der Agent `adventure-planner` mit jedem Modellaufruf als Generation (Modell, Tokens, Kosten, Reasoning-Zusammenfassung), die Tool-Aufrufe, darunter der Recherche-Agent `knowledge-researcher` mit der Wissenssuche `retrieve-knowledge` (Anfrage, Treffer mit Ähnlichkeit, Embedding) und die Relevanzprüfung `relevance-grader`.
+- **Darunter:** der Intake-Agent `intake`, bei einer neuen Tour der Recherche-Agent aus der Vorab-Phase, dann der Agent `adventure-planner` mit jedem Modellaufruf als Generation (Modell, Tokens, Kosten, Reasoning-Zusammenfassung), die Tool-Aufrufe, darunter der Recherche-Agent `knowledge-researcher` mit der Wissenssuche `retrieve-knowledge` (Anfrage, Treffer mit Ähnlichkeit, Embedding) und die Relevanzprüfung `relevance-grader`.
 - **Sessions und Nutzer:** Alle Nachrichten eines Abenteuers bilden die Session `adventure-<id>`; als Nutzer wird die numerische ID übertragen, nicht die E-Mail.
 - **Maskierte Wohnadresse:** Straße und Hausnummer aus dem Profil werden vor dem Export durch `[Adresse]` bzw. `[Straße]` ersetzt (auch in Tool-Argumenten, Geocoding-Ergebnissen und Reasoning). Ort und Koordinaten bleiben sichtbar, abgekürzte Schreibweisen wie „Nelkenstr.“ werden nicht erkannt.
 
@@ -195,7 +209,7 @@ Wer eine Einstellung in `config.py` ergänzt, trägt sie also auch in `.env.exam
 | Variable | Bedeutung |
 |---|---|
 | `LLM_MODEL` | PydanticAI-Modellname, z. B. `openai:gpt-5-mini`, `anthropic:claude-sonnet-5-5`, `ollama:llama3.3` |
-| `LLM_REQUESTS_PER_MINUTE` | Anfragelimit des API-Keys je Modell; Planer, Recherche-Agent und Relevanzprüfung senden höchstens so viele Modellaufrufe je Minute und Modell und warten sonst. 0 = nicht drosseln. |
+| `LLM_REQUESTS_PER_MINUTE` | Anfragelimit des API-Keys je Modell; Intake, Planer, Recherche-Agent und Relevanzprüfung senden höchstens so viele Modellaufrufe je Minute und Modell und warten sonst. 0 = nicht drosseln. |
 | `LLM_REASONING_EFFORT` | Optional: Reasoning-Aufwand des Planers bei Reasoning-Modellen (`minimal`, `low`, `medium`, `high`). Leer = Standard des Modells; `low` spart Tokens, verschlechterte aber die Planung (siehe „Planer messen“). |
 | `INTAKE_MODEL` | Kleines Modell im ersten Knoten des Graphen; bestimmt vorab Orte und Startdatum, die vor dem Planer nachgeschlagen bzw. aufgelöst werden (Standard `openai:gpt-4o-mini`). Leer = aus. |
 | `RESEARCH_MODEL` | Modell des Recherche-Agenten, an den der Planer die Suche in der Wissensbasis delegiert (Standard `openai:gpt-4.1-mini`). |
