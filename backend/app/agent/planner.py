@@ -118,7 +118,9 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Etappenziele, um dort Hütten zu suchen: Solche Hütten liegen meist abseits, die Route führt dann durchs Tal.
    Passt eine Hütte nicht (z. B. Wunsch des Nutzers), tausche sie gegen eine aus `other_huts` und rufe `plan_route`
    mit den Hütten als Wegpunkten auf. `lowest_m` je Etappe zeigt, wie tief sie absteigt; Abstiege ins Tal und
-   Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen.
+   Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen. Meldet
+   `note` zu lange Gehzeiten, nenne sie in den Notizen der Etappen und in der Zusammenfassung und biete die dort
+   genannte Zahl an Nächten an; plane trotzdem mit den gewünschten Tagen, statt nachzufragen.
 4. `get_weather` für Ort und Zeitraum.
 5. `research_knowledge` einmal vor jedem neuen Plan: Ein Recherche-Agent durchsucht die Wissensbasis zu Region
    bzw. Route, Ausrüstung und Sicherheit für die Fortbewegungsart sowie zur Übernachtungsart und fasst die Treffer
