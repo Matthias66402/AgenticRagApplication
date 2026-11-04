@@ -309,6 +309,7 @@ async def test_route_follows_named_route_from_waymarked_trails(ctx) -> None:
     assert waymarked.call_count == 4  # Gebietssuche je Wegpunkt, Verlauf der passenden Relation
     assert "8.250000,53.150000" in brouter.calls[0].request.url.params["lonlats"]  # Bogen nach Norden
     assert result["named_route"]["routes"] == ["D2 Testküsten-Radweg"]
+    assert result["named_route"]["source"] == "waymarked"  # für die Datenquellen des Plans
     assert result["named_route"]["off_route_legs"] == []
     assert result["named_route"]["on_route_km"] == pytest.approx(19.8, abs=0.5)
 
@@ -345,6 +346,7 @@ async def test_route_follows_named_route(ctx) -> None:
     assert result["source"].startswith("BRouter trekking entlang D2 Testküsten-Radweg")
     assert "OpenStreetMap" in result["source"]
     assert result["named_route"]["routes"] == ["D2 Testküsten-Radweg"]
+    assert result["named_route"]["source"] == "overpass"
     assert result["named_route"]["off_route_legs"] == []
     # Lücke zwischen den Wegen überbrückt: beide Teilstücke liegen auf dem Fernweg
     assert result["named_route"]["on_route_km"] == pytest.approx(19.8, abs=0.5)
@@ -385,7 +387,7 @@ async def test_named_route_from_catalog_without_overpass(ctx) -> None:
     assert overpass.call_count == 0
     assert "8.250000,53.000000" in brouter.calls[0].request.url.params["lonlats"]
     assert result["named_route"] == {
-        "routes": ["Testweg"], "on_route_km": 23.2, "off_route_legs": [],
+        "routes": ["Testweg"], "source": "catalog", "on_route_km": 23.2, "off_route_legs": [],
         "checkpoints": [{"km": 12, "lat": 53.0, "lon": 8.25}],  # Stützpunkt der Echo-Geometrie
     }  # fmt: skip
     assert result["source"] == "BRouter trekking entlang Testweg (Verlauf: © OpenStreetMap-Mitwirkende)"

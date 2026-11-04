@@ -119,7 +119,7 @@ class AdventurePlan(BaseModel):
     packing_tips: list[str] = Field(default_factory=list)
     safety_notes: list[str] = Field(default_factory=list)
     sources: list[str] = Field(
-        default_factory=list, description="Genutzte Wissensbasis-Dokumente und Datendienste"
+        default_factory=list, description="Titel genutzter Wissensbasis-Dokumente (Datendienste ergänzt das System)"
     )
 
     @model_validator(mode="after")

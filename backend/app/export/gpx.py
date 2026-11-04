@@ -3,6 +3,7 @@
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from app.agent.data_sources import describe
 from app.agent.tools.common import haversine_km
 from app.export.trip import is_train_trip
 
@@ -78,6 +79,10 @@ def build_gpx(plan: dict[str, Any], day: int | None = None) -> str:
             f"{attribution['publisher']}: „{attribution['title']}“, Version vom {attribution['revision_date']}, "
             f"Autoren: {attribution['history_url']}, Lizenz: {attribution['license']} ({attribution['license_url']})"
         )
+    # Datendienste (z. B. OpenStreetMap-Daten unter ODbL, Open-Meteo unter CC BY 4.0)
+    for source in plan.get("data_sources", []):
+        link = ET.SubElement(metadata, "link", href=source["url"])
+        ET.SubElement(link, "text").text = describe(source)
 
     start = plan["start"] if day is None else stages[0]["start"]
     start_date = plan["start_date"] if day is None else stages[0]["date"]

@@ -8,7 +8,7 @@ Eingeloggte Nutzer beschreiben ein Abenteuer in eigenen Worten, etwa „3 Tage H
 - **Planansicht:** Karte mit Route, Etappen und Unterkünften, interaktives Höhenprofil, Etappen, Wetter, Packliste, Sicherheitshinweise und Quellen.
 - **An- und Abreise mit der Bahn:** konkrete Verbindungen mit Zeiten, Linien und Gleisen. Auch reine Bahnauskünfte ohne Tour sind möglich.
 - **Exporte:** PDF als Druckversion mit OpenStreetMap-Karte und Höhenprofil, GPX mit Track und Wegpunkten.
-- **Nachvollziehbare Quellen:** Genutzte Wikivoyage-Artikel erscheinen mit Lizenzangabe (CC BY-SA) im Plan, im PDF und im GPX.
+- **Nachvollziehbare Quellen:** Genutzte Wikivoyage-Artikel (CC BY-SA) und die Datendienste, die Daten für den Plan geliefert haben (OpenStreetMap über Nominatim, Waymarked Trails bzw. Overpass, OpenRouteService, BRouter, Open-Meteo, Transitous), erscheinen mit Zweck und Lizenz im Plan, im PDF und im GPX. Beides ermittelt das Backend aus dem Verlauf des Agenten, nicht aus Angaben des LLM.
 - **Messbare Suchqualität:** Eine Evaluation misst, wie gut die Wissensbasis passende Abschnitte findet und unpassende aussortiert.
 
 | Schicht | Technik |
@@ -96,7 +96,7 @@ docker compose exec backend python -m app.seed.long_distance_routes "Elberadweg"
 docker compose exec backend python -m app.seed.long_distance_routes --force                # neu importieren (aktueller OSM-Stand)
 ```
 
-Neue Fernwege: Eintrag mit der Relations-ID (bei mehrteiligen Fernwegen die Superroute, zu finden z. B. auf openstreetmap.org) in die JSON-Datei aufnehmen und importieren. Die Daten stehen unter der ODbL; die Quellenangabe „© OpenStreetMap-Mitwirkende“ erscheint im Plan.
+Neue Fernwege: Eintrag mit der Relations-ID (bei mehrteiligen Fernwegen die Superroute, zu finden z. B. auf openstreetmap.org) in die JSON-Datei aufnehmen und importieren. Die Daten stehen unter der ODbL; nutzt ein Plan den Verlauf, erscheint er unter „Daten von“ mit „© OpenStreetMap-Mitwirkende“ und Lizenz.
 
 ## Wissensbasis erweitern
 
@@ -252,11 +252,11 @@ Hinweis zu OpenAI: Ein Projekt mit niedrigem Ratenlimit (z. B. 5 Anfragen pro Mi
 ```
 backend/app/
   agent/       graph.py (LangGraph-Ablauf), intake.py (Intake), planner.py (Planer-Agent),
-               research.py (Recherche-Agent), runner.py (Event-Streaming),
+               research.py (Recherche-Agent), runner.py (Event-Streaming), data_sources.py (Datendienste),
                plan_schema.py, deps.py, models.py, rate_limit.py (Drosselung auf das Anfragelimit)
     tools/     geocode, routing (+ Gehzeit), weather, accommodation, huts, knowledge, research, sun, transit
   rag/         ingest.py (Chunking), embeddings.py, retrieve.py (pgvector-Suche), relevance.py (Relevanzprüfung),
-               attribution.py + wikivoyage.py (Quellenangaben)
+               attribution.py + wikivoyage.py (Quellenangaben der Wissensbasis)
   evaluation/  retrieval.py + retrieval_cases.json (Messung der Suchqualität),
                planner.py + planner_cases.json (Aufwand und Ergebnisqualität des Planers)
   export/      pdf.py, gpx.py, basemap.py (OSM-Kartenhintergrund), filename.py

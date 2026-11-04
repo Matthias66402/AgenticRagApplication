@@ -264,6 +264,7 @@ Der komplette PydanticAI-Nachrichtenverlauf wird als `agent_history` am Abenteue
 
 - **Chatnachrichten:** Nutzer- und Agentennachricht werden in `chat_messages` gespeichert, inklusive der Tool-Aufrufe für die Anzeige.
 - **Plan:** Er wird zusammen mit den Routengeometrien gespeichert (`build_stored_plan`). Hat das LLM vergessen, `route_ids` zu setzen, wird die zuletzt berechnete Route übernommen.
+- **Quellen:** Wie die Wikivoyage-Artikel (`knowledge_attributions`, `rag/attribution.py`) bestimmt das Backend auch die Datendienste deterministisch aus dem Verlauf (`data_sources()` in `agent/data_sources.py`). Jedes erfolgreiche Tool-Ergebnis zählt, auch aus früheren Nachrichten und aus den Vorab-Aufrufen. `geocode`, `find_accommodation` und `plan_hut_tour` stehen für Nominatim bzw. Overpass, `plan_route` für den Router aus `source` und für die Herkunft des Fernweg-Verlaufs aus `named_route.source` (Katalog, Waymarked Trails oder Overpass). `get_weather` steht für Open-Meteo, `find_train_connections` mit Verbindungen für Transitous. Je Dienst speichert der Plan unter `data_sources` Name, Link, Zweck, Urheber der Daten und Lizenz, z. B. „© OpenStreetMap-Mitwirkende“ unter ODbL oder Open-Meteo unter CC BY 4.0. Luftlinien-Schätzungen, Fehler und leere Ergebnisse zählen nicht. In `sources` trägt das LLM nur noch Titel von Wissensbasis-Dokumenten ein. Früher nannte es dort auch Datendienste, aber uneinheitlich („OpenRouteService (r-0665adad)“, „plan_hut_tour Ergebnis“) oder gar nicht. Ältere Pläne ergänzt `python -m app.seed`.
 
 ---
 
@@ -314,7 +315,8 @@ docker compose exec backend pytest -q
 3. Fehler mit `tool_error(...)` zurückgeben statt Exceptions zu werfen.
 4. In `build_agent()` (`planner.py`) zur Liste `tools=[...]` hinzufügen.
 5. Optional in `INSTRUCTIONS` beschreiben, wann das Tool sinnvoll ist, und in `TOOL_LABELS` (`frontend/src/lib/labels.ts`) ein Symbol und eine Bezeichnung für die Anzeige ergänzen.
-6. Test mit `respx`-Mocks in `backend/tests/test_tools.py` ergänzen.
+6. Liefert das Tool Daten eines externen Dienstes, diesen mit Lizenz in `PROVIDERS` und `tool_uses()` (`agent/data_sources.py`) eintragen, damit er unter den Quellen des Plans erscheint.
+7. Test mit `respx`-Mocks in `backend/tests/test_tools.py` ergänzen.
 
 ### Weitere Regeln für den Plan
 

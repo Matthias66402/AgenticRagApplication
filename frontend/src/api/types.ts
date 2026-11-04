@@ -79,6 +79,18 @@ export interface Attribution {
   license_url: string;
 }
 
+/** Datendienst, der Daten für den Plan geliefert hat (z. B. OpenStreetMap über Nominatim, Open-Meteo) */
+export interface DataSource {
+  name: string;
+  url: string;
+  /** Wofür, z. B. "Ortssuche, Unterkunftssuche" */
+  purpose: string;
+  /** Urheber der Daten, z. B. "© OpenStreetMap-Mitwirkende" */
+  data: string | null;
+  license: string | null;
+  license_url: string | null;
+}
+
 /** Link zur Verbindungssuche bei bahn.de, wenn Transitous nach dem Fahrplanwechsel keine (sicheren) Daten hat */
 export interface TimetableLink {
   label: string;
@@ -110,6 +122,8 @@ export interface AdventurePlan {
   sources: string[];
   /** Namensnennung für genutzte Wissensbasis-Inhalte (z. B. Wikivoyage, CC BY-SA); fehlt bei alten Plänen */
   attributions?: Attribution[];
+  /** Datendienste mit Lizenz, aus dem Agent-Verlauf ermittelt; fehlt bei alten Plänen */
+  data_sources?: DataSource[];
   /** fehlt bei alten Plänen */
   timetable_links?: TimetableLink[];
 }
@@ -135,6 +149,8 @@ export interface TrainTripPlan {
   return_journey?: Journey | null;
   access?: AccessRoute | null;
   routes?: Record<string, ([number, number] | [number, number, number])[]>;
+  /** fehlt bei alten Reisekarten */
+  data_sources?: DataSource[];
 }
 
 export type StoredPlan = AdventurePlan | TrainTripPlan;

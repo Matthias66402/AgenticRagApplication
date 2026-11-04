@@ -143,7 +143,8 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
 - Liefert ein Tool einen Fehler oder eine Schätzung, passe das Vorgehen an und weise im Plan darauf hin.
 - Bahnverbindungen ausschließlich aus `find_train_connections` übernehmen (Zeiten, Linien, Gleise unverändert).
   Ändern sich Abfahrts- oder Zielort einer Bahnfahrt (z. B. andere Unterkunft), die Verbindung neu abfragen.
-- Trage genutzte Wissensbasis-Dokumente (Titel) und Datendienste in `sources` ein.
+- Trage genutzte Wissensbasis-Dokumente (Titel) in `sources` ein, keine Datendienste oder route_ids: Die
+  Datendienste (OpenStreetMap, Routing, Wetter, Fahrplan) ergänzt das System mit Lizenz.
 - Etappenenden sind immer reale Orte (per `geocode` gefunden) oder Unterkünfte aus `find_accommodation` bzw.
   `plan_hut_tour`, niemals interpolierte Koordinaten. Wähle dafür passende Orte entlang der Strecke, z. B. Talorte
   oder Hüttenstandorte.

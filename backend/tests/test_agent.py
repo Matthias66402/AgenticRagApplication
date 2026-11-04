@@ -262,6 +262,8 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
     assert events[-2]["plan"]["return_journey"] is None
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
     assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["research_knowledge", "find_train_connections"]
+    # Datendienste ergänzt das Backend aus dem Verlauf, nicht das Modell
+    assert [s["name"] for s in stored["plan"]["data_sources"]] == ["Transitous"]
 
 
 @respx.mock

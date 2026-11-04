@@ -4,6 +4,7 @@ import { formatDate, shortPlace } from "../lib/labels";
 import { JourneyCard, TransitNote } from "./JourneyCard";
 import { LinkedText } from "./LinkedText";
 import { ElevationProfile, buildProfile, type ProfilePoint } from "./ElevationProfile";
+import { DataSourceList } from "./DataSourceList";
 import { DownloadButton } from "./PlanCard";
 import { RouteMap, type MapPlan } from "./RouteMap";
 
@@ -88,6 +89,7 @@ export function TrainTripCard({ plan, adventureId }: { plan: TrainTripPlan; adve
           {plan.return_journey && <JourneyCard label="🚆 Rückfahrt" journey={plan.return_journey} />}
         </div>
         <TransitNote />
+        <DataSourceList sources={plan.data_sources ?? []} />
       </section>
     </article>
   );

@@ -7,9 +7,11 @@ Aufruf: ``python -m app.seed`` (idempotent; ``--force`` liest vorhandene Dokumen
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import select
 
+from app.agent.data_sources import data_sources
 from app.auth.security import hash_password
 from app.config import get_settings
 from app.db import SessionLocal, engine
@@ -50,15 +52,20 @@ async def seed_documents(force: bool = False) -> None:
 
 
 async def backfill_attributions() -> None:
-    """Pläne aus der Zeit vor der Quellenangabe: genutzte Wikivoyage-Artikel aus dem Agent-Verlauf ergänzen."""
+    """Pläne aus der Zeit vor der Quellenangabe: genutzte Wikivoyage-Artikel und Datendienste aus dem Agent-Verlauf
+    ergänzen."""
     async with SessionLocal() as session:
         adventures = await session.scalars(select(Adventure).where(Adventure.plan.is_not(None)))
         updated = 0
         for adventure in adventures:
-            if "attributions" in adventure.plan:
+            missing: dict[str, Any] = {}
+            if "attributions" not in adventure.plan:
+                missing["attributions"] = await knowledge_attributions(session, adventure.agent_history or [])
+            if "data_sources" not in adventure.plan:
+                missing["data_sources"] = data_sources(adventure.agent_history or [])
+            if not missing:
                 continue
-            attributions = await knowledge_attributions(session, adventure.agent_history or [])
-            adventure.plan = adventure.plan | {"attributions": attributions}
+            adventure.plan = adventure.plan | missing
             updated += 1
         await session.commit()
         print(f"Quellenangaben ergänzt: {updated} Pläne")

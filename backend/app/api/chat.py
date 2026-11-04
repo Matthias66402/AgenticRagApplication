@@ -8,6 +8,7 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
+from app.agent.data_sources import data_sources
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import PLAN_KIND_TOUR, PLAN_KIND_TRAIN_TRIP, TrainTripPlan
 from app.agent.runner import RunOutcome, run_planner
@@ -39,6 +40,7 @@ def build_stored_plan(
 
     `kind` unterscheidet Touren von Reisekarten reiner Bahnfahrten (ältere Pläne ohne `kind` sind Touren).
     `timetable_links`: bahn.de-Links für Bahnabfragen ohne (sichere) Fahrplandaten, siehe `plan_timetable_links`.
+    `data_sources`: Datendienste mit Lizenz aus dem Verlauf (app.agent.data_sources).
     """
     assert outcome.plan is not None
     known_routes = (previous or {}).get("routes", {}) | deps.routes
@@ -46,7 +48,9 @@ def build_stored_plan(
         # Geometrie des Wegs zum Bahnhof für die Karte
         access = outcome.plan.access
         routes = {access.route_id: known_routes[access.route_id]} if access and access.route_id in known_routes else {}
-        return outcome.plan.model_dump(mode="json") | {"kind": PLAN_KIND_TRAIN_TRIP, "routes": routes}
+        return outcome.plan.model_dump(mode="json") | {
+            "kind": PLAN_KIND_TRAIN_TRIP, "routes": routes, "data_sources": data_sources(history or []),
+        }  # fmt: skip
     # Ohne Duplikate: Das Modell nennt dieselbe Route mitunter je Tag, Profil und GPX hängen die Tracks aneinander
     route_ids = [rid for rid in dict.fromkeys(outcome.plan.route_ids) if rid in known_routes]
     if not route_ids and deps.routes:
@@ -57,6 +61,7 @@ def build_stored_plan(
         "route_ids": route_ids,
         "routes": {rid: known_routes[rid] for rid in route_ids},
         "attributions": merge_attributions((previous or {}).get("attributions", []), attributions or []),
+        "data_sources": data_sources(history or []),
         "timetable_links": plan_timetable_links(outcome.plan.model_dump(mode="json"), history or []),
     }
 

@@ -8,6 +8,7 @@ import type { ProfilePoint } from "./ElevationProfile";
 import { JourneyCard, TransitNote } from "./JourneyCard";
 import { LinkedText } from "./LinkedText";
 import { RouteMap } from "./RouteMap";
+import { DataSourceList } from "./DataSourceList";
 
 const num = (value: number | null | undefined, unit: string) =>
   value === null || value === undefined ? null : `${value.toLocaleString("de-DE", { maximumFractionDigits: 1 })} ${unit}`;
@@ -53,6 +54,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
   const profile = useMemo(() => buildProfile(plan), [plan]);
   const [hovered, setHovered] = useState<ProfilePoint | null>(null);
   const attributions = plan.attributions ?? [];
+  const dataSources = plan.data_sources ?? [];
   const timetableLinks = plan.timetable_links ?? [];
   const multiDay = plan.stages.length > 1;
   // Mehrtagestouren als Gesamt-GPX oder eine GPX je Tagesetappe; Vorauswahl aus dem Profil, hier umschaltbar
@@ -235,7 +237,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           </ul>
         </section>
       )}
-      {(plan.sources.length > 0 || attributions.length > 0) && (
+      {(plan.sources.length > 0 || attributions.length > 0 || dataSources.length > 0) && (
         <section>
           <h3>Quellen</h3>
           <ul className="muted small">
@@ -270,6 +272,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
               </ul>
             </div>
           )}
+          <DataSourceList sources={dataSources} />
         </section>
       )}
     </article>
