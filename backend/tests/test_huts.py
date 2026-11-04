@@ -9,7 +9,9 @@ from app.agent.plan_schema import AccommodationType, AdventurePlan
 from app.agent.planner import check_hut_tour
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.common import haversine_km
-from app.agent.tools.huts import choose_chain, overnight_likely, plan_hut_tour, problem_legs, valley_drops
+from app.agent.tools.huts import (
+    attempt_score, choose_chain, overnight_likely, plan_hut_tour, problem_legs, valley_drops, walking_time_note,
+)  # fmt: skip
 from app.agent.tools.routing import BROUTER_URL, Coordinate
 from tests.test_agent import make_plan
 from tests.test_tools import brouter_echo, ctx, reset_overpass_state  # noqa: F401 (Fixtures)
@@ -117,6 +119,33 @@ def test_deep_valley_between_huts_is_a_problem_leg() -> None:
     assert problem_legs(waypoints, {"segments": segments}, drops) == [1]
     # Schätzung ohne Wegverlauf: keine Aussage
     assert problem_legs(waypoints, {"segments": segments, "estimated": True}, drops) == []
+
+
+def test_too_long_walking_time_is_a_problem_leg_and_noted() -> None:
+    waypoints = [START, Coordinate(lat=47.0, lon=11.2), END]
+    segments = [{"distance_km": 15.0, "duration_hours": 9.5}, {"distance_km": 15.0, "duration_hours": 6.0}]
+    assert problem_legs(waypoints, {"segments": segments}, [0.0, 0.0]) == [0]
+
+    # Garmisch → Innsbruck in 4 Tagen: ~41 h Gehzeit lassen sich nicht auf 7 h je Tag verteilen
+    note = walking_time_note({"segments": [{"duration_hours": h} for h in (9.9, 9.5, 9.7, 11.5)]})
+    assert note is not None and "Etappe 1, 2, 3, 4" in note and "5 Nächte nötig" in note
+    # Eine lange Etappe, insgesamt aber genug Tage: Hinweis ohne mehr Nächte
+    note = walking_time_note({"segments": [{"duration_hours": h} for h in (7.5, 4.0, 5.0)]})
+    assert note is not None and "Etappe 1 " in note and "Nächte" not in note
+    assert walking_time_note({"segments": [{"duration_hours": 6.0}]}) is None
+    assert walking_time_note({"segments": [{"duration_hours": 9.0}], "estimated": True}) is None
+
+
+def test_attempt_score_prefers_shortest_longest_day() -> None:
+    """Ein extremer Tag ist schlechter als mehrere etwas zu lange; Umwege und Talabstiege wiegen schwerer."""
+
+    def route(*hours: float) -> dict:
+        return {"segments": [{"duration_hours": h} for h in hours]}
+
+    one_extreme = attempt_score({1: "too_long"}, route(6.4, 14.7, 6.3, 6.9))
+    balanced = attempt_score({1: "too_long", 2: "too_long", 3: "too_long"}, route(4.6, 9.9, 9.3, 9.3))
+    detour = attempt_score({0: "detour"}, route(6.0, 7.0, 7.0, 8.0))
+    assert balanced < one_extreme < detour
 
 
 async def test_plan_hut_tour_rejects_round_trip(ctx) -> None:  # noqa: F811
