@@ -20,10 +20,13 @@ import asyncio
 import json
 import logging
 import operator
+import socket
 import uuid
 from types import SimpleNamespace
 from typing import Annotated, Any, Literal, TypedDict
 
+import httpx
+import openai
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 from langgraph.graph.state import CompiledStateGraph
@@ -47,7 +50,7 @@ from pydantic_ai import (
     UsageLimits,
     UserPromptPart,
 )
-from pydantic_ai.exceptions import AgentRunError, ModelRateLimitError
+from pydantic_ai.exceptions import AgentRunError, ModelConnectionError, ModelRateLimitError, ModelRequestTimeout
 
 from app.agent.deps import AgentDeps
 from app.agent.intake import Prefetch, plan_prefetch
@@ -61,6 +64,29 @@ logger = logging.getLogger(__name__)
 
 RESULT_PREVIEW_CHARS = 600
 USAGE_LIMITS = UsageLimits(request_limit=40)
+
+# Statt "Request timed out": Meist war die Internet- bzw. DNS-Verbindung kurz weg (z. B. nach dem Ruhezustand oder
+# einem WLAN-Wechsel), dann scheitern Sprachmodell und Tools gleichzeitig ("Temporary failure in name resolution")
+NETWORK_ERROR_MESSAGE = (
+    "Keine Verbindung zum Sprachmodell (Zeitüberschreitung bzw. Netzwerkfehler). Meist ist die Internet- oder "
+    "DNS-Verbindung kurz unterbrochen. Bitte die Verbindung prüfen und die Nachricht erneut senden."
+)
+NETWORK_ERRORS: tuple[type[BaseException], ...] = (
+    ModelConnectionError, ModelRequestTimeout, httpx.TransportError, socket.gaierror, TimeoutError,
+    openai.APIConnectionError,
+)  # fmt: skip
+
+
+def is_network_error(exc: BaseException) -> bool:
+    """Zeitüberschreitung oder Verbindungsfehler, auch als Ursache einer anderen Ausnahme (z. B. im Stream)."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, NETWORK_ERRORS):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
 
 
 class PrefetchedCall(TypedDict):
@@ -212,9 +238,13 @@ async def planner(state: PlannerState, runtime: Runtime[AgentDeps]) -> PlannerSt
     except ModelRateLimitError:
         # Trotz Drosselung möglich, z. B. wenn ein anderer Prozess (Evaluation) dasselbe Limit nutzt
         return {"error": "Das Sprachmodell ist gerade ausgelastet (Anfragelimit erreicht). Bitte in einer Minute erneut senden."}
-    except AgentRunError as exc:
-        return {"error": f"Der Agent konnte die Anfrage nicht abschließen: {exc}"}
-    except Exception as exc:  # Anbieter-/Netzwerkfehler sollen den Stream sauber beenden
+    except Exception as exc:
+        if is_network_error(exc):
+            logger.warning("Planer ohne Verbindung zum Sprachmodell: %s: %s", type(exc).__name__, exc)
+            return {"error": NETWORK_ERROR_MESSAGE}
+        if isinstance(exc, AgentRunError):
+            return {"error": f"Der Agent konnte die Anfrage nicht abschließen: {exc}"}
+        # Anbieterfehler sollen den Stream sauber beenden
         return {"error": f"Fehler bei der Planung: {type(exc).__name__}: {exc}"}
     return {}  # Stream ohne Ergebnis-Event: finish_error, Antworttext wie bisher aus app.api.chat
 

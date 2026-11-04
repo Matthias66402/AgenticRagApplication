@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import socket
 from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Any
@@ -10,11 +11,12 @@ import httpx
 import pytest
 import respx
 from pydantic_ai import ModelMessage, ModelResponse
+from pydantic_ai.exceptions import ModelTimeoutError
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from app.agent.deps import AgentDeps
-from app.agent.graph import planner_graph
+from app.agent.graph import NETWORK_ERROR_MESSAGE, planner_graph
 from app.agent.intake import Prefetch, conversation_context, intake_agent, intake_prompt, plan_prefetch
 from app.agent.plan_schema import TransportMode
 from app.agent.planner import planner_agent
@@ -106,6 +108,34 @@ async def test_runner_reports_agent_errors(deps: AgentDeps) -> None:
     assert events == [{"type": "error", "message": "Fehler bei der Planung: RuntimeError: Anbieter nicht erreichbar"}]
     assert outcome.error == events[0]["message"]
     assert outcome.history_json is None
+
+
+def dns_failure() -> Exception:
+    """Wie ein Abbruch im Stream, dessen Ursache eine fehlgeschlagene Namensauflösung ist."""
+    try:
+        raise socket.gaierror(-3, "Temporary failure in name resolution")
+    except socket.gaierror as cause:
+        try:
+            raise RuntimeError("Stream abgebrochen") from cause
+        except RuntimeError as exc:
+            return exc
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ModelTimeoutError("gpt-5-mini", "Request timed out."), dns_failure(), httpx.ConnectError("Verbindung abgelehnt")],
+)
+async def test_runner_reports_network_errors_clearly(deps: AgentDeps, error: Exception) -> None:
+    """Statt "Request timed out" ein Hinweis auf die Verbindung (Sprachmodell und Tools scheitern dann gemeinsam)."""
+
+    async def fail(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+        raise error
+        yield ""  # pragma: no cover
+
+    with planner_agent.override(model=FunctionModel(stream_function=fail)):
+        events, outcome = await collect("Hallo", deps)
+    assert events == [{"type": "error", "message": NETWORK_ERROR_MESSAGE}]
+    assert outcome.error == NETWORK_ERROR_MESSAGE
 
 
 GARMISCH = {"display_name": "Garmisch-Partenkirchen", "lat": "47.49", "lon": "11.09", "category": "place", "type": "town"}
