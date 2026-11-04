@@ -88,7 +88,13 @@ Schwelle und Relevanzprüfung sind mit der Evaluation unten begründet.
 
 ## Fernwege
 
-Soll eine Tour einem ausgeschilderten Fernweg folgen (z. B. „auf dem Ostseeküsten-Radweg“ oder „entlang der Nordseeküste“), routet der Agent entlang dessen Verlauf aus OpenStreetMap und wählt die Etappenorte anhand von Kilometer-Marken auf dem Fernweg. Die Fernwege aus `backend/app/seed/long_distance_routes.json` (Name, weitere Namen, OSM-Relationen) werden dafür vorab importiert, weil Live-Abfragen bei Overpass oft ein bis zwei Minuten dauern. Andere Fernwege fragt die App live ab.
+Soll eine Tour einem ausgeschilderten Fernweg folgen (z. B. „auf dem Ostseeküsten-Radweg“ oder „entlang der Nordseeküste“), übergibt der Agent dessen Namen an `plan_route`. Das Tool routet entlang des Verlaufs aus OpenStreetMap und liefert Kilometer-Marken auf dem Fernweg, an denen der Agent die Etappenorte wählt. Das funktioniert für Rad-, MTB- und Wanderrouten. Den Verlauf sucht das Tool in dieser Reihenfolge:
+
+1. **Katalog:** 20 Fernwege aus `backend/app/seed/long_distance_routes.json` (Name, weitere Namen wie „Ostseeradweg“, OSM-Relationen), vorab in die Datenbank importiert und sofort verfügbar. Ihre Namen stehen in den Anweisungen des Planers, damit er sie bevorzugt.
+2. **Dynamische Suche über [Waymarked Trails](https://waymarkedtrails.org):** Jeden anderen Fernweg sucht das Tool live. Es fragt die ausgeschilderten Routen im Umkreis von Start, Ziel und bis zu vier Zwischenpunkten ab, nimmt die mit passendem Namen bzw. Kürzel (z. B. „EV10“) und lädt deren Verlauf. Das dauert meist nur Sekunden. Passt kein Name, nennt die Fehlermeldung die Routen in der Nähe, und der Agent versucht es mit einem davon.
+3. **Overpass API als Ersatz**, wenn Waymarked Trails nicht erreichbar ist. Das dauert oft ein bis zwei Minuten, weil die öffentlichen Server häufig überlastet sind.
+
+Live gefundene Verläufe bleiben 6 Stunden im Speicher, damit weitere Aufrufe derselben Tour (z. B. mit den gewählten Unterkünften als Wegpunkten) sofort antworten. Welche Quelle den Verlauf geliefert hat, steht im Plan unter „Daten von“. Teilstücke, die nicht dem Fernweg folgen, meldet das Tool dem Agenten. Häufig genutzte Fernwege lohnen sich im Katalog, weil das Tool sie dort ohne Abfrage findet und auch Namen wie „Ostseeradweg“ erkennt, die in OSM anders lauten.
 
 ```bash
 docker compose exec backend python -m app.seed.long_distance_routes --list                 # Katalog und Importstand
