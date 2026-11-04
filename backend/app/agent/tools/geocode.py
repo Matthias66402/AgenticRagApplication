@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 from typing import Any
 
@@ -14,6 +15,12 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 _rate_lock = asyncio.Lock()
 _last_request = 0.0
 _cache: dict[tuple[str, str | None], list[dict[str, Any]]] = {}
+
+# Nicht jeder Bahnhof heißt "Hbf": Leer ist in OpenStreetMap "Leer (Ostfriesland)", die Suche nach "Leer Hbf" findet
+# nichts. Ohne Treffer wird dann "Bahnhof <Ort>" gesucht und nur ein Bahnhof bzw. Haltepunkt übernommen (bei Orten
+# ohne Bahnhof liefert die Suche sonst Bushaltestellen und Bahnhofstraßen).
+MAIN_STATION_RE = re.compile(r"\b(hbf|hauptbahnhof)\b\.?", re.IGNORECASE)
+STATION_TYPES = {"railway/station", "railway/halt", "building/train_station", "public_transport/station"}
 
 
 async def _throttle() -> None:
@@ -35,6 +42,14 @@ async def nominatim_search(ctx: RunContext[AgentDeps], params: dict[str, Any]) -
     )
     response.raise_for_status()
     return response.json()
+
+
+def station_fallback(place_name: str) -> str | None:
+    """Suchbegriff "Bahnhof <Ort>" für "<Ort> Hbf" bzw. "<Ort> Hauptbahnhof", sonst None."""
+    if not MAIN_STATION_RE.search(place_name):
+        return None
+    town = MAIN_STATION_RE.sub("", place_name).split(",")[0].strip()
+    return f"Bahnhof {town}" if town else None
 
 
 def _inside(item: dict[str, Any], area: dict[str, Any]) -> bool:
@@ -87,6 +102,9 @@ async def geocode(
         params["countrycodes"] = country_codes
     try:
         items = await nominatim_search(ctx, params)
+        if not items and (fallback := station_fallback(place_name)):
+            found = await nominatim_search(ctx, params | {"q": fallback})
+            items = [i for i in found if f"{i.get('category', '')}/{i.get('type', '')}" in STATION_TYPES]
     except httpx.HTTPError as exc:
         return tool_error(http_error_message("Nominatim", exc))
 

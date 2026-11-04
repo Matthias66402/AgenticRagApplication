@@ -13,7 +13,7 @@ from app.agent.tools import accommodation, named_route, routing
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.common import haversine_km
-from app.agent.tools.geocode import geocode
+from app.agent.tools.geocode import geocode, station_fallback
 from app.agent.tools.routing import (
     BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route, walking_hours,
 )  # fmt: skip
@@ -94,6 +94,39 @@ async def test_geocode_prefers_locality_over_municipality_area(ctx) -> None:
     elsewhere = locality | {"lat": "50.1", "lon": "10.1"}
     respx.get(geocode_module.NOMINATIM_URL).respond(json=[municipality, elsewhere])
     assert (await geocode(ctx, "Worpswede"))[0]["lat"] == 53.261675
+
+
+@respx.mock
+async def test_geocode_finds_station_without_main_station_name(ctx) -> None:
+    """Leer heißt in OpenStreetMap "Leer (Ostfriesland)": "Leer Hbf" findet nichts, "Bahnhof Leer" den Bahnhof."""
+    geocode_module._cache.clear()
+    station = {"display_name": "Leer (Ostfriesland), Bahnhofsring", "lat": "53.2263", "lon": "7.4597",
+               "category": "railway", "type": "station"}  # fmt: skip
+    bus_stop = {"display_name": "Bahnhof", "lat": "53.2", "lon": "7.4", "category": "highway", "type": "bus_stop"}
+
+    def nominatim(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[station, bus_stop] if request.url.params["q"] == "Bahnhof Leer" else [])
+
+    route = respx.get(geocode_module.NOMINATIM_URL).mock(side_effect=nominatim)
+    result = await geocode(ctx, "Leer Hbf, Leer", "de")
+    assert [r["type"] for r in result] == ["railway/station"]  # ohne die Bushaltestelle
+    assert [call.request.url.params["q"] for call in route.calls] == ["Leer Hbf, Leer", "Bahnhof Leer"]
+    assert route.calls[1].request.url.params["countrycodes"] == "de"
+
+    # Ohne Bahnhof im Ort bleibt es beim Fehler, statt eine Bushaltestelle als Bahnhof auszugeben
+    geocode_module._cache.clear()
+    respx.get(geocode_module.NOMINATIM_URL).mock(
+        side_effect=lambda r: httpx.Response(200, json=[bus_stop] if r.url.params["q"].startswith("Bahnhof") else [])
+    )
+    assert "error" in await geocode(ctx, "Weener Hbf")
+
+
+def test_station_fallback_query() -> None:
+    assert station_fallback("Leer Hbf") == "Bahnhof Leer"
+    assert station_fallback("Leer (Ostfriesland) Hauptbahnhof") == "Bahnhof Leer (Ostfriesland)"
+    assert station_fallback("Hbf.") is None
+    assert station_fallback("Leer") is None
+    assert station_fallback("Hbfstraße 3, Leer") is None  # nur das ganze Wort
 
 
 @respx.mock
