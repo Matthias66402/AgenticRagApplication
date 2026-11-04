@@ -412,6 +412,7 @@ async def plan_route(
                 label += f" entlang {', '.join(graph.names)} (Verlauf: © OpenStreetMap-Mitwirkende)"
                 named_route = {
                     "routes": graph.names,
+                    "source": graph.source,
                     "on_route_km": round(route_guide.on_route_km, 1),
                     "off_route_legs": route_guide.off_route_legs,
                 }

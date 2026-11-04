@@ -11,6 +11,7 @@ from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 from PIL import Image
 
+from app.agent.data_sources import describe
 from app.export.basemap import ATTRIBUTION, Viewport, fit_viewport
 from app.export.gpx import ACCOMMODATION_LABELS
 from app.export.trip import is_train_trip
@@ -470,10 +471,22 @@ class PlanPdf(FPDF):
         if plan.get("safety_notes"):
             self.heading("Sicherheit & Regeln")
             self.bullets(plan["safety_notes"])
-        if plan.get("sources") or plan.get("attributions"):
+        if plan.get("sources") or plan.get("attributions") or plan.get("data_sources"):
             self.heading("Quellen")
             self.bullets(plan.get("sources", []), size=8.5, color=MUTED)
             self.attributions(plan.get("attributions", []))
+            self.data_sources(plan.get("data_sources", []))
+
+    def data_sources(self, sources: list[dict[str, Any]]) -> None:
+        """Datendienste mit Lizenz (z. B. OpenStreetMap unter ODbL), verlinkt auf den Dienst."""
+        if not sources:
+            return
+        self.ensure_space(15)
+        self.ln(2)
+        self.paragraph("Daten von:", size=8.5, color=MUTED)
+        for source in sources:
+            self.ensure_space(6)
+            self.paragraph(describe(source), size=8, color=MUTED, link=source["url"])
 
     def attributions(self, attributions: list[dict[str, Any]]) -> None:
         """Namensnennung für lizenzierte Wissensbasis-Inhalte (CC BY-SA): Titel, Link, Autoren, Lizenz, Änderungen."""

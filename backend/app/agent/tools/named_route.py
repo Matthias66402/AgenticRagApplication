@@ -160,6 +160,8 @@ def _cell(lat: float, lon: float) -> tuple[int, int]:
 @dataclass
 class RouteGraph:
     names: list[str]
+    # Woher der Verlauf stammt (Schlüssel in app.agent.data_sources.PROVIDERS): catalog, waymarked oder overpass
+    source: str = ""
     coords: dict[int, Point] = field(default_factory=dict, repr=False)
     edges: dict[int, dict[int, float]] = field(default_factory=dict, repr=False)
     grid: dict[tuple[int, int], list[int]] = field(default_factory=dict, repr=False)
@@ -330,11 +332,11 @@ async def waymarked_graph(
     ways: list[Way] = []
     for base in dict.fromkeys(base for base, _ in found):
         ways += await waymarked_relation_ways(http, user_agent, base, [rid for b, rid in found if b == base])
-    return build_graph(sorted({short_name(r) for r in found.values()} - {""}), ways)
+    return build_graph(sorted({short_name(r) for r in found.values()} - {""}), ways, "waymarked")
 
 
-def build_graph(names: list[str], ways: list[Way]) -> RouteGraph:
-    graph = RouteGraph(names=names)
+def build_graph(names: list[str], ways: list[Way], source: str = "") -> RouteGraph:
+    graph = RouteGraph(names=names, source=source)
     node_way: dict[int, int] = {}
     ends: list[int] = []
     for index, (way_nodes, way_coords) in enumerate(ways):
@@ -456,7 +458,9 @@ async def catalog_graph(ctx: RunContext[AgentDeps], name: str, transport: Transp
             ways = await session.scalar(select(LongDistanceRoute.ways).where(LongDistanceRoute.id == match.id))
     except SQLAlchemyError:
         return None  # z. B. Tabelle fehlt (Migration nicht ausgeführt) → live über Waymarked Trails bzw. Overpass
-    graph = build_graph([match.name], [(nodes, [(lat, lon) for lat, lon in coords]) for nodes, coords in ways or []])
+    graph = build_graph(
+        [match.name], [(nodes, [(lat, lon) for lat, lon in coords]) for nodes, coords in ways or []], "catalog"
+    )
     _catalog_graphs[match.id] = (match.imported_at, graph)
     return graph
 
@@ -480,7 +484,7 @@ async def overpass_graph(
     query = way_query(sorted(r["id"] for r in found), bbox)
     ways = await query_overpass(ctx, query, timeout=OVERPASS_TIMEOUT_SECONDS + 10, cache=False)
     names = sorted({short_name(r.get("tags", {})) for r in found} - {""})
-    return build_graph(names, overpass_ways(ways))
+    return build_graph(names, overpass_ways(ways), "overpass")
 
 
 # (Name normalisiert, Fortbewegungsart, Bounding Box) -> (Ablaufzeitpunkt, Graph). Spätere Aufrufe derselben Tour

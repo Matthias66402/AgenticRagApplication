@@ -30,6 +30,7 @@ def exportable_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "return_journey": plan.get("return_journey"),
         "routes": plan.get("routes", {}),
         "attributions": plan.get("attributions", []),
+        "data_sources": plan.get("data_sources", []),
     }
     if access is None:
         return common | {"transport": "public_transport", "start": None, "stages": [], "route_ids": []}
