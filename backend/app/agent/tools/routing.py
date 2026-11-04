@@ -366,8 +366,8 @@ async def plan_route(
             Trails, meist wenige Sekunden). Passt kein Name, nennt der Fehler die Routen in der Nähe.
 
     Returns:
-        route_id (für AdventurePlan.route_ids), distance_km, duration_hours, ascent_m, descent_m, segments
-        (beim Wandern und MTB mit lowest_m, dem tiefsten Punkt der Etappe);
+        route_id (für AdventurePlan.route_ids), distance_km, duration_hours (beim Wandern Gehzeit nach DAV-Formel),
+        ascent_m, descent_m, segments (beim Wandern und MTB mit lowest_m, dem tiefsten Punkt der Etappe);
         mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon,
         checkpoints: Punkte entlang der Route mit Kilometerstand für die Wahl der Etappenorte).
     """
@@ -451,6 +451,12 @@ async def plan_route(
             for s in route.segments
         ],
     }
+    if transport == TransportMode.hiking:
+        # Gehzeit nach DAV-Formel statt der Router-Dauer (die Höhenmeter kaum berücksichtigt); so braucht der Agent
+        # kein estimate_hiking_time je Etappe
+        for part in (result, *result["segments"]):
+            part["duration_hours"] = walking_hours(part["distance_km"], part["ascent_m"], part["descent_m"])
+        notes.append("duration_hours: reine Gehzeit nach DAV-Formel ohne Pausen (mit Pausen etwa 20-30 % mehr).")
     if transport in (TransportMode.hiking, TransportMode.mtb) and len(result["segments"]) == len(waypoints) - 1:
         for segment, lowest in zip(result["segments"], lowest_points(ctx.deps.routes[route_id], waypoints)):
             if lowest is not None:
@@ -460,6 +466,13 @@ async def plan_route(
     if notes:
         result["note"] = " ".join(notes)
     return result
+
+
+def walking_hours(distance_km: float, ascent_m: float = 0, descent_m: float = 0) -> float:
+    """Gehzeit nach der DAV-/SAC-Faustformel: 4 km/h, 300 Hm/h Aufstieg, 500 Hm/h Abstieg; die kleinere zählt halb."""
+    horizontal = distance_km / 4
+    vertical = ascent_m / 300 + descent_m / 500
+    return round(max(horizontal, vertical) + min(horizontal, vertical) / 2, 1)
 
 
 def estimate_hiking_time(distance_km: float, ascent_m: float = 0, descent_m: float = 0) -> dict[str, Any]:
@@ -472,10 +485,7 @@ def estimate_hiking_time(distance_km: float, ascent_m: float = 0, descent_m: flo
         ascent_m: Aufstieg in Höhenmetern.
         descent_m: Abstieg in Höhenmetern.
     """
-    horizontal = distance_km / 4
-    vertical = ascent_m / 300 + descent_m / 500
-    hours = max(horizontal, vertical) + min(horizontal, vertical) / 2
     return {
-        "walking_hours": round(hours, 1),
+        "walking_hours": walking_hours(distance_km, ascent_m, descent_m),
         "hint": "Reine Gehzeit ohne Pausen; mit Pausen etwa 20-30 % aufschlagen.",
     }

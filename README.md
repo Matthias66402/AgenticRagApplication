@@ -163,6 +163,28 @@ Stand 02.11.2026 (gpt-5-mini als Planer, Standard-Reasoning; 9 Fälle mit je 2 L
 
 Die Vorab-Phase ist im Mittel nach 10 s fertig; der Planer startet dann mit Koordinaten und Rechercheergebnis und braucht weniger eigene Runden. Teurere gpt-5-mini-Aufrufe werden durch günstige kleine Modelle ersetzt. Die eine nicht bestandene Prüfung war eine Rückfrage zum Startdatum bei der Rad-Tagestour („in acht Tagen“). Seitdem löst das Intake relative Datumsangaben auf und gibt das Startdatum als Hinweis an den Planer; danach bestand der Fall 5 von 5 Läufen.
 
+Stand 04.11.2026, Hüttenwanderungen (beide Hütten-Fälle mit je 4 Läufen, gpt-5-mini, Standard-Reasoning). Vorher:
+Gehzeit nur über `estimate_hiking_time`, Wetter ohne Hinweis auf den gemeinsamen Schritt, Recherche-Agent ohne
+Suchgrenze. Nachher: `plan_route` bzw. `plan_hut_tour` liefern beim Wandern die Gehzeit nach DAV-Formel je Etappe,
+`get_weather` im selben Schritt wie `plan_hut_tour`, Recherche-Agent höchstens 5 Suchen.
+
+| | vorher | nachher |
+|---|---|---|
+| Tool-Aufrufe je Lauf | 5 (8/8) | 6 (7/8), 5 (1/8) |
+| Planer-Runden (gpt-5-mini) | 2,0 | 2,0 |
+| Plan mit Wetter | 0/8 | 7/8 |
+| Gehzeit Garmisch → Mittenwald, Tag 2 (10,7 km, 1583 Hm) | 5,0 h (Router) | 8,1 h (DAV) |
+| Laufzeit | 61 s | 59 s |
+| Kosten je Lauf | 0,011 $ | 0,011 $ |
+| Qualitätsprüfungen bestanden | 8/8 | 8/8 |
+
+Seit LangGraph streut die Zahl der Planer-Aufrufe kaum noch; er sparte sich aber Wetter und Gehzeit und übernahm die
+Dauer des Routers, die Höhenmeter kaum berücksichtigt. Größte Streuung war der Recherche-Agent der Vorab-Phase: In 2 von
+17 Läufen ohne Suchgrenze formulierte er immer weiter um (bis zu rund 50 Anfragen, 2,2 Mio. Eingabe-Tokens und
+20 Minuten), einmal bis das Anfragelimit die Recherche abbrach. Seit der Suchgrenze blendet er `search_knowledge` nach
+5 Suchen aus und muss zusammenfassen. Die realistischen Gehzeiten zeigen auch, dass `plan_hut_tour` Etappen nur nach
+Strecke wählt: Garmisch → Innsbruck kommt auf 9,5-11,5 h Gehzeit je Tag.
+
 Stand 23.10.2026 (vor LangGraph; gpt-5-mini, Standard-Reasoning; je Fall 2 bzw. 4 Läufe, Mittel je Anfrage). Vorher: Anweisungen ohne Hinweis auf gemeinsame Tool-Aufrufe. Nachher: mit diesem Hinweis und gedrosselt auf 5 Anfragen pro Minute.
 
 | | vorher | nachher |

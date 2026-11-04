@@ -6,12 +6,16 @@ Zusammenfassung und hält so seinen Kontext klein.
 """
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, Tool, ToolOutput
+from pydantic_ai import Agent, ModelResponse, RunContext, Tool, ToolCallPart, ToolDefinition, ToolOutput
 
 from app.agent.deps import AgentDeps
 from app.agent.models import build_model, model_settings
 from app.agent.tools.knowledge import search_knowledge
 from app.config import get_settings
+
+# Danach steht nur noch die Zusammenfassung zur Wahl. Üblich sind 2-4 Suchen; ohne Grenze formulierte der Agent
+# vereinzelt immer weiter um (ein Lauf: rund 50 Anfragen, 2,2 Mio. Eingabe-Tokens, 20 Minuten).
+MAX_SEARCHES = 5
 
 INSTRUCTIONS = """\
 Du recherchierst für einen Outdoor-Tourenplaner in seiner Wissensbasis und antwortest auf Deutsch.
@@ -35,6 +39,20 @@ class ResearchBrief(BaseModel):
     safety_notes: list[str] = Field(description="Sicherheitshinweise, z. B. Wetter, Gelände, Verkehr")
 
 
+def searches_so_far(ctx: RunContext[AgentDeps]) -> int:
+    return sum(
+        isinstance(part, ToolCallPart) and part.tool_name == "search_knowledge"
+        for message in ctx.messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+    )
+
+
+async def until_search_limit(ctx: RunContext[AgentDeps], tool_def: ToolDefinition) -> ToolDefinition | None:
+    """Blendet `search_knowledge` nach MAX_SEARCHES Suchen aus; das Modell muss dann zusammenfassen."""
+    return tool_def if searches_so_far(ctx) < MAX_SEARCHES else None
+
+
 def build_research_agent() -> Agent[AgentDeps, ResearchBrief]:
     settings = get_settings()
     return Agent(
@@ -46,7 +64,7 @@ def build_research_agent() -> Agent[AgentDeps, ResearchBrief]:
         ),
         model_settings=model_settings(settings.research_model),
         instructions=INSTRUCTIONS,
-        tools=[Tool(search_knowledge)],
+        tools=[Tool(search_knowledge, prepare=until_search_limit)],
         retries=2,
         defer_model_check=True,
     )
