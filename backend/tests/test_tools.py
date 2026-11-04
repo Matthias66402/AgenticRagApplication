@@ -14,7 +14,9 @@ from app.agent.tools import geocode as geocode_module
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.common import haversine_km
 from app.agent.tools.geocode import geocode
-from app.agent.tools.routing import BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route
+from app.agent.tools.routing import (
+    BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route, walking_hours,
+)  # fmt: skip
 from app.agent.tools.sun import sun_times
 from app.agent.tools.transit import (
     _line,
@@ -121,6 +123,9 @@ async def test_route_with_ors(ctx) -> None:
     result = await plan_route(ctx, [Coordinate(lat=47, lon=11), Coordinate(lat=47.1, lon=11.1)], TransportMode.hiking)
     assert result["distance_km"] == 21.0
     assert result["ascent_m"] == 900
+    # Gehzeit nach DAV-Formel statt der Router-Dauer (5 h), damit der Agent kein estimate_hiking_time braucht
+    assert result["duration_hours"] == result["segments"][0]["duration_hours"] == walking_hours(21, 900, 400)
+    assert result["duration_hours"] != 5.0
     # Geometrie landet in den Deps (für die Karte), nicht im LLM-Ergebnis
     assert ctx.deps.routes[result["route_id"]] == [[47.0, 11.0, 700.0], [47.1, 11.1, 900.0]]
     assert "geometry" not in result

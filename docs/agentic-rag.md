@@ -148,7 +148,7 @@ Weil jeder Modellaufruf zählt, bitten die Anweisungen das Modell, voneinander u
 
 Die Suche in der Wissensbasis hat der Planer an einen zweiten Agenten abgegeben. Bei einer neuen Tour ruft der Graph das Tool `research_knowledge(region, transport, accommodation_type, extra_topic)` schon vorab auf (Knoten `prefetch_research`), sonst der Planer selbst. Darin läuft der Agent `knowledge-researcher` (`RESEARCH_MODEL`, Standard `gpt-4.1-mini`) mit eigener Schleife und eigenem Tool `search_knowledge`:
 
-1. Er stellt kurze Suchen zu je einem Thema (Region bzw. Route, Ausrüstung und Sicherheit, Übernachtung, Zusatzthema), parallel in einer Runde, und formuliert eine Suche ohne Treffer höchstens einmal um. Die Relevanzprüfung sammelt die gleichzeitig eintreffenden Treffer dieser Suchen kurz und bewertet sie in einem Aufruf (`grade_hits()` mit gemeinsamem `batch_key` in `rag/relevance.py`).
+1. Er stellt kurze Suchen zu je einem Thema (Region bzw. Route, Ausrüstung und Sicherheit, Übernachtung, Zusatzthema), parallel in einer Runde, und formuliert eine Suche ohne Treffer höchstens einmal um. Nach 5 Suchen blendet `until_search_limit()` (`prepare` des Tools in `agent/research.py`) `search_knowledge` aus, sodass nur noch die Zusammenfassung bleibt: Ohne diese Grenze formulierte der Agent vereinzelt immer weiter um (ein Lauf mit rund 50 Anfragen und 20 Minuten, bis das Anfragelimit die Vorab-Recherche abbrach). Die Relevanzprüfung sammelt die gleichzeitig eintreffenden Treffer dieser Suchen kurz und bewertet sie in einem Aufruf (`grade_hits()` mit gemeinsamem `batch_key` in `rag/relevance.py`).
 2. Er fasst die geprüften Fundstellen als `ResearchBrief` zusammen: `region_notes`, `rules`, `packing_tips`, `safety_notes`.
 3. Das Tool ergänzt deterministisch aus dem Verlauf des Recherche-Agenten die gestellten Suchen (`queries`) und die Titel der gefundenen Dokumente (`documents`). Daraus entstehen die Quellenangaben (`rag/attribution.py`) und die Prüfung der Evaluation, nicht aus Angaben des LLM.
 
@@ -186,11 +186,11 @@ Jedes Tool ist eine normale Python-Funktion. PydanticAI erzeugt aus **Docstring 
 |---|---|---|---|
 | `research_knowledge` | `research.py` | **Recherche-Agent** mit dem Tool `search_knowledge` (`knowledge.py`) auf der eigenen Wissensbasis (RAG): Vektorsuche, Mindestähnlichkeit, Relevanzprüfung durch ein kleines LLM (`rag/relevance.py`) | Regeln, Tipps, Ausrüstung, Sicherheit |
 | `geocode` | `geocode.py` | Nominatim (OSM) | Start, Ziel, Etappenorte |
-| `plan_route` | `routing.py`, `named_route.py` | OpenRouteService → BRouter → Schätzung; mit `route_name` Verlauf des Fernwegs aus OSM (Overpass) | Strecke, Höhenmeter, Werte je Etappe |
+| `plan_route` | `routing.py`, `named_route.py` | OpenRouteService → BRouter → Schätzung; mit `route_name` Verlauf des Fernwegs aus OSM (Overpass) | Strecke, Höhenmeter, Werte je Etappe; beim Wandern als Dauer die Gehzeit nach DAV-Formel |
 | `find_accommodation` | `accommodation.py` | Nominatim-Kategoriesuche → Overpass | Hütten, Camping, Hotels nahe Etappenenden |
 | `plan_hut_tour` | `huts.py` | Nominatim-Kategoriesuche, dann `plan_route` | Hüttenwanderung von A nach B: Hütten auf dem Weg samt Route |
 | `get_weather` | `weather.py` | Open-Meteo | Vorhersage (≤ 15 Tage) bzw. Klimamittel |
-| `estimate_hiking_time` | `routing.py` | lokal (DAV-Formel) | Gehzeit je Wanderetappe |
+| `estimate_hiking_time` | `routing.py` | lokal (DAV-Formel) | Gehzeit für Etappen ohne berechnete Route (sonst liefert sie `plan_route`) |
 | `sun_times` | `sun.py` | lokal (`astral`) | Tageslicht bei langen Etappen |
 | `find_train_connections` | `transit.py` | Transitous (MOTIS-Fahrplanrouter) | An- und Abreise mit Bahn/ÖPNV |
 

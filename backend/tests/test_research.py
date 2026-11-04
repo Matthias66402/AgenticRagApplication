@@ -6,7 +6,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from app.agent.models import build_model
 from app.agent.plan_schema import TransportMode
 from app.agent.rate_limit import RateLimitedModel, shared_budget
-from app.agent.research import research_agent
+from app.agent.research import MAX_SEARCHES, research_agent
 from app.agent.tools.research import research_knowledge
 from app.db import SessionLocal
 from app.rag.retrieve import RetrievedChunk
@@ -50,6 +50,27 @@ async def test_research_agent_summarizes_searches(monkeypatch) -> None:
     assert result["documents"] == ["Dokument zu Nordseeküsten-Radweg", "Dokument zu Ausrüstung Radtour"]
     # Die Anfragen des Recherche-Agenten zählen zur Nutzung des Planer-Laufs
     assert ctx.usage.requests == 2
+
+
+async def test_research_stops_searching_after_limit(monkeypatch) -> None:
+    """Ein Modell, das immer weiter umformuliert, muss nach MAX_SEARCHES Suchen zusammenfassen."""
+
+    async def search(session, query, **kwargs):
+        return [RetrievedChunk(document="Wetterstein", heading="", text="…", score=0.6)]
+
+    def endless(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if any(tool.name == "search_knowledge" for tool in info.function_tools):
+            return ModelResponse(parts=[ToolCallPart("search_knowledge", {"query": f"Suche {len(messages)}"})])
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, BRIEF)])
+
+    monkeypatch.setattr("app.agent.tools.knowledge.search_chunks", search)
+    ctx = context()
+    with research_agent.override(model=FunctionModel(endless)):
+        result = await research_knowledge(ctx, "Wetterstein", TransportMode.hiking)
+
+    assert len(result["queries"]) == MAX_SEARCHES
+    assert result["packing_tips"] == ["Windjacke"]
+    assert ctx.usage.requests == MAX_SEARCHES + 1
 
 
 async def test_research_without_hits_is_an_error(monkeypatch) -> None:

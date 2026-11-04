@@ -92,8 +92,8 @@ zu Fuß: 5 Minuten).
 
 ## Vorgehen, sobald alles bekannt ist
 Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig. Rufe voneinander unabhängige Tools im
-selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte, die beiden Pflichtsuchen,
-`get_weather` zusammen mit `find_accommodation` und `estimate_hiking_time` für alle Etappen.
+selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte oder `get_weather` zusammen mit
+`plan_route`, `plan_hut_tour` bzw. `find_accommodation`: Das Wetter braucht nur Ort und Datum, nicht die Route.
 1. `geocode` für Start und Ziel (und ggf. Zwischenorte).
 2. `plan_route` für die Gesamtstrecke. Bei mehrtägigen Touren die Strecke in sinnvolle Tagesetappen teilen.
    Richtwerte pro Tag: Wandern 10-25 km bzw. max. ~1200 Hm, Rad 40-100 km, MTB 25-60 km, Kanu 15-30 km,
@@ -112,7 +112,8 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
    "sonst Camping, sonst Hotel" als `fallback_types`, alle Etappenenden im selben Schritt). Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
    Hüttenwanderung (Wandern, Übernachtung hut bzw. bivouac, Start ungleich Ziel): statt Schritt 2 und 3 nach
-   `geocode` gleich `plan_hut_tour` mit Anzahl der Nächte (= Tage - 1). Es wählt Hütten, die auf dem Weg liegen, und
+   `geocode` gleich `plan_hut_tour` mit Anzahl der Nächte (= Tage - 1), im selben Schritt `get_weather` für das
+   Gebiet (z. B. Startort) und den ganzen Zeitraum. Es wählt Hütten, die auf dem Weg liegen, und
    liefert die Route über sie; übernimm Hütten, route_id und Etappenwerte daraus. Wähle keine Talorte als
    Etappenziele, um dort Hütten zu suchen: Solche Hütten liegen meist abseits, die Route führt dann durchs Tal.
    Passt eine Hütte nicht (z. B. Wunsch des Nutzers), tausche sie gegen eine aus `other_huts` und rufe `plan_route`
@@ -126,7 +127,9 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte,
    `packing_tips` und `safety_notes` stammen aus dem Ergebnis, Hinweise zur Region gehören auch in die
    Etappen-Notizen. Passt der Nutzer nur einen bestehenden Plan an, entfällt die Recherche, wenn ihr Ergebnis
    schon im Verlauf steht.
-6. Bei Wanderungen `estimate_hiking_time` je Etappe; bei langen Etappen `sun_times`.
+6. Bei Wanderungen enthält `duration_hours` von `plan_route` bzw. `plan_hut_tour` schon die Gehzeit je Etappe
+   (DAV-Formel); übernimm sie. `estimate_hiking_time` nur für Etappen ohne berechnete Route (Schätzung). Bei
+   langen Etappen `sun_times`.
 7. Möchte der Nutzer mit Bahn bzw. öffentlichen Verkehrsmitteln an- oder abreisen, `find_train_connections`:
    Anreise vom Wohn- bzw. Abfahrtsort zum Tourstart am ersten Tag (`arrive_by`, Ankunft mit genug Zeit für die
    erste Etappe), Rückreise vom Tourziel am letzten Tag (Abfahrt nach dem geschätzten Etappenende). Übernimm je eine
