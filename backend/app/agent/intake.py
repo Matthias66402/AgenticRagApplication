@@ -9,7 +9,7 @@ verlangte Recherche steht sicher im Verlauf. Ein Fehler hier ist unkritisch: Der
 
 import datetime as dt
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ToolOutput
@@ -65,6 +65,14 @@ insbesondere bei reiner Bahnauskunft, bei Rad bzw. Fußweg nur zum Bahnhof und w
 Startdatum (`start_date`), für Touren und Bahnfahrten, auch aus dem Kontext: das Datum, an dem es losgeht,
 aufgelöst anhand des heutigen Datums ("morgen", "nächsten Samstag", "am 3.5."). Eine relative Zeitangabe wie
 "in zehn Tagen" oder "in zwei Wochen" ist das Startdatum (heute plus diese Spanne). Ohne Datumsangabe null.
+
+Art der NEUEN Nachricht (`topic`):
+- "outdoor": alles rund um Touren, Reisen und Ausflüge: Wandern, Rad, MTB, Kanu, Camping, Hütten, Unterkünfte,
+  Wetter, Bahn- bzw. ÖPNV-Verbindungen, Ausrüstung, Packlisten, Sicherheit unterwegs, Tiere oder Natur am Tourenziel,
+  Antworten auf eine Rückfrage des Planers (z. B. "3 Tage", "ab Garmisch") und Änderungswünsche zu einem Plan.
+- "smalltalk": Begrüßung, Dank, Verabschiedung, Fragen dazu, was der Planer kann.
+- "fachfremd": nur, wenn die Nachricht weder zu "outdoor" noch zu "smalltalk" passt, z. B. Allgemeinwissen ohne
+  Reisebezug, Tierkunde, Geschichte, Programmierung, Rezepte, Mathematik oder Hausaufgaben. Im Zweifel "outdoor".
 """
 
 
@@ -86,6 +94,7 @@ class IntakeResult(BaseModel):
     places: list[PlaceQuery] = Field(description="Orte, die der Planer für diese Nachricht nachschlagen muss")
     research: ResearchRequest | None = Field(description="Recherche für eine neue Tour, sonst null")
     start_date: dt.date | None = Field(description="Startdatum laut Nachricht (YYYY-MM-DD), sonst null")
+    topic: Literal["outdoor", "smalltalk", "fachfremd"] = Field(description="Art der neuen Nachricht")
 
 
 class Prefetch(BaseModel):
@@ -94,6 +103,8 @@ class Prefetch(BaseModel):
     places: list[PlaceQuery] = Field(default_factory=list)
     research: ResearchRequest | None = None
     start_date: dt.date | None = None
+    # Fachfremde Nachricht: Der Graph antwortet mit einer festen Absage, ohne Planer
+    off_topic: bool = False
 
     def planner_note(self) -> str | None:
         """Hinweis zum Startdatum für die Anweisungen des Planers; None, wenn die Nachricht keins nennt.
@@ -190,4 +201,6 @@ async def plan_prefetch(message: str, history_json: list[Any], deps: AgentDeps) 
     research = result.output.research
     if research is not None and (context.researched or not research.region.strip()):
         research = None
+    if result.output.topic == "fachfremd":
+        return Prefetch(off_topic=True)
     return Prefetch(places=list(unique.values()), research=research, start_date=result.output.start_date)

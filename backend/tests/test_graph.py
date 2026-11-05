@@ -16,7 +16,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.models.test import TestModel
 
 from app.agent.deps import AgentDeps
-from app.agent.graph import NETWORK_ERROR_MESSAGE, planner_graph
+from app.agent.graph import NETWORK_ERROR_MESSAGE, OFF_TOPIC_MESSAGE, planner_graph
 from app.agent.intake import Prefetch, conversation_context, intake_agent, intake_prompt, plan_prefetch
 from app.agent.plan_schema import TransportMode
 from app.agent.planner import planner_agent
@@ -142,9 +142,10 @@ GARMISCH = {"display_name": "Garmisch-Partenkirchen", "lat": "47.49", "lon": "11
 
 
 def intake_finds(
-    *places: dict[str, Any], research: dict[str, Any] | None = None, start_date: str | None = None
+    *places: dict[str, Any], research: dict[str, Any] | None = None, start_date: str | None = None,
+    off_topic: bool = False,
 ) -> Any:
-    output = {"places": list(places), "research": research, "start_date": start_date}
+    output = {"places": list(places), "research": research, "start_date": start_date, "topic": "fachfremd" if off_topic else "outdoor"}
     return intake_agent.override(model=TestModel(custom_output_args=output))
 
 
@@ -227,6 +228,24 @@ async def test_intake_failure_falls_back_to_planner(deps: AgentDeps) -> None:
 
     with intake_agent.override(model=FunctionModel(fail)), planner_agent.override(model=scripted_model(QUESTION)):
         assert await visited_nodes(deps) == ["intake", "planner", "finish_question"]
+
+
+async def test_off_topic_message_is_rejected_without_planner(deps: AgentDeps) -> None:
+    """Fachfremde Nachricht: feste Absage, kein Planer-Lauf, Verlauf des Planers bleibt unverändert."""
+    with intake_finds({"place_name": "Afrika"}, off_topic=True), planner_agent.override(model=scripted_model(QUESTION)):
+        assert await visited_nodes(deps, "Wo leben Löwen?") == ["intake", "reject_off_topic"]
+        events, outcome = await collect("Wo leben Löwen?", deps)
+    assert events == []
+    assert outcome.answer == OFF_TOPIC_MESSAGE and outcome.history_json is None and outcome.error is None
+
+
+async def test_answer_ending_with_colon_is_retried(deps: AgentDeps) -> None:
+    """Kündigt die Antwort nur an ("… was wichtig ist:"), muss das Modell die vollständige Antwort ausgeben."""
+    with planner_agent.override(
+        model=scripted_model(("answer_user", {"message": "Ich fasse kurz zusammen:"}), ("answer_user", {"message": "Fertig."}))
+    ):
+        _, outcome = await collect("Hallo", deps)
+    assert outcome.answer == "Fertig."
 
 
 def test_intake_context_from_history(deps: AgentDeps) -> None:

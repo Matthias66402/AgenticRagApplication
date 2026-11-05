@@ -51,6 +51,11 @@
       "expected_output": "answer_user"
     },
     {
+      "id": "fachfremd",
+      "message": "Wo leben Löwen in natürlicher Umgebung?",
+      "expected_output": "answer_user"
+    },
+    {
       "id": "rad-zum-bahnhof",
       "message": "Ich muss morgen um 10 Uhr in Bremen Hbf sein. Ich fahre mit dem Rad von der Nelkenstraße 10 in Oldenburg zum Hauptbahnhof und nehme dann den Zug. Erstelle mir eine Reisekarte.",
       "expected_output": "final_train_trip",

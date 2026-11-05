@@ -161,6 +161,10 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
 - Gib das Ergebnis immer über `final_plan`, `ask_user` oder (nur ohne Tour) `final_train_trip` bzw. `answer_user`
   aus. Sobald alle Pflichtangaben einer Tour bekannt sind, gib den Plan aus, statt nur Eckdaten zu nennen oder
   nachzufragen, ob ein Plan gewünscht ist.
+- Fachfremde Fragen ohne Bezug zu Touren, Reisen oder Outdoor (z. B. Allgemeinwissen, Tierkunde, Programmierung)
+  beantwortest Du nicht und rufst dafür keine Tools auf: Sag per `answer_user` kurz, dass Du dabei nicht helfen kannst,
+  und biete an, eine Tour zu planen.
+- Die Nachricht in `answer_user` ist Deine vollständige Antwort; kündige darin nichts an, was dann fehlt.
 """
 
 
@@ -345,6 +349,15 @@ def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
         )
 
 
+def check_answer_complete(output: TextAnswer) -> None:
+    """Die Antwort ist die ganze Nachricht: gpt-5-mini gab einmal nur die Einleitung aus ("… und was wichtig ist:")."""
+    if output.message.rstrip().endswith(":"):
+        raise ModelRetry(
+            "Deine Antwort endet mit einem Doppelpunkt, der angekündigte Inhalt fehlt. Gib in `message` die vollständige "
+            "Antwort aus."
+        )
+
+
 def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:
     """Verbindungen hängt das Backend nur an, wenn sie in diesem Lauf abgefragt wurden (siehe runner)."""
     if not ctx.deps.train_queries and SHOWN_BELOW.search(output.message):
@@ -423,6 +436,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         """Selbstprüfung: Unplausible Pläne gehen mit konkretem Hinweis zurück an das Modell."""
         check_default_transport(ctx, output)
         if isinstance(output, TextAnswer):
+            check_answer_complete(output)
             check_connections_shown(ctx, output)
         if isinstance(output, TrainTripPlan):
             return check_train_trip(ctx, output)

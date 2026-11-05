@@ -2,10 +2,12 @@
 
     START → intake ─┬─(Orte)──────→ prefetch_geocode ──┐
                     ├─(neue Tour)─→ prefetch_research ─┤  (parallel)
-                    └─(sonst)──────────────────────────┴→ planner → finish_plan | finish_question
-                                                                    | finish_answer | finish_error → END
+                    ├─(sonst)──────────────────────────┴→ planner → finish_plan | finish_question
+                    │                                               | finish_answer | finish_error → END
+                    └─(fachfremd)─→ reject_off_topic ─────────────────────────────────────────────→ END
 
-- `intake`: Ein kleines LLM bestimmt, was der Planer für diese Nachricht sicher braucht (app.agent.intake).
+- `intake`: Ein kleines LLM bestimmt, was der Planer für diese Nachricht sicher braucht (app.agent.intake), und
+  erkennt fachfremde Nachrichten; die beantwortet `reject_off_topic` mit einer festen Absage, ohne Planer.
 - `prefetch_geocode` / `prefetch_research`: führen `geocode` bzw. `research_knowledge` ohne Planer-Runde aus.
 - `planner`: Der PydanticAI-Planer; Vorab-Aufrufe stehen als gewöhnliche Tool-Aufrufe in seinem Verlauf, so wirken
   Validatoren, gespeicherter Verlauf und Evaluation unverändert. Er kann jedes Tool trotzdem selbst aufrufen.
@@ -70,6 +72,11 @@ USAGE_LIMITS = UsageLimits(request_limit=40)
 NETWORK_ERROR_MESSAGE = (
     "Keine Verbindung zum Sprachmodell (Zeitüberschreitung bzw. Netzwerkfehler). Meist ist die Internet- oder "
     "DNS-Verbindung kurz unterbrochen. Bitte die Verbindung prüfen und die Nachricht erneut senden."
+)
+OFF_TOPIC_MESSAGE = (
+    "Dabei kann ich Dir leider nicht helfen: Ich bin Dein Planer für Outdoor-Abenteuer. Ich plane Wander-, Rad-, "
+    "MTB-, Kanu- und Autotouren in Europa mit Route, Etappen, Unterkünften und Wetter und suche Bahnverbindungen "
+    "für An- und Abreise. Erzähl mir, wohin es gehen soll!"
 )
 NETWORK_ERRORS: tuple[type[BaseException], ...] = (
     ModelConnectionError, ModelRequestTimeout, httpx.TransportError, socket.gaierror, TimeoutError,
@@ -151,15 +158,26 @@ async def intake(state: PlannerState, runtime: Runtime[AgentDeps]) -> PlannerSta
     return {"prefetch": prefetch}
 
 
-def route_intake(state: PlannerState) -> list[Literal["prefetch_geocode", "prefetch_research", "planner"]]:
+IntakeTarget = Literal["prefetch_geocode", "prefetch_research", "planner", "reject_off_topic"]
+
+
+def route_intake(state: PlannerState) -> list[IntakeTarget]:
     """Die prefetch_*-Knoten laufen parallel; der Planer startet erst, wenn alle fertig sind."""
     prefetch = state.get("prefetch") or Prefetch()
-    targets: list[Literal["prefetch_geocode", "prefetch_research", "planner"]] = []
+    if prefetch.off_topic:
+        return ["reject_off_topic"]
+    targets: list[IntakeTarget] = []
     if prefetch.places:
         targets.append("prefetch_geocode")
     if prefetch.research:
         targets.append("prefetch_research")
     return targets or ["planner"]
+
+
+async def reject_off_topic(state: PlannerState) -> PlannerState:
+    """Fachfremde Nachricht: feste Absage statt eines Planer-Laufs. Der Verlauf des Planers bleibt unverändert, so
+    wirkt die Nachricht nicht in spätere Planungen hinein."""
+    return {"output": TextAnswer(message=OFF_TOPIC_MESSAGE), "answer": OFF_TOPIC_MESSAGE}
 
 
 def _tool_context(runtime: Runtime[AgentDeps]) -> Any:
@@ -291,17 +309,20 @@ def build_graph() -> CompiledStateGraph[PlannerState, AgentDeps, PlannerState, P
     graph.add_node("prefetch_geocode", prefetch_geocode)
     graph.add_node("prefetch_research", prefetch_research)
     graph.add_node("planner", planner)
+    graph.add_node("reject_off_topic", reject_off_topic)
     graph.add_node("finish_plan", finish_plan)
     graph.add_node("finish_question", finish_question)
     graph.add_node("finish_answer", finish_answer)
     graph.add_node("finish_error", finish_error)
     graph.add_edge(START, "intake")
-    graph.add_conditional_edges("intake", route_intake, ["prefetch_geocode", "prefetch_research", "planner"])
+    graph.add_conditional_edges(
+        "intake", route_intake, ["prefetch_geocode", "prefetch_research", "planner", "reject_off_topic"]
+    )
     # Beide Vorab-Knoten münden in den Planer; LangGraph startet ihn einmal, wenn alle im Schritt fertig sind
     graph.add_edge("prefetch_geocode", "planner")
     graph.add_edge("prefetch_research", "planner")
     graph.add_conditional_edges("planner", route_output)
-    for node in ("finish_plan", "finish_question", "finish_answer", "finish_error"):
+    for node in ("finish_plan", "finish_question", "finish_answer", "finish_error", "reject_off_topic"):
         graph.add_edge(node, END)
     return graph.compile(name="adventure-planner-graph")
 

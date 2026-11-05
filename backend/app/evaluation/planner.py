@@ -303,10 +303,12 @@ async def run_case(case: dict[str, Any], number: int, http: httpx.AsyncClient) -
     measure_usage(run, responses)
     run.cost_usd = round(run.cost_usd, 4)
     output = state.get("output")
-    if output is None or not state.get("new_history_json"):
+    # Ohne neuen Verlauf nur bei der Absage einer fachfremden Nachricht (ohne Planer-Lauf)
+    off_topic = prefetch is not None and prefetch.off_topic
+    if output is None or not (state.get("new_history_json") or off_topic):
         run.error = run.error or state.get("error") or "Kein Ergebnis"
         return run
-    messages = ModelMessagesTypeAdapter.validate_python(state["new_history_json"])
+    messages = ModelMessagesTypeAdapter.validate_python(state.get("new_history_json") or [])
     measure(run, messages)
     run.output = OUTPUT_NAMES.get(type(output))
     run.text = (
