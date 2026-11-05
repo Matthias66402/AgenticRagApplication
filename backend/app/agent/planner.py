@@ -103,6 +103,9 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Soll die Tour einem ausgeschilderten Fernweg folgen (z. B. "auf dem Ostseeküsten-Radweg") oder beschreibt der
    Nutzer einen Verlauf, den ein Fernweg abdeckt (z. B. "entlang der Nordseeküste" → "Nordseeküsten-Radweg",
    "an der Elbe entlang" → "Elberadweg"), übergib dessen Namen bei jedem `plan_route` dieser Tour als `route_name`.
+   Nennt der Nutzer mehrere Fernwege bzw. Abschnitte nacheinander (z. B. "erst den Hunteradweg, dann den
+   Weserradweg"), übergib alle in Reihenfolge der Tour, durch Komma getrennt ("Hunteradweg, Weserradweg"), statt
+   nur einen davon zu nehmen.
    Rufe es zuerst nur mit Start und Ziel auf: Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
    die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
    Tagesdistanz und suche Unterkünfte dort (`find_accommodation`, max. 5 km), statt Orte zu raten. Findet das Tool

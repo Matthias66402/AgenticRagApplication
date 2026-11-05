@@ -362,6 +362,34 @@ def build_graph(names: list[str], ways: list[Way], source: str = "") -> RouteGra
     return graph
 
 
+def merge_graphs(graphs: list[RouteGraph]) -> RouteGraph:
+    """Mehrere Fernwege als ein Netz, z. B. erst Hunteradweg, dann Weserradweg: Der kürzeste Pfad wechselt dort, wo
+    sie sich berühren. Gemeinsame Knoten verbinden sie schon (gleiche OSM-ID bzw. gleiche Koordinaten); zusätzlich
+    wird jeder Knoten mit dem nächsten Knoten der übrigen Fernwege im Umkreis von GAP_KM verbunden."""
+    if len(graphs) == 1:
+        return graphs[0]
+    merged = RouteGraph(
+        names=list(dict.fromkeys(name for graph in graphs for name in graph.names)),
+        source=",".join(dict.fromkeys(graph.source for graph in graphs if graph.source)),
+    )
+    for graph in graphs:
+        joins: list[tuple[int, int]] = []
+        for node, point in graph.coords.items():
+            if node in merged.coords:
+                continue
+            if merged.coords and (nearby := merged.nearby(*point, GAP_KM)):
+                joins.append((node, min(nearby)[1]))
+        for node, point in graph.coords.items():
+            if node not in merged.coords:
+                merged.coords[node] = point
+                merged.grid.setdefault(_cell(*point), []).append(node)
+        for node, neighbours in graph.edges.items():
+            merged.edges.setdefault(node, {}).update(neighbours)
+        for a, b in joins:
+            merged._connect(a, b)
+    return merged
+
+
 def sample(points: list[Point], spacing_km: float) -> list[Point]:
     """Punkte im Abstand `spacing_km` entlang des Pfads, ohne Anfang und Ende."""
     samples = []

@@ -60,8 +60,10 @@ def _route_uses(route: Any) -> list[tuple[str, str]]:
     ]
     named = route.get("named_route")
     if isinstance(named, dict):
-        source = named.get("source")
-        uses.append((source if source in PROVIDERS else "openstreetmap", "Verlauf des Fernwegs"))
+        # Mehrere Fernwege (Komma-getrennt in route_name) können aus verschiedenen Quellen stammen
+        sources = str(named.get("source") or "").split(",")
+        for source in dict.fromkeys(s if s in PROVIDERS else "openstreetmap" for s in sources):
+            uses.append((source, "Verlauf des Fernwegs"))
     return uses
 
 

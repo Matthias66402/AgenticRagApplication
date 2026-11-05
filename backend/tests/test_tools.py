@@ -469,6 +469,34 @@ def test_named_route_follows_long_coastal_bow() -> None:
     assert (53.20, 8.30) in route_guide.waypoints
 
 
+def test_merged_named_routes_switch_where_they_meet() -> None:
+    """Erst Fluss-Radweg nach Osten, dann Küsten-Radweg nach Norden: Der Pfad wechselt am Treffpunkt, auch ohne
+    gemeinsamen Knoten (andere Quelle, Treffpunkt nur ~50 m entfernt)."""
+    river = named_route.build_graph(["Fluss-Radweg"], [([1, 2, 3], [(53.10, 8.20), (53.10, 8.30), (53.10, 8.40)])])
+    coast = named_route.build_graph(
+        ["Küsten-Radweg"], [([11, 12, 13], [(53.1004, 8.40), (53.20, 8.40), (53.30, 8.40)])], "catalog"
+    )
+    merged = named_route.merge_graphs([river, coast])
+    assert merged.names == ["Fluss-Radweg", "Küsten-Radweg"] and merged.source == "catalog"
+    route_guide = named_route.guide(merged, [(53.10, 8.20), (53.30, 8.40)])
+    assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(35.5, abs=1)
+    assert (53.10, 8.30) in route_guide.waypoints  # entlang des Flusses statt quer
+    assert len(river.edges[3]) == 1  # Graphen im Cache bleiben unverändert
+
+
+@respx.mock
+async def test_route_follows_several_named_routes(ctx) -> None:
+    await add_test_route()
+    respx.get(url__startswith=WAYMARKED_CYCLING).mock(side_effect=waymarked_coast)
+    respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testradweg, Testküsten-Radweg")
+    assert result["named_route"]["routes"] == ["Testweg", "D2 Testküsten-Radweg"]
+    assert result["named_route"]["source"] == "catalog,waymarked"
+    # Unbekannter Name unter mehreren: Fehler mit den Routen in der Nähe
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testradweg, Küstenradweg")
+    assert "D2 Testküsten-Radweg" in result["error"]
+
+
 def test_checkpoints_along_route() -> None:
     line = [[53.0, 8.0 + i * 0.01, 5.0] for i in range(60)]  # ~39 km nach Osten
     marks = routing.checkpoints(line, TransportMode.cycling)

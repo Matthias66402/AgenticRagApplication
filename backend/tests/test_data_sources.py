@@ -52,6 +52,12 @@ def test_named_route_without_recorded_source() -> None:
     assert [s["name"] for s in data_sources([tool_return("plan_route", route)])] == ["OpenStreetMap", "OpenRouteService"]
 
 
+def test_several_named_routes_from_different_sources() -> None:
+    route = ROUTE | {"named_route": {"routes": ["Hunteradweg", "Weser-Radweg"], "source": "waymarked,catalog"}}
+    names = [s["name"] for s in data_sources([tool_return("plan_route", route)])]
+    assert "Waymarked Trails" in names and "Fernweg-Katalog (aus OpenStreetMap importiert)" in names
+
+
 def test_data_sources_without_tools() -> None:
     assert data_sources([]) == []
     assert data_sources([tool_return("estimate_hiking_time", {"walking_hours": 3.0})]) == []

@@ -14,7 +14,7 @@ from pydantic_ai import RunContext
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import TransportMode
 from app.agent.tools.common import haversine_km, http_error_message, tool_error
-from app.agent.tools.named_route import ROUTE_TYPES, Guide, guide, load_route_graph
+from app.agent.tools.named_route import ROUTE_TYPES, Guide, RouteGraph, guide, load_route_graph, merge_graphs
 
 ORS_URL = "https://api.openrouteservice.org/v2/directions/{profile}/geojson"
 BROUTER_URL = "https://brouter.de/brouter"
@@ -362,8 +362,10 @@ async def plan_route(
         waypoints: Mindestens 2 Koordinaten in Reihenfolge: Start, optionale Zwischenpunkte, Ziel.
         transport: Fortbewegungsart.
         route_name: Ausgeschilderter Fernweg, dem die Route folgen soll (Rad, MTB, Wandern), z. B.
-            "Ostseeküsten-Radweg", "Elberadweg", "Rennsteig". Verlauf aus OpenStreetMap (Katalog bzw. Waymarked
-            Trails, meist wenige Sekunden). Passt kein Name, nennt der Fehler die Routen in der Nähe.
+            "Ostseeküsten-Radweg", "Elberadweg", "Rennsteig". Mehrere Fernwege nacheinander mit Komma getrennt in
+            Reihenfolge der Tour, z. B. "Hunteradweg, Weserradweg": Die Route wechselt dort, wo sie sich treffen.
+            Verlauf aus OpenStreetMap (Katalog bzw. Waymarked Trails, meist wenige Sekunden). Passt kein Name,
+            nennt der Fehler die Routen in der Nähe.
 
     Returns:
         route_id (für AdventurePlan.route_ids), distance_km, duration_hours (beim Wandern Gehzeit nach DAV-Formel),
@@ -391,17 +393,23 @@ async def plan_route(
         notes.append("route_name gilt nur für Rad, MTB und Wandern; normal geroutet.")
     elif route_name:
         points = [(w.lat, w.lon) for w in waypoints]
-        try:
-            graph = await load_route_graph(ctx, route_name, transport, points)
-        except httpx.HTTPError as exc:
-            graph = None
-            notes.append(
-                f"Verlauf von „{route_name}“ nicht abrufbar ({http_error_message('Overpass API', exc)}) – "
-                "normal geroutet, die Strecke kann vom Fernweg abweichen."
-            )
-        if isinstance(graph, str):
-            return tool_error(graph)
-        if graph is not None:
+        graphs: list[RouteGraph] = []
+        for name in dict.fromkeys(part.strip() for part in route_name.split(",") if part.strip()):
+            try:
+                loaded = await load_route_graph(ctx, name, transport, points)
+            except httpx.HTTPError as exc:
+                notes.append(
+                    f"Verlauf von „{name}“ nicht abrufbar ({http_error_message('Overpass API', exc)}) – "
+                    "die Strecke kann dort vom Fernweg abweichen."
+                )
+                continue
+            if isinstance(loaded, str):
+                return tool_error(loaded)
+            graphs.append(loaded)
+        graph = merge_graphs(graphs) if graphs else None
+        if graph is None:
+            notes.append("Normal geroutet.")
+        else:
             route_guide = guide(graph, points)
             # BRouter zuerst: viele Teilanfragen, ORS hat ein knappes Tageskontingent
             guided_chain = sorted(chain, key=lambda entry: entry[0] != "brouter")
