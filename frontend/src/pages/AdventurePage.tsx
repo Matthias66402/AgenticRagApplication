@@ -6,6 +6,7 @@ import { LinkedText } from "../components/LinkedText";
 import { PlanCard } from "../components/PlanCard";
 import { ToolCallBadge } from "../components/ToolCallBadge";
 import { TrainTripCard } from "../components/TrainTripCard";
+import { useSpeechInput } from "../lib/useSpeechInput";
 
 interface LiveMessage {
   content: string;
@@ -47,6 +48,10 @@ export function AdventurePage() {
   }, [adventure?.messages.length, live, pendingUser]);
 
   const busy = live !== null;
+  // Diktat: Erkannter Text wird an die Eingabe angehängt, gesendet wird erst auf Wunsch des Nutzers
+  const speech = useSpeechInput((text) =>
+    setInput((value) => (value.trim() ? value.trimEnd() + " " : "") + text.trim()),
+  );
 
   function handleEvent(event: ChatEvent) {
     setLive((current) => {
@@ -79,6 +84,7 @@ export function AdventurePage() {
   async function send(text: string) {
     const message = text.trim();
     if (!message || busy) return;
+    speech.cancel();
     setInput("");
     setError(null);
     setPendingUser(message);
@@ -204,15 +210,39 @@ export function AdventurePage() {
         </div>
 
         {error && <p className="error">{error}</p>}
+        {speech.error && <p className="error">{speech.error}</p>}
         <form className="composer" onSubmit={onSubmit}>
           <textarea
-            value={input}
+            value={speech.interim ? `${input}${input.trim() ? " " : ""}${speech.interim}` : input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder={plan ? "Änderungswunsch, z. B. „Mach daraus 4 Tage“ …" : "Beschreibe Dein Abenteuer …"}
+            placeholder={
+              speech.listening
+                ? "Ich höre zu …"
+                : plan
+                  ? "Änderungswunsch, z. B. „Mach daraus 4 Tage“ …"
+                  : "Beschreibe Dein Abenteuer …"
+            }
             rows={3}
             disabled={busy}
+            readOnly={speech.listening}
           />
+          {speech.supported && (
+            <button
+              type="button"
+              className={speech.listening ? "mic-button listening" : "mic-button"}
+              onClick={speech.listening ? speech.stop : speech.start}
+              disabled={busy}
+              aria-pressed={speech.listening}
+              title={
+                speech.listening
+                  ? "Aufnahme beenden"
+                  : "Spracheingabe (die Erkennung läuft über den Dienst des Browsers, z. B. Google bei Chrome)"
+              }
+            >
+              {speech.listening ? "⏹ Stopp" : "🎤"}
+            </button>
+          )}
           <button className="primary" disabled={busy || !input.trim()}>
             {busy ? "Plant …" : "Senden"}
           </button>
