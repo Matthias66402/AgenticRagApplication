@@ -2,6 +2,7 @@
 
 import asyncio
 import math
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -9,7 +10,7 @@ from typing import Any
 
 import httpx
 from pydantic import BaseModel
-from pydantic_ai import RunContext
+from pydantic_ai import ModelRequest, RunContext, UserPromptPart
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import TransportMode
@@ -301,6 +302,24 @@ async def _route_brouter(ctx: RunContext[AgentDeps], profile: str, waypoints: li
 ROUTERS = {"ors": _route_ors, "brouter": _route_brouter}
 
 
+# Nennt der Nutzer einen Fernweg ("auf dem Nordseeradweg", "Elberadweg", "EV12"), will er dessen Verlauf auch dort,
+# wo er ein Umweg ist. Ohne solche Nennung ("entlang des Jadebusens") ist der Fernweg nur Mittel zum Zweck.
+ROUTE_NAMED = re.compile(
+    r"(rad|fern|wander|höhen|küsten)weg|rad(fern)?route|\bsteig\b|\b(EV|D|GR|E)\s?\d+\b", re.IGNORECASE
+)
+
+
+def user_named_route(ctx: RunContext[AgentDeps]) -> bool:
+    """Hat der Nutzer in einer seiner Nachrichten ausdrücklich einen Fernweg genannt?"""
+    return any(
+        ROUTE_NAMED.search(part.content)
+        for message in getattr(ctx, "messages", None) or []
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, UserPromptPart) and isinstance(part.content, str)
+    )
+
+
 async def _route_chain(
     ctx: RunContext[AgentDeps], chain: list[tuple[str, str]], waypoints: list[Coordinate]
 ) -> tuple[RouteData | None, str, list[str]]:
@@ -438,6 +457,7 @@ async def plan_route(
     problems: list[str] = []
     notes: list[str] = []
     named_route: dict[str, Any] | None = None
+    direct: tuple[RouteData | None, str, list[str]] | None = None
     if route_name and transport not in ROUTE_TYPES:
         notes.append("route_name gilt nur für Rad, MTB und Wandern; normal geroutet.")
     elif route_name:
@@ -459,9 +479,17 @@ async def plan_route(
         if graph is None:
             notes.append("Normal geroutet.")
         else:
-            route_guide = guide(graph, points)
             # BRouter zuerst: viele Teilanfragen, ORS hat ein knappes Tageskontingent
             guided_chain = sorted(chain, key=lambda entry: entry[0] != "brouter")
+            direct_km = None
+            if len(waypoints) > 2 and not user_named_route(ctx):
+                # Direkte Route je Teilstück, um Umwege über den Fernweg zwischen Zwischenorten zu erkennen. Nicht,
+                # wenn der Nutzer den Fernweg nennt: Emden → Wilhelmshaven "auf dem Nordseeradweg" mit Etappenorten
+                # aus den checkpoints wurde sonst um die Küstenbögen bei Greetsiel und Norden gekürzt.
+                direct = await _route_chain(ctx, guided_chain, waypoints)
+                if direct[0] is not None and len(direct[0].segments) == len(waypoints) - 1:
+                    direct_km = [segment.get("distance", 0) / 1000 for segment in direct[0].segments]
+            route_guide = guide(graph, points, direct_km)
             route, label, problems, blocked = await _route_guided(ctx, guided_chain, route_guide, waypoints, notes)
             if route is None:
                 notes.append(f"Routing entlang „{route_name}“ fehlgeschlagen – normal geroutet.")
@@ -481,6 +509,14 @@ async def plan_route(
                     notes.append(
                         f"Abseits des Fernwegs normal angebunden: {', '.join(route_guide.long_connections)} bis zum "
                         "nächsten Punkt des Fernwegs (z. B. weil er vor dem Ziel endet)."
+                    )
+                if route_guide.detour_legs:
+                    named_route["detour_legs"] = route_guide.detour_legs
+                    notes.append(
+                        "Direkt geroutet, weil der Fernweg dort ein Umweg wäre "
+                        f"({'; '.join(route_guide.detour_legs)}). "
+                        "Beschreibe diese Teilstücke nicht als Fernweg. Will der Nutzer ausdrücklich dem Fernweg "
+                        "folgen, lass die Zwischenorte dort weg."
                     )
                 if route_guide.partial_legs:
                     notes.append(
@@ -505,6 +541,8 @@ async def plan_route(
                     )  # fmt: skip
                 if mostly_on_route:
                     named_route["checkpoints"] = checkpoints(route.geometry, transport)
+    if route is None and direct is not None and direct[0] is not None:
+        route, label = direct[0], direct[1]
     if route is None:
         route, label, chain_problems = await _route_chain(ctx, chain, waypoints)
         problems += chain_problems

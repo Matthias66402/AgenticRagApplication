@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 import pytest
 import respx
+from pydantic_ai import ModelRequest, UserPromptPart
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AccommodationType, TransportMode
@@ -342,7 +343,7 @@ async def test_route_follows_named_route_from_waymarked_trails(ctx) -> None:
 
     assert overpass.call_count == 0
     assert waymarked.call_count == 4  # Gebietssuche je Wegpunkt, Verlauf der passenden Relation
-    assert "8.250000,53.150000" in brouter.calls[0].request.url.params["lonlats"]  # Bogen nach Norden
+    assert "8.250000,53.150000" in brouter.calls.last.request.url.params["lonlats"]  # Bogen nach Norden
     assert result["named_route"]["routes"] == ["D2 Testküsten-Radweg"]
     assert result["named_route"]["source"] == "waymarked"  # für die Datenquellen des Plans
     assert result["named_route"]["off_route_legs"] == []
@@ -377,7 +378,7 @@ async def test_route_follows_named_route(ctx) -> None:
     assert overpass.call_count == 2  # Relationen nahe den Wegpunkten, dann deren Wege
     assert "rel(id:1)" in httpx.QueryParams(overpass.calls[1].request.content.decode())["data"]
     # BRouter zuerst (viele Teilanfragen); der Bogen nach Norden kommt als Stützpunkt mit
-    assert "8.250000,53.150000" in brouter.calls[0].request.url.params["lonlats"]
+    assert "8.250000,53.150000" in brouter.calls.last.request.url.params["lonlats"]
     assert result["source"].startswith("BRouter trekking entlang D2 Testküsten-Radweg")
     assert "OpenStreetMap" in result["source"]
     assert result["named_route"]["routes"] == ["D2 Testküsten-Radweg"]
@@ -525,6 +526,44 @@ def test_named_route_follows_long_coastal_bow() -> None:
     route_guide = named_route.guide(graph, [bow[0], bow[-1]])
     assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(28.9, abs=0.5)
     assert (53.20, 8.30) in route_guide.waypoints
+
+
+def test_detour_between_named_places_is_routed_directly() -> None:
+    """Dangast → Wilhelmshaven "entlang des Jadebusens": Der Fernweg biegt landeinwärts ab (33,6 statt 16,8 km). Zwischen
+    genannten Zwischenorten wird so ein Teilstück direkt geroutet; nur mit Start und Ziel bleibt der lange Fernweg."""
+    line = [(53.10, 8.10), (53.10, 8.20), (53.20, 8.20), (53.20, 8.30), (53.10, 8.30)]  # erst Osten, dann Bogen
+    graph = named_route.build_graph(["Bucht-Radweg"], [([1, 2, 3, 4, 5], line)])
+    places = [line[0], line[1], line[-1]]
+    straight = [named_route.haversine_km(*a, *b) for a, b in zip(places, places[1:])]  # je ~6,7 km
+    route_guide = named_route.guide(graph, places, straight)
+    assert route_guide.detour_legs == ["Teilstück 2: 29 km über den Fernweg, 7 km direkt"]
+    assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(6.7, abs=0.2)
+    assert (53.20, 8.30) not in route_guide.waypoints and route_guide.waypoints[-2:] == [line[1], line[-1]]
+    # Ohne direkte Längen oder ohne Zwischenorte folgt die Route dem Bogen
+    assert (53.20, 8.30) in named_route.guide(graph, places).waypoints
+    assert (53.20, 8.30) in named_route.guide(graph, [line[1], line[-1]], straight[1:]).waypoints
+
+
+@respx.mock
+async def test_plan_route_compares_named_route_with_direct_route(ctx) -> None:
+    """Mit Zwischenorten berechnet plan_route zuerst die direkte Route und meldet Umwege über den Fernweg."""
+    respx.get(url__startswith=WAYMARKED_CYCLING).mock(side_effect=waymarked_coast)
+    brouter = respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    back = Coordinate(lat=53.10, lon=8.30)  # vom Ende zurück zur Mitte: über den Fernweg-Bogen ~15 km statt ~7 km
+    result = await plan_route(ctx, [COAST_START, COAST_END, back], TransportMode.cycling, "Testküsten-Radweg")
+    assert result["named_route"]["detour_legs"] == ["Teilstück 2: 15 km über den Fernweg, 7 km direkt"]
+    assert "Direkt geroutet, weil der Fernweg dort ein Umweg wäre" in result["note"]
+    assert brouter.call_count == 2  # direkte Route, dann entlang des Fernwegs
+
+    # Nennt der Nutzer den Fernweg, folgt die Route ihm auch auf dem Bogen (Emden → Wilhelmshaven "auf dem
+    # Nordseeradweg" mit Etappenorten aus den checkpoints)
+    ctx.messages = [ModelRequest(parts=[UserPromptPart(content="Von Emden auf dem Nordseeradweg nach Wilhelmshaven")])]
+    brouter.reset()
+    result = await plan_route(ctx, [COAST_START, COAST_END, back], TransportMode.cycling, "Testküsten-Radweg")
+    assert "detour_legs" not in result["named_route"] and brouter.call_count == 1
+    assert routing.user_named_route(SimpleNamespace(messages=[
+        ModelRequest(parts=[UserPromptPart(content="über Vareler Hafen entlang des Jadebusens nach Dangast")]),
+    ])) is False  # fmt: skip
 
 
 def test_merged_named_routes_switch_where_they_meet() -> None:

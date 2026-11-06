@@ -80,6 +80,12 @@ GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden 
 # Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
 # (Nordseeküsten-Radweg Emden–Wilhelmshaven: 201 km bei 62 km Luftlinie); genau diesen Verlauf will der Nutzer.
 DETOUR_LIMIT = 6.0
+# Zwischen genannten Zwischenorten: Fernweg länger als 1,6 × die direkte Route (+3 km) → Teilstück frei routen.
+# Vareler Hafen → Dangast → Wilhelmshaven Südstrand "entlang des Jadebusens": Der Nordseeküsten-Radweg führt hinter
+# Dangast landeinwärts über Neustadtgödens (33,6 km statt 16,8 km am Deich). Ohne Zwischenorte (nur Start und Ziel,
+# Emden → Wilhelmshaven um die Halbinsel) ist der lange Fernweg genau der Wunsch und bleibt.
+DIRECT_DETOUR_FACTOR = 1.6
+DIRECT_DETOUR_SLACK_KM = 3.0
 SAMPLE_SPACING_KM = 2.0  # Abstand der Stützpunkte für den Router
 SNAP_POINT_MIN_KM = 0.2  # Einstiegspunkt auf dem Fernweg nur bei spürbarem Abstand als eigener Stützpunkt
 
@@ -437,6 +443,8 @@ class Guide:
     long_connections: list[str] = field(default_factory=list)
     # Teilstücke, die dem Fernweg nur zum Teil folgen (Wegpunkt zu weit weg), je ein Text für den Agenten
     partial_legs: list[str] = field(default_factory=list)
+    # Teilstücke, auf denen der Fernweg ein Umweg gegenüber der direkten Route wäre (frei geroutet), je ein Text
+    detour_legs: list[str] = field(default_factory=list)
 
 
 def partial_path(
@@ -461,14 +469,18 @@ def leg_snap_km(straight_km: float) -> float:
     return min(LONG_LEG_SNAP_KM, max(MAX_SNAP_KM, LONG_LEG_SNAP_SHARE * straight_km))
 
 
-def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
+def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | None = None) -> Guide:
+    """Dichte Wegpunkte entlang des Fernwegs. `direct_km`: Länge der direkten Route je Teilstück; nur bei
+    Zwischenorten wird damit ein Umweg über den Fernweg erkannt und das Teilstück frei geroutet."""
     snaps = [graph.snap(p) for p in waypoints]
+    compare = direct_km is not None and len(direct_km) == len(waypoints) - 1 and len(waypoints) > 2
     dense = [waypoints[0]]
     on_route_km = 0.0
     off_route_legs = []
     reasons = []
     long_connections = []
     partial_legs = []
+    detour_legs = []
     for leg, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
         path = None
         straight = haversine_km(*a, *b)
@@ -500,6 +512,15 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
                     f"Teilstück {leg + 1}: auf dem Fernweg {path[1]:.0f} km bei {straight:.0f} km Luftlinie (Umweg)"
                 )
                 path = None
+        if path and compare:
+            via_route = path[1] + start[1] + goal[1]
+            if via_route > DIRECT_DETOUR_FACTOR * direct_km[leg] + DIRECT_DETOUR_SLACK_KM:
+                detour_legs.append(
+                    f"Teilstück {leg + 1}: {via_route:.0f} km über den Fernweg, {direct_km[leg]:.0f} km direkt"
+                )
+                partial_legs = [text for text in partial_legs if not text.startswith(f"Teilstück {leg + 1}:")]
+                dense.append(b)
+                continue
         if path:
             points, km = path
             if start[1] > SNAP_POINT_MIN_KM:
@@ -511,7 +532,9 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
         else:
             off_route_legs.append(leg + 1)
         dense.append(b)
-    return Guide(dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)), partial_legs)
+    return Guide(
+        dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)), partial_legs, detour_legs
+    )
 
 
 async def catalog_overview(deps: AgentDeps) -> str:

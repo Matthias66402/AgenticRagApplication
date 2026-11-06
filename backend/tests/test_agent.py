@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from app.agent.plan_schema import AdventurePlan
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import check_blocked_sections, check_no_plan_evasion, check_route_wish, check_stage_distances, planner_agent
+from app.agent.planner import check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_route_wish, check_stage_distances, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
@@ -698,6 +698,25 @@ def test_route_wish_requires_named_route_attempt() -> None:
     check_route_wish(route_wish_context("Von Emden nach Wilhelmshaven radeln", {"transport": "cycling"}), plan)
     car = plan.model_copy(update={"transport": "car"})
     check_route_wish(route_wish_context(coast, {"transport": "car"}), car)
+
+
+def test_two_routes_for_same_stretch_are_rejected() -> None:
+    """Oldenburg → Wilhelmshaven über den Vareler Hafen plus die direkte Variante: auf der Karte eine Schleife."""
+    oldenburg, varel, hafen = [53.148, 8.213], [53.373, 8.127], [53.408, 8.17]
+    dangast, whv = [53.446, 8.119], [53.513, 8.141]
+    routes = {
+        "r-hafen": [oldenburg, varel, hafen, dangast, whv],
+        "r-direkt": [oldenburg, varel, [53.41, 8.108], dangast, whv],
+        "r-weiter": [whv, [53.6, 8.0]],  # Folgetag ab dem Ziel
+        "r-runde-ost": [oldenburg, [53.2, 8.4], oldenburg],  # Standorttour: anderer Tag, gleicher Start und Ziel
+        "r-runde-west": [oldenburg, [53.2, 8.0], oldenburg],
+    }
+    ctx = SimpleNamespace(deps=SimpleNamespace(routes=routes))
+    plan = AdventurePlan.model_validate(make_plan() | {"transport": "cycling"})
+    with pytest.raises(ModelRetry, match="r-hafen und r-direkt"):
+        check_duplicate_routes(ctx, plan.model_copy(update={"route_ids": ["r-hafen", "r-direkt"]}))
+    check_duplicate_routes(ctx, plan.model_copy(update={"route_ids": ["r-hafen", "r-weiter"]}))
+    check_duplicate_routes(ctx, plan.model_copy(update={"route_ids": ["r-runde-ost", "r-runde-west"]}))
 
 
 def test_route_wish_hint_comes_once_per_run() -> None:

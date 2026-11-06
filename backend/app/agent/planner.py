@@ -1,4 +1,5 @@
 import datetime as dt
+import math
 import re
 from typing import Any
 
@@ -41,6 +42,13 @@ ROUTE_WORDS = re.compile(
     r"\b(entlang|längs)\b|(radweg|radroute|radfernweg|wanderweg|höhenweg|steig|pfad)\b",
     re.IGNORECASE,
 )
+# Zwei Routen gelten als Varianten derselben Strecke, wenn Start und Ziel je höchstens ROUTE_SAME_END_KM auseinander
+# liegen und mindestens ROUTE_DUPLICATE_SHARE der Punkte der einen höchstens ROUTE_SHARED_KM neben der anderen
+ROUTE_SAME_END_KM = 1.0
+ROUTE_SHARED_KM = 0.3
+ROUTE_DUPLICATE_SHARE = 0.5
+# Prüfpunkte je Route für den gemeinsamen Anteil (gleichmäßig über die Länge)
+ROUTE_SHARE_SAMPLES = 200
 # Anfang des Hinweises von check_route_wish, daran erkennbar, ob er in diesem Lauf schon kam
 ROUTE_WISH_HINT = "Der Nutzer wünscht einen bestimmten Verlauf"
 # Fortbewegungsarten, für die plan_route einem Fernweg folgen kann (app.agent.tools.named_route.ROUTE_TYPES)
@@ -127,7 +135,8 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Nennt der Nutzer mehrere Fernwege bzw. Abschnitte nacheinander (z. B. "erst den Hunteradweg, dann den
    Weserradweg"), übergib alle in Reihenfolge der Tour, durch Komma getrennt ("Hunteradweg, Weserradweg"), statt
    nur einen davon zu nehmen.
-   Rufe es zuerst nur mit Start und Ziel auf: Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
+   Rufe es zuerst mit Start, den vom Nutzer genannten Zwischenorten und dem Ziel auf (ohne selbst gewählte
+   Etappenorte): Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
    die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
    Tagesdistanz und suche Unterkünfte dort (`find_accommodation`, max. 5 km), statt Orte zu raten. Findet das Tool
    den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der Plan nutzt dann diese Route;
@@ -383,7 +392,8 @@ def check_route_wish(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
     if not tried:
         raise ModelRetry(
             f"{ROUTE_WISH_HINT} (z. B. entlang einer Küste, eines Flusses oder auf einem "
-            "Fernweg). Rufe `plan_route` mit Start und Ziel und dem passenden Fernweg als `route_name` auf (z. B. "
+            "Fernweg). Rufe `plan_route` mit Start, den vom Nutzer genannten Zwischenorten und Ziel und dem passenden "
+            "Fernweg als `route_name` auf (z. B. "
             "\"Nordseeküsten-Radweg\", \"Elberadweg\"), wähle die Etappenorte aus `named_route.checkpoints` und "
             "plane dann neu. Gibt es keinen Fernweg (z. B. ein Uferweg an einem kleinen Fluss), versuche den Namen "
             "des Flusses oder Wegs als route_name; findet das Tool nichts, gib den Plan mit Deiner bisherigen Route "
@@ -457,6 +467,64 @@ def claimed_blocked_places(
                 continue
             claims += [(name, clause.strip()) for name in names if name.lower() in clause.lower()]
     return list(dict.fromkeys(claims))
+
+
+def segment_km(point: list[float], a: list[float], b: list[float]) -> float:
+    """Abstand eines Punkts zur Strecke a–b (lokal eben genähert, genügt für wenige Kilometer)."""
+    scale = math.cos(math.radians(point[0])) * 111.32
+    px, py = (point[1] - a[1]) * scale, (point[0] - a[0]) * 110.57
+    bx, by = (b[1] - a[1]) * scale, (b[0] - a[0]) * 110.57
+    length = bx * bx + by * by
+    t = max(0.0, min(1.0, (px * bx + py * by) / length)) if length else 0.0
+    return math.hypot(px - t * bx, py - t * by)
+
+
+def resample(track: list[list[float]], samples: int) -> list[list[float]]:
+    """Gleichmäßig über die Länge verteilte Punkte: Vereinfachte Geometrien haben Stützpunkte nur an Kurven."""
+    steps = [haversine_km(a[0], a[1], b[0], b[1]) for a, b in zip(track, track[1:])]
+    total = sum(steps)
+    if not total:
+        return track[:1]
+    points, done, index = [], 0.0, 0
+    for k in range(samples):
+        target = total * (k + 0.5) / samples
+        while done + steps[index] < target:
+            done += steps[index]
+            index += 1
+        t = (target - done) / steps[index]
+        a, b = track[index], track[index + 1]
+        points.append([a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])])
+    return points
+
+
+def shared_share(track: list[list[float]], other: list[list[float]]) -> float:
+    """Anteil der Länge von `track`, der höchstens ROUTE_SHARED_KM neben der Linie `other` liegt."""
+    segments = list(zip(other, other[1:])) or [(other[0], other[0])]
+    points = resample(track, ROUTE_SHARE_SAMPLES)
+    near = sum(1 for p in points if any(segment_km(p, a, b) <= ROUTE_SHARED_KM for a, b in segments))
+    return near / len(points)
+
+
+def check_duplicate_routes(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Zwei Routen für dieselbe Strecke in route_ids: Karte und GPX zeigen beide hintereinander.
+
+    Oldenburg → Wilhelmshaven: Das Modell übernahm die Route über den Vareler Hafen und zusätzlich den Pflichtversuch
+    mit dem Nordseeküsten-Radweg (gleicher Start und gleiches Ziel, ab Varel anders), auf der Karte eine Schleife.
+    Eintagestouren rund um denselben Standort haben zwar gleiche Endpunkte, verlaufen aber überwiegend getrennt.
+    """
+    ids = [rid for rid in dict.fromkeys(output.route_ids) if ctx.deps.routes.get(rid)]
+    tracks = {rid: ctx.deps.routes[rid] for rid in ids}
+    for index, first in enumerate(ids):
+        for second in ids[index + 1:]:
+            a, b = tracks[first], tracks[second]
+            same_ends = all(
+                haversine_km(p[0], p[1], q[0], q[1]) <= ROUTE_SAME_END_KM for p, q in ((a[0], b[0]), (a[-1], b[-1]))
+            )
+            if same_ends and shared_share(b, a) >= ROUTE_DUPLICATE_SHARE:
+                raise ModelRetry(
+                    f"route_ids enthält mit {first} und {second} zwei Routen für dieselbe Strecke; Karte und GPX "
+                    "zeigen dann beide. Übernimm nur die Route, zu der Etappen, Distanz und Beschreibung passen."
+                )
 
 
 def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) -> AdventurePlan:
@@ -639,6 +707,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         check_named_route_used(ctx, output)
         check_hut_tour(ctx, output)
         check_route_wish(ctx, output)
+        check_duplicate_routes(ctx, output)
         if (output.outbound_journey or output.return_journey) and not used_tool(ctx, "find_train_connections"):
             raise ModelRetry(
                 "An- und Rückreise nur mit Verbindungen aus `find_train_connections` angeben. "
