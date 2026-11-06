@@ -48,6 +48,8 @@ NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode
 # Etappenende an der Unterkunft statt am berechneten Wegpunkt)
 STAGE_STRAIGHT_TOLERANCE = 1.1
 STAGE_STRAIGHT_SLACK_KM = 3.0
+# Zusammenfassung benennt, dass die Route einen gesperrten Abschnitt des Fernwegs umfährt
+BLOCKED_MENTIONED = re.compile(r"nicht befahrbar|gesperrt|Sperrung|Baustelle|umf[äa]hr|Umfahrung|Umweg", re.IGNORECASE)
 # Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
 SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
 # Ankündigung statt Ergebnis ("Ich erstelle jetzt den Plan … ich melde mich"): Mit answer_user endet der Lauf
@@ -295,13 +297,9 @@ def check_access(ctx: RunContext[AgentDeps], access: AccessRoute, journey: Journ
         )
 
 
-def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
-    """Wurde eine Route entlang eines Fernwegs berechnet, darf der Plan keine ältere Route ohne Fernweg nutzen.
-
-    Sonst weicht das Modell gern auf eine kürzere Route ohne Fernweg aus, wenn die Strecke nicht in die Tage passt.
-    Eine ältere Route entlang des Fernwegs ist in Ordnung, z. B. mit besser passenden Etappen.
-    """
-    results = [
+def route_results(ctx: RunContext[AgentDeps]) -> list[dict[str, Any]]:
+    """Ergebnisse aller erfolgreichen `plan_route`-Aufrufe dieses Laufs, in Aufrufreihenfolge."""
+    return [
         part.content
         for message in ctx.messages
         if isinstance(message, ModelRequest)
@@ -309,6 +307,15 @@ def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
         if isinstance(part, ToolReturnPart) and part.tool_name == "plan_route"
         and isinstance(part.content, dict) and "route_id" in part.content
     ]  # fmt: skip
+
+
+def check_named_route_used(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Wurde eine Route entlang eines Fernwegs berechnet, darf der Plan keine ältere Route ohne Fernweg nutzen.
+
+    Sonst weicht das Modell gern auf eine kürzere Route ohne Fernweg aus, wenn die Strecke nicht in die Tage passt.
+    Eine ältere Route entlang des Fernwegs ist in Ordnung, z. B. mit besser passenden Etappen.
+    """
+    results = route_results(ctx)
     order = {result["route_id"]: index for index, result in enumerate(results)}
     named = [index for index, result in enumerate(results) if "named_route" in result]
     used = [order[route_id] for route_id in output.route_ids if route_id in order]
@@ -362,6 +369,42 @@ def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
             "Plane die Hüttenwanderung mit `plan_hut_tour` (Start, Ziel, Nächte), damit die Hütten auf dem Weg liegen "
             "statt abseits von Talorten. Übernimm Hütten, route_id und Etappenwerte aus dem Ergebnis."
         )
+
+
+def nearest_place(output: AdventurePlan, point: dict[str, float]) -> str:
+    places = [output.start, *(stage.end for stage in output.stages)]
+    return min(places, key=lambda p: haversine_km(p.lat, p.lon, point["lat"], point["lon"])).name
+
+
+def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) -> AdventurePlan:
+    """Umfährt die Route einen laut Kartendaten gesperrten Abschnitt des Fernwegs, muss die Zusammenfassung das sagen;
+    zusätzlich setzt das System einen festen Sicherheitshinweis. Trotz deutlicher Anweisung im Tool-Ergebnis schrieb
+    gpt-5-mini "mit der gewünschten Alternative über den IJsselmeer-Damm", obwohl die Route um das IJsselmeer führte."""
+    used = set(output.route_ids)
+    sections = [
+        section
+        for result in route_results(ctx) if result["route_id"] in used
+        for section in result.get("named_route", {}).get("blocked_sections", [])
+    ]  # fmt: skip
+    if not sections:
+        return output
+    texts = []
+    for section in sections:
+        start, end = nearest_place(output, section["from"]), nearest_place(output, section["to"])
+        where = f"bei {start}" if start == end else f"zwischen {start} und {end}"
+        texts.append(f"{where} ({section['off_route_km']:.0f} km Umfahrung statt {section['named_route_km']:.0f} km Fernweg)")
+    if not BLOCKED_MENTIONED.search(output.summary):
+        raise ModelRetry(
+            f"Die Route umfährt den Fernweg {'; '.join(texts)}, weil er dort laut Kartendaten nicht befahrbar ist "
+            "(z. B. Baustelle). Schreib das in `summary` ausdrücklich (\"nicht befahrbar\", \"umfährt\") und behaupte "
+            "nirgends, die Tour führe dort über den Fernweg oder einen gewünschten Abschnitt. Hatte der Nutzer genau "
+            "diesen Abschnitt gewünscht, sag ihm, dass sich der Wunsch laut Kartendaten nicht umsetzen lässt."
+        )
+    note = (
+        f"Laut Kartendaten (OpenStreetMap) ist der Fernweg {'; '.join(texts)} nicht befahrbar, z. B. wegen einer "
+        "Baustelle; die Route umfährt diesen Abschnitt. Vor Ort aktuelle Sperrungen und Umleitungen prüfen."
+    )
+    return output.model_copy(update={"safety_notes": [note, *output.safety_notes]})
 
 
 def check_stage_distances(output: AdventurePlan) -> None:
@@ -508,6 +551,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             }
         )
         check_stage_distances(output)
+        output = check_blocked_sections(ctx, output)
         limit = MAX_STAGE_KM[output.transport]
         too_long = [s for s in output.stages if s.distance_km > limit]
         if too_long:

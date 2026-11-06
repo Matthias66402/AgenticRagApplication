@@ -328,43 +328,52 @@ async def _route_guided(
     route_guide: Guide,
     waypoints: list[Coordinate],
     notes: list[str],
-) -> tuple[RouteData | None, str, list[str]]:
+) -> tuple[RouteData | None, str, list[str], list[dict[str, Any]]]:
     """Route über die dichten Stützpunkte eines Fernwegs in Teilanfragen; Werte je Etappe aus der Gesamtgeometrie.
 
     Erreicht kein Router alle Stützpunkte einer Teilanfrage, wird dieser Abschnitt nur zwischen seinem Anfang und Ende
     geroutet (Hinweis in `notes`), statt die ganze Route zu verwerfen: Den Radweg über den Abschlussdeich
-    (Nordseeküsten-Radweg in den Niederlanden) halten BRouter trekking und ORS für nicht befahrbar.
+    (Nordseeküsten-Radweg in den Niederlanden) erfasst OpenStreetMap als Baustelle, BRouter trekking und ORS fahren
+    um das IJsselmeer herum. Zurück kommen Route, Anbieter, Fehlermeldungen und die frei gerouteten Abschnitte
+    (`blocked_sections`: Anfang, Ende, km abseits und km auf dem Fernweg).
     """
     dense = [Coordinate(lat=lat, lon=lon) for lat, lon in route_guide.waypoints]
     step = GUIDED_CHUNK_WAYPOINTS - 1  # aufeinanderfolgende Teilanfragen teilen sich einen Anschlusspunkt
     chunks = [dense[i : i + GUIDED_CHUNK_WAYPOINTS] for i in range(0, len(dense) - 1, step)]
     semaphore = asyncio.Semaphore(GUIDED_CONCURRENCY)
-    freed: list[list[Coordinate]] = []
+    freed: list[tuple[int, float]] = []  # (Index der Teilanfrage, gefahrene km ohne Fernweg)
 
-    async def route_chunk(chunk: list[Coordinate]) -> tuple[RouteData | None, str, list[str]]:
+    async def route_chunk(index: int, chunk: list[Coordinate]) -> tuple[RouteData | None, str, list[str]]:
         async with semaphore:
             route, label, problems = await _route_chain(ctx, chain, chunk)
             if route is None and len(chunk) > 2:
                 route, label, more = await _route_chain(ctx, chain, [chunk[0], chunk[-1]])
                 problems += more
                 if route is not None:
-                    freed.append(chunk)
+                    freed.append((index, route.distance_m / 1000))
             return route, label, problems
 
-    results = await asyncio.gather(*(route_chunk(chunk) for chunk in chunks))
+    results = await asyncio.gather(*(route_chunk(index, chunk) for index, chunk in enumerate(chunks)))
     problems = [problem for _, _, chunk_problems in results for problem in chunk_problems]
     routes = [route for route, _, _ in results if route is not None]
     if len(routes) < len(results):
-        return None, "", problems
-    if freed:
-        sections = "; ".join(
-            f"{chunk[0].lat:.3f}, {chunk[0].lon:.3f} bis {chunk[-1].lat:.3f}, {chunk[-1].lon:.3f}"
-            for chunk in sorted(freed, key=chunks.index)
-        )
+        return None, "", problems, []
+    blocked = []
+    for index, routed_km in sorted(freed):
+        chunk = chunks[index]
+        along_km = sum(haversine_km(a.lat, a.lon, b.lat, b.lon) for a, b in zip(chunk, chunk[1:]))
+        blocked.append({
+            "from": {"lat": round(chunk[0].lat, 5), "lon": round(chunk[0].lon, 5)},
+            "to": {"lat": round(chunk[-1].lat, 5), "lon": round(chunk[-1].lon, 5)},
+            "off_route_km": round(routed_km, 1),
+            "named_route_km": round(along_km, 1),
+        })  # fmt: skip
+    if blocked:
         notes.append(
-            f"Abschnitt(e) {sections}: Der Router findet dort keinen befahrbaren Weg entlang des Fernwegs (z. B. "
-            "gesperrt oder in den Kartendaten nicht freigegeben) und fährt frei, die Strecke kann dort deutlich "
-            "abweichen. Weise im Plan darauf hin."
+            "In blocked_sections ist der Fernweg für den Router nicht befahrbar (in den Kartendaten z. B. als "
+            "Baustelle oder gesperrt erfasst), die Route weicht dort ab. Behaupte nicht, sie führe dort über den "
+            "Fernweg oder einen gewünschten Abschnitt (z. B. einen Damm), sondern sag dem Nutzer, dass dieser "
+            "Abschnitt laut Kartendaten nicht befahrbar ist und die Route ihn umfährt."
         )
     geometry: list[list[float]] = []
     for route in routes:
@@ -379,7 +388,7 @@ async def _route_guided(
         descent_m=descent,
         segments=split_segments(geometry, waypoints, duration),
     )
-    return combined, " / ".join(dict.fromkeys(label for _, label, _ in results)), problems
+    return combined, " / ".join(dict.fromkeys(label for _, label, _ in results)), problems, blocked
 
 
 async def plan_route(
@@ -406,7 +415,8 @@ async def plan_route(
         route_id (für AdventurePlan.route_ids), distance_km, duration_hours (beim Wandern Gehzeit nach DAV-Formel),
         ascent_m, descent_m, segments (beim Wandern und MTB mit lowest_m, dem tiefsten Punkt der Etappe);
         mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon,
-        checkpoints: Punkte entlang der Route mit Kilometerstand für die Wahl der Etappenorte).
+        checkpoints: Punkte entlang der Route mit Kilometerstand für die Wahl der Etappenorte, blocked_sections:
+        Abschnitte, auf denen der Fernweg laut Kartendaten nicht befahrbar ist und die Route ihn umfährt).
     """
     if len(waypoints) < 2:
         return tool_error("Mindestens Start und Ziel als Wegpunkte angeben.")
@@ -448,17 +458,21 @@ async def plan_route(
             route_guide = guide(graph, points)
             # BRouter zuerst: viele Teilanfragen, ORS hat ein knappes Tageskontingent
             guided_chain = sorted(chain, key=lambda entry: entry[0] != "brouter")
-            route, label, problems = await _route_guided(ctx, guided_chain, route_guide, waypoints, notes)
+            route, label, problems, blocked = await _route_guided(ctx, guided_chain, route_guide, waypoints, notes)
             if route is None:
                 notes.append(f"Routing entlang „{route_name}“ fehlgeschlagen – normal geroutet.")
             else:
                 label += f" entlang {', '.join(graph.names)} (Verlauf: © OpenStreetMap-Mitwirkende)"
+                # Frei geroutete Abschnitte zählen nicht als Fernweg
+                on_route_km = max(route_guide.on_route_km - sum(s["named_route_km"] for s in blocked), 0.0)
                 named_route = {
                     "routes": graph.names,
                     "source": graph.source,
-                    "on_route_km": round(route_guide.on_route_km, 1),
+                    "on_route_km": round(on_route_km, 1),
                     "off_route_legs": route_guide.off_route_legs,
                 }
+                if blocked:
+                    named_route["blocked_sections"] = blocked
                 if route_guide.long_connections:
                     notes.append(
                         f"Abseits des Fernwegs normal angebunden: {', '.join(route_guide.long_connections)} bis zum "
@@ -470,14 +484,14 @@ async def plan_route(
                         "geroutet. Endet der Fernweg dort, geht es eventuell unter anderem Namen weiter: dann beide "
                         "Namen mit Komma in route_name angeben."
                     )
-                if route_guide.off_route_legs and route_guide.on_route_km == 0:
+                if route_guide.off_route_legs and on_route_km == 0:
                     notes.append(
                         "Die Route folgt dem Fernweg an keiner Stelle; beschreibe sie im Plan nicht als dessen Verlauf."
                     )
                 # Kilometer-Marken liegen auf der berechneten Route, also nur dort am Fernweg, wo sie ihm folgt. Bei
                 # Hamburg–Calais (Fernweg im Katalog endete an der niederländischen Grenze) wählte das Modell die
                 # Marken der direkten Route durchs Binnenland als Etappenorte "am Fernweg".
-                mostly_on_route = route_guide.on_route_km >= CHECKPOINT_MIN_ON_ROUTE_SHARE * route.distance_m / 1000
+                mostly_on_route = on_route_km >= CHECKPOINT_MIN_ON_ROUTE_SHARE * route.distance_m / 1000
                 if route_guide.off_route_legs:
                     notes.append(
                         f"Teilstück(e) {', '.join(map(str, route_guide.off_route_legs))} folgen nicht dem Fernweg "

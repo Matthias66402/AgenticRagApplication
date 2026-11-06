@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from app.agent.plan_schema import AdventurePlan
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import check_route_wish, check_stage_distances, planner_agent
+from app.agent.planner import check_blocked_sections, check_route_wish, check_stage_distances, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
@@ -698,3 +698,27 @@ def test_route_wish_requires_named_route_attempt() -> None:
     check_route_wish(route_wish_context("Von Emden nach Wilhelmshaven radeln", {"transport": "cycling"}), plan)
     car = plan.model_copy(update={"transport": "car"})
     check_route_wish(route_wish_context(coast, {"transport": "car"}), car)
+
+
+def test_plan_must_admit_blocked_section_of_named_route() -> None:
+    """Umfährt die Route einen gesperrten Abschnitt (Abschlussdeich als Baustelle in OSM), darf der Plan nicht so tun,
+    als führe er darüber; das System ergänzt einen festen Sicherheitshinweis."""
+    blocked = {"from": {"lat": 53.168, "lon": 5.416}, "to": {"lat": 52.95, "lon": 4.719}, "off_route_km": 190,
+               "named_route_km": 72}  # fmt: skip
+    result = {"route_id": "r-1", "distance_km": 700, "named_route": {"routes": ["Nordseeküsten-Radweg"],
+              "blocked_sections": [blocked]}}  # fmt: skip
+    ctx = SimpleNamespace(messages=[ModelRequest(parts=[ToolReturnPart(tool_name="plan_route", content=result)])])
+    plan = make_plan(days=2, accommodation="camping") | {"transport": "cycling", "route_ids": ["r-1"]}
+    plan["stages"][0]["end"] = {"name": "Harlingen", "lat": 53.17, "lon": 5.42}
+    plan["stages"][1]["start"] = plan["stages"][0]["end"]
+    plan["stages"][1]["end"] = {"name": "Den Helder", "lat": 52.96, "lon": 4.76}
+    claim = AdventurePlan.model_validate(plan | {"summary": "Mit der gewünschten Alternative über den Afsluitdijk."})
+    with pytest.raises(ModelRetry, match=r"zwischen Harlingen und Den Helder \(190 km Umfahrung statt 72 km"):
+        check_blocked_sections(ctx, claim)
+    honest = claim.model_copy(update={"summary": "Der Afsluitdijk ist laut Kartendaten nicht befahrbar."})
+    notes = check_blocked_sections(ctx, honest).safety_notes
+    assert notes[0].startswith("Laut Kartendaten (OpenStreetMap) ist der Fernweg zwischen Harlingen und Den Helder")
+    # Andere Route ohne gesperrten Abschnitt: nichts zu tun
+    assert check_blocked_sections(ctx, claim.model_copy(update={"route_ids": ["r-2"]})) == claim.model_copy(
+        update={"route_ids": ["r-2"]}
+    )

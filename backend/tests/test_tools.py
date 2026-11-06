@@ -447,8 +447,12 @@ async def test_unroutable_section_of_named_route_is_routed_freely(ctx) -> None:
 
     respx.get(BROUTER_URL).mock(side_effect=brouter)
     result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testweg")
-    assert result["estimated"] is False and result["named_route"]["on_route_km"] == 23.2
-    assert "Abschnitt(e) 53.100, 8.200 bis 52.900, 8.200: Der Router findet dort keinen befahrbaren Weg" in result["note"]
+    # Der frei geroutete Abschnitt zählt nicht als Fernweg; der Hinweis nennt die Abweichung in km
+    assert result["estimated"] is False and result["named_route"]["on_route_km"] == 0
+    assert result["named_route"]["blocked_sections"] == [{
+        "from": {"lat": 53.1, "lon": 8.2}, "to": {"lat": 52.9, "lon": 8.2}, "off_route_km": 22.2, "named_route_km": 23.2,
+    }]  # fmt: skip
+    assert "Behaupte nicht, sie führe dort über den Fernweg" in result["note"]
 
 
 @respx.mock
