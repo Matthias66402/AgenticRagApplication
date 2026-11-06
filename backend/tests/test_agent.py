@@ -470,6 +470,61 @@ async def test_train_trip_with_bike_to_station(client: httpx.AsyncClient, user_h
     assert "<name>Start: Zuhause</name>" in gpx.text and "<name>Bahnhof: Oldenburg Hbf</name>" in gpx.text
 
 
+@respx.mock
+async def test_train_trip_with_bike_from_arrival_station(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Zug nach Augsburg, dann mit dem Rad vom Bahnhof zur Jugendherberge: Der Weg gehört in `egress`. Das Modell
+    trug ihn erst in `access` ein und plante nach der Zurückweisung den Weg von zu Hause zum Bahnhof."""
+    respx.post(ORS_URL.format(profile="cycling-regular")).respond(status_code=503)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    respx.get(get_settings().transit_api_url).respond(json=TRANSIT_TOMORROW)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    args = {
+        "from_name": "Oldenburg Hbf", "from_lat": 53.14, "from_lon": 8.22,
+        "to_name": "Bremen", "to_lat": 53.08, "to_lon": 8.88, "date": TOMORROW.isoformat(),
+    }  # fmt: skip
+    seen: list[str] = []
+
+    def trip(messages: list[ModelMessage], field: str, minutes_after: int) -> dict[str, Any]:
+        returns = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart)]
+        seen.extend(p.content for p in returns if p.tool_name == "final_train_trip" and isinstance(p.content, str))
+        journey = next(p.content for p in returns if p.tool_name == "find_train_connections")["connections"][0]
+        leave = dt.datetime.fromisoformat(journey["arrival"]) + dt.timedelta(minutes=minutes_after)
+        leg = {
+            "transport": "cycling", "start": START.model_dump() | {"name": "Bremen Hbf"},
+            "end": END.model_dump() | {"name": "Jugendherberge"}, "departure": leave.strftime("%Y-%m-%dT%H:%M"),
+            "distance_km": 1.6, "duration_hours": 0.1,
+            "route_id": next(p.content for p in returns if p.tool_name == "plan_route")["route_id"],
+        }  # fmt: skip
+        return {"title": "Zug und Rad zur Jugendherberge", "summary": "Zug, dann mit dem Rad zur Jugendherberge.",
+                "outbound_journey": journey, field: leg}  # fmt: skip
+
+    steps: list[Callable[[list[ModelMessage]], Step]] = [
+        lambda _: ("plan_route", {"waypoints": [START.model_dump(), END.model_dump()], "transport": "cycling"}),
+        lambda _: ("find_train_connections", args),
+        lambda messages: ("final_train_trip", trip(messages, "access", 10)),  # Weg am Ziel als Weg zum Bahnhof
+        lambda messages: ("final_train_trip", trip(messages, "egress", -10)),  # vor Ankunft losfahren
+        lambda messages: ("final_train_trip", trip(messages, "egress", 10)),
+    ]
+    calls = iter(steps)
+    with planner_agent.override(model=streaming_model(lambda messages: next(calls)(messages))):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Zug, dann Rad zur Jugendherberge"}
+        )
+    events = parse_sse(response.text)
+    assert [e["type"] for e in events][-2:] == ["plan", "done"], events
+    assert "gehört er nicht in `access`, sondern in `egress`" in seen[0] and "vor der Ankunft" in seen[-1]
+    plan = events[-2]["plan"]
+    assert plan["access"] is None and plan["egress"]["end"]["name"] == "Jugendherberge"
+    assert list(plan["routes"]) == [plan["egress"]["route_id"]]
+
+    respx.get(url__startswith=get_settings().map_tile_url.split("{")[0]).respond(status_code=503)
+    pdf = await client.get(f"/api/adventures/{adventure['id']}/pdf", headers=user_headers)
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+    gpx = await client.get(f"/api/adventures/{adventure['id']}/gpx", headers=user_headers)
+    assert gpx.status_code == 200 and gpx.headers["x-gpx-has-track"] == "true"
+    assert "<name>Start: Bremen Hbf</name>" in gpx.text and "<name>Ziel: Jugendherberge</name>" in gpx.text
+
+
 async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     seen_history: list[int] = []

@@ -10,7 +10,7 @@ from pydantic_ai import (
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import (
-    MAX_STAGE_KM, AccessRoute, AccommodationType, AdventurePlan, ClarificationQuestion, Journey, TextAnswer,
+    MAX_STAGE_KM, AccessRoute, AccommodationType, AdventurePlan, ClarificationQuestion, EgressRoute, Journey, TextAnswer,
     TrainTripPlan, TransportMode,
 )  # fmt: skip
 from app.agent.models import build_model, model_settings
@@ -117,7 +117,10 @@ Möchte der Nutzer mit dem Rad oder zu Fuß zum Bahnhof und dann mit dem Zug wei
 Weg in die Reisekarte (`access`): `geocode` für Wohnadresse bzw. Start und Bahnhof, `plan_route` dorthin
 (transport cycling bzw. hiking), `find_train_connections` ab dem Bahnhof, dann `final_train_trip`. Losfahren
 (`access.departure`) = Abfahrt der Verbindung minus Fahr- bzw. Gehzeit minus Puffer (Rad abstellen: 10 Minuten,
-zu Fuß: 5 Minuten).
+zu Fuß: 5 Minuten). `access` nur, wenn der Nutzer den Weg zum Abfahrtsbahnhof wünscht.
+Möchte er am Zielort vom Bahnhof mit dem Rad oder zu Fuß weiter (z. B. zur Unterkunft), gehört dieser Weg in
+`egress`, nicht in `access`: `plan_route` vom Zielbahnhof zum Ziel; Losfahren (`egress.departure`) = Ankunft der
+Verbindung plus Puffer (Rad holen: 10 Minuten, zu Fuß: 5 Minuten).
 
 ## Vorgehen, sobald alles bekannt ist
 Wähle die Tools passend zur Anfrage. Nicht jedes Tool ist immer nötig. Rufe voneinander unabhängige Tools im
@@ -314,6 +317,10 @@ def check_train_trip(ctx: RunContext[AgentDeps], output: TrainTripPlan) -> Train
     check_journeys_found(ctx, known, {"Hinfahrt": output.outbound_journey, "Rückfahrt": output.return_journey})
     if output.access is not None:
         check_access(ctx, output.access, output.outbound_journey)
+    if output.egress is not None:
+        check_egress(ctx, output.egress, output.outbound_journey)
+    if output.access and output.egress and output.access.route_id == output.egress.route_id:
+        raise ModelRetry("`access` und `egress` nutzen dieselbe Route; `access` ist nur der Weg zum Abfahrtsbahnhof.")
     return output.model_copy(
         update={
             "outbound_journey": as_found(output.outbound_journey, known),
@@ -334,7 +341,22 @@ def check_access(ctx: RunContext[AgentDeps], access: AccessRoute, journey: Journ
         raise ModelRetry(
             f"Mit Losfahren um {access.departure[11:]} und {access.duration_hours:g} h Fahrzeit ist der Nutzer erst "
             f"{arrival:%H:%M} am Bahnhof, die Verbindung fährt aber {journey.departure[11:]} ab. Rechne "
-            "`access.departure` neu (Abfahrt minus Fahrzeit minus Puffer)."
+            "`access.departure` neu (Abfahrt minus Fahrzeit minus Puffer). Ist das der Weg vom Zielbahnhof weiter "
+            "(z. B. zur Unterkunft), gehört er nicht in `access`, sondern in `egress`."
+        )
+
+
+def check_egress(ctx: RunContext[AgentDeps], egress: EgressRoute, journey: Journey) -> None:
+    """Der Weg vom Zielbahnhof braucht eine berechnete Route und beginnt frühestens mit Ankunft der Verbindung."""
+    if egress.route_id not in ctx.deps.routes:
+        raise ModelRetry(
+            f"Die route_id {egress.route_id!r} stammt aus keinem `plan_route`-Ergebnis. Berechne den Weg vom "
+            "Zielbahnhof mit `plan_route` und übernimm dessen route_id, Distanz und Dauer."
+        )
+    if egress.departure < journey.arrival:
+        raise ModelRetry(
+            f"Losfahren am Zielbahnhof um {egress.departure[11:]} liegt vor der Ankunft der Verbindung "
+            f"({journey.arrival[11:]}). Rechne `egress.departure` neu (Ankunft plus Puffer)."
         )
 
 

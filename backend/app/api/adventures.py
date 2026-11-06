@@ -65,7 +65,7 @@ async def download_gpx(adventure_id: int, user: CurrentUser, session: SessionDep
     if not plan["stages"]:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="GPX gibt es für Bahnfahrten nur mit Weg zum Bahnhof; Verbindungen haben keine Koordinaten",
+            detail="GPX gibt es für Bahnfahrten nur mit Weg zum oder vom Bahnhof; Verbindungen haben keine Koordinaten",
         )
     days = [stage["day"] for stage in plan["stages"]]
     if day is not None and day not in days:

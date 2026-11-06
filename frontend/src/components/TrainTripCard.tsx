@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { TrainTripPlan } from "../api/types";
+import type { AccessRoute, TrainTripPlan } from "../api/types";
 import { formatDate, shortPlace } from "../lib/labels";
 import { JourneyCard, TransitNote } from "./JourneyCard";
 import { LinkedText } from "./LinkedText";
@@ -9,27 +9,60 @@ import { DownloadButton } from "./PlanCard";
 import { RouteMap, type MapPlan } from "./RouteMap";
 
 const ACCESS_LABELS = { cycling: "🚲 Mit dem Rad zum Bahnhof", hiking: "🚶 Zu Fuß zum Bahnhof" };
+const EGRESS_LABELS = { cycling: "🚲 Mit dem Rad vom Bahnhof", hiking: "🚶 Zu Fuß vom Bahnhof" };
 
 const formatMinutes = (hours: number) => `${Math.round(hours * 60)} min`;
 
-/** Reisekarte einer Bahnfahrt: ggf. Weg zum Bahnhof mit Karte, dann die gewählte(n) Verbindung(en). */
+/** Weg zum Abfahrtsbahnhof bzw. vom Zielbahnhof: Karte, Höhenprofil und Eckdaten. */
+function StationRoute({
+  leg,
+  routes,
+  heading,
+  endLabel,
+  timing,
+}: {
+  leg: AccessRoute;
+  routes: TrainTripPlan["routes"];
+  heading: string;
+  endLabel: string;
+  timing: string;
+}) {
+  const map = useMemo<MapPlan>(
+    () => ({
+      route_ids: [leg.route_id],
+      routes: routes ?? {},
+      start: leg.start,
+      stages: [{ day: 1, end: leg.end, label: endLabel }],
+    }),
+    [leg, routes, endLabel],
+  );
+  const profile = useMemo(() => buildProfile(map), [map]);
+  const [hovered, setHovered] = useState<ProfilePoint | null>(null);
+  return (
+    <section>
+      <h3>{heading}</h3>
+      <RouteMap plan={map} highlight={hovered && [hovered.lat, hovered.lon]} />
+      {profile && <ElevationProfile plan={map} points={profile} onHover={setHovered} />}
+      <div className="journey">
+        <div className="journey-summary">
+          {leg.departure.slice(11, 16)} {shortPlace(leg.start.name)} → {shortPlace(leg.end.name)}
+        </div>
+        <div className="muted small">
+          {leg.distance_km.toLocaleString("de-DE", { maximumFractionDigits: 1 })} km · {formatMinutes(leg.duration_hours)}{" "}
+          · {timing}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** Reisekarte einer Bahnfahrt: ggf. Weg zum Bahnhof, die gewählte(n) Verbindung(en), ggf. Weg vom Zielbahnhof. */
 export function TrainTripCard({ plan, adventureId }: { plan: TrainTripPlan; adventureId: number }) {
   const outbound = plan.outbound_journey;
-  const access = plan.access;
-  const map = useMemo<MapPlan | null>(
-    () =>
-      access
-        ? {
-            route_ids: [access.route_id],
-            routes: plan.routes ?? {},
-            start: access.start,
-            stages: [{ day: 1, end: access.end, label: `🚆 ${shortPlace(access.end.name)}` }],
-          }
-        : null,
-    [access, plan.routes],
-  );
-  const profile = useMemo(() => (map ? buildProfile(map) : null), [map]);
-  const [hovered, setHovered] = useState<ProfilePoint | null>(null);
+  const { access, egress } = plan;
+  // PDF und GPX enthalten einen Weg: den am Zielort, sonst den zum Bahnhof (siehe app.export.trip)
+  const exported = egress ?? access;
+  const transport = exported?.transport;
 
   return (
     <article className="plan">
@@ -42,21 +75,27 @@ export function TrainTripCard({ plan, adventureId }: { plan: TrainTripPlan; adve
               fallbackName="bahnfahrt.pdf"
               label="⬇ PDF"
               busyLabel="Erstelle PDF …"
-              title={access ? "Druckversion mit Weg zum Bahnhof, Höhenprofil und Verbindung" : "Druckversion der Verbindung"}
+              title={
+                egress
+                  ? "Druckversion mit Weg vom Bahnhof, Höhenprofil und Verbindung"
+                  : access
+                    ? "Druckversion mit Weg zum Bahnhof, Höhenprofil und Verbindung"
+                    : "Druckversion der Verbindung"
+              }
             />
-            {access && (
+            {exported && (
               <DownloadButton
                 path={`/api/adventures/${adventureId}/gpx`}
-                fallbackName="weg-zum-bahnhof.gpx"
+                fallbackName={egress ? "weg-vom-bahnhof.gpx" : "weg-zum-bahnhof.gpx"}
                 label="⬇ GPX"
                 busyLabel="Erstelle GPX …"
-                title="Weg zum Bahnhof als Track mit Höhen"
+                title={egress ? "Weg vom Bahnhof als Track mit Höhen" : "Weg zum Bahnhof als Track mit Höhen"}
               />
             )}
           </div>
         </div>
         <div className="chips">
-          <span className="chip">{access ? (access.transport === "cycling" ? "🚲 + 🚆" : "🚶 + 🚆") : "🚆 Bahnfahrt"}</span>
+          <span className="chip">{transport ? (transport === "cycling" ? "🚲 + 🚆" : "🚶 + 🚆") : "🚆 Bahnfahrt"}</span>
           <span className="chip">📅 {formatDate(outbound.departure.slice(0, 10))}</span>
           {plan.return_journey && <span className="chip">↔ mit Rückfahrt</span>}
         </div>
@@ -65,21 +104,14 @@ export function TrainTripCard({ plan, adventureId }: { plan: TrainTripPlan; adve
         </p>
       </header>
 
-      {access && map && (
-        <section>
-          <h3>{ACCESS_LABELS[access.transport]}</h3>
-          <RouteMap plan={map} highlight={hovered && [hovered.lat, hovered.lon]} />
-          {profile && <ElevationProfile plan={map} points={profile} onHover={setHovered} />}
-          <div className="journey">
-            <div className="journey-summary">
-              {access.departure.slice(11, 16)} {shortPlace(access.start.name)} → {shortPlace(access.end.name)}
-            </div>
-            <div className="muted small">
-              {access.distance_km.toLocaleString("de-DE", { maximumFractionDigits: 1 })} km ·{" "}
-              {formatMinutes(access.duration_hours)} · Zug ab {outbound.departure.slice(11, 16)}
-            </div>
-          </div>
-        </section>
+      {access && (
+        <StationRoute
+          leg={access}
+          routes={plan.routes}
+          heading={ACCESS_LABELS[access.transport]}
+          endLabel={`🚆 ${shortPlace(access.end.name)}`}
+          timing={`Zug ab ${outbound.departure.slice(11, 16)}`}
+        />
       )}
 
       <section>
@@ -89,8 +121,23 @@ export function TrainTripCard({ plan, adventureId }: { plan: TrainTripPlan; adve
           {plan.return_journey && <JourneyCard label="🚆 Rückfahrt" journey={plan.return_journey} />}
         </div>
         <TransitNote />
-        <DataSourceList sources={plan.data_sources ?? []} />
       </section>
+
+      {egress && (
+        <StationRoute
+          leg={egress}
+          routes={plan.routes}
+          heading={EGRESS_LABELS[egress.transport]}
+          endLabel={shortPlace(egress.end.name)}
+          timing={`Zug an ${outbound.arrival.slice(11, 16)}`}
+        />
+      )}
+
+      {(plan.data_sources ?? []).length > 0 && (
+        <section>
+          <DataSourceList sources={plan.data_sources ?? []} />
+        </section>
+      )}
     </article>
   );
 }

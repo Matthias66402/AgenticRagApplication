@@ -128,7 +128,7 @@ export interface AdventurePlan {
   timetable_links?: TimetableLink[];
 }
 
-/** Weg zum Abfahrtsbahnhof mit dem Rad oder zu Fuß */
+/** Weg zum Abfahrts- bzw. vom Zielbahnhof mit dem Rad oder zu Fuß */
 export interface AccessRoute {
   transport: "cycling" | "hiking";
   start: Place;
@@ -148,6 +148,8 @@ export interface TrainTripPlan {
   outbound_journey: Journey;
   return_journey?: Journey | null;
   access?: AccessRoute | null;
+  /** Weg vom Zielbahnhof zum Ziel (z. B. Unterkunft); fehlt bei alten Reisekarten */
+  egress?: AccessRoute | null;
   routes?: Record<string, ([number, number] | [number, number, number])[]>;
   /** fehlt bei alten Reisekarten */
   data_sources?: DataSource[];

@@ -5,7 +5,7 @@ from typing import Any
 
 from app.agent.data_sources import describe
 from app.agent.tools.common import haversine_km
-from app.export.trip import is_train_trip
+from app.export.trip import is_train_trip, station_route_labels
 
 GPX_NS = "http://www.topografix.com/GPX/1/1"
 ACCOMMODATION_LABELS = {"hut": "Hütte", "camping": "Camping", "hotel": "Hotel", "hostel": "Hostel", "bivouac": "Biwak"}
@@ -94,7 +94,7 @@ def build_gpx(plan: dict[str, Any], day: int | None = None) -> str:
             details.append(f"↗ {stage['ascent_m']:g} Hm")
         if stage.get("descent_m"):
             details.append(f"↘ {stage['descent_m']:g} Hm")
-        label = "Bahnhof" if is_train_trip(plan) else f"Tag {stage['day']}"
+        label = station_route_labels(plan)[1] if is_train_trip(plan) else f"Tag {stage['day']}"
         _add_waypoint(
             gpx, end["lat"], end["lon"], f"{label}: {_short(end['name'])}",
             f"{stage['date']} · {', '.join(details)}", "Flag, Blue",

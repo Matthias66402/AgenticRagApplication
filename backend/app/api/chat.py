@@ -45,9 +45,9 @@ def build_stored_plan(
     assert outcome.plan is not None
     known_routes = (previous or {}).get("routes", {}) | deps.routes
     if isinstance(outcome.plan, TrainTripPlan):
-        # Geometrie des Wegs zum Bahnhof für die Karte
-        access = outcome.plan.access
-        routes = {access.route_id: known_routes[access.route_id]} if access and access.route_id in known_routes else {}
+        # Geometrien der Wege zum Abfahrts- und vom Zielbahnhof für die Karte
+        station_routes = [leg.route_id for leg in (outcome.plan.access, outcome.plan.egress) if leg is not None]
+        routes = {rid: known_routes[rid] for rid in station_routes if rid in known_routes}
         return outcome.plan.model_dump(mode="json") | {
             "kind": PLAN_KIND_TRAIN_TRIP, "routes": routes, "data_sources": data_sources(history or []),
         }  # fmt: skip

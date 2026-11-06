@@ -14,7 +14,7 @@ from PIL import Image
 from app.agent.data_sources import describe
 from app.export.basemap import ATTRIBUTION, Viewport, fit_viewport
 from app.export.gpx import ACCOMMODATION_LABELS
-from app.export.trip import is_train_trip
+from app.export.trip import is_train_trip, station_route_labels
 
 # Wird im Dockerfile installiert (fonts-dejavu-core); die PDF-Standardschriften können nur Latin-1
 FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
@@ -275,7 +275,7 @@ class PlanPdf(FPDF):
         self.rect(x0, y0, width, height)
 
         self.set_y(y0 + height + 2)
-        legend = [(START_COLOR, "Start"), (PRIMARY, "Bahnhof" if is_train_trip(plan) else "Etappenziel (Tag)")]
+        legend = [(START_COLOR, "Start"), (PRIMARY, station_route_labels(plan)[1] if is_train_trip(plan) else "Etappenziel (Tag)")]
         if accommodations:
             legend.append((ACCOMMODATION_COLOR, "Unterkunft"))
         x = x0
@@ -367,7 +367,7 @@ class PlanPdf(FPDF):
         self.set_y(y0 + height + 6)
 
     def stages(self) -> None:
-        self.heading("Weg zum Bahnhof" if is_train_trip(self.plan) else "Etappen")
+        self.heading(station_route_labels(self.plan)[0] if is_train_trip(self.plan) else "Etappen")
         right = self.l_margin + DAY_COLUMN
         for index, stage in enumerate(self.plan["stages"]):
             self.ensure_space(22)

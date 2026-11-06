@@ -155,9 +155,21 @@ class AccessRoute(BaseModel):
     route_id: str = Field(description="route_id aus plan_route")
 
 
+class EgressRoute(BaseModel):
+    """Weg vom Zielbahnhof der Hinfahrt zum Ziel (z. B. Unterkunft) mit dem Rad oder zu Fuß; Strecke aus plan_route."""
+
+    transport: Literal["cycling", "hiking"]
+    start: Place = Field(description="Zielbahnhof der Hinfahrt")
+    end: Place = Field(description="Ziel am Ankunftsort, z. B. die Unterkunft")
+    departure: str = local_time("Losfahren am Zielbahnhof, Ortszeit YYYY-MM-DDTHH:MM: Ankunft der Verbindung plus Puffer")
+    distance_km: float = Field(ge=0)
+    duration_hours: float = Field(ge=0, description="Fahr- bzw. Gehzeit aus plan_route")
+    route_id: str = Field(description="route_id aus plan_route")
+
+
 class TrainTripPlan(BaseModel):
     """Reisekarte für eine Bahnfahrt ohne Tour, z. B. die vom Nutzer gewählte Verbindung einer Bahnauskunft,
-    optional mit dem Weg zum Bahnhof per Rad oder zu Fuß."""
+    optional mit dem Weg zum Bahnhof und vom Zielbahnhof per Rad oder zu Fuß."""
 
     title: str = Field(max_length=200, description='z. B. "Bahnfahrt Oldenburg → Bremen"')
     summary: str = Field(
@@ -168,6 +180,11 @@ class TrainTripPlan(BaseModel):
     return_journey: Journey | None = Field(default=None, description="Rückfahrt, nur wenn gesucht und gewünscht")
     access: AccessRoute | None = Field(
         default=None, description="Weg zum Abfahrtsbahnhof, wenn der Nutzer mit Rad oder zu Fuß dorthin möchte"
+    )
+    egress: EgressRoute | None = Field(
+        default=None,
+        description="Weg vom Zielbahnhof der Hinfahrt weiter zum Ziel (z. B. Unterkunft), wenn der Nutzer dort mit "
+        "Rad oder zu Fuß weiter möchte",
     )
 
 
