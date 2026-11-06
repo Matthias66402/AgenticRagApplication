@@ -3,8 +3,8 @@ import re
 from typing import Any
 
 from pydantic_ai import (
-    Agent, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput, ToolReturnPart,
-    UserPromptPart,
+    Agent, ModelMessage, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput,
+    ToolReturnPart, UserPromptPart,
 )  # fmt: skip
 
 from app.agent.deps import AgentDeps
@@ -41,6 +41,8 @@ ROUTE_WORDS = re.compile(
     r"\b(entlang|längs)\b|(radweg|radroute|radfernweg|wanderweg|höhenweg|steig|pfad)\b",
     re.IGNORECASE,
 )
+# Anfang des Hinweises von check_route_wish, daran erkennbar, ob er in diesem Lauf schon kam
+ROUTE_WISH_HINT = "Der Nutzer wünscht einen bestimmten Verlauf"
 # Fortbewegungsarten, für die plan_route einem Fernweg folgen kann (app.agent.tools.named_route.ROUTE_TYPES)
 NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode.hiking}
 
@@ -202,6 +204,29 @@ def used_tool(ctx: RunContext[AgentDeps], tool_name: str) -> bool:
     )
 
 
+def current_run(ctx: RunContext[AgentDeps]) -> list[ModelMessage]:
+    """Nachrichten seit der letzten Nutzernachricht, also dieses Laufs ohne frühere Nachrichten des Abenteuers."""
+    starts = [
+        index
+        for index, message in enumerate(ctx.messages)
+        if isinstance(message, ModelRequest) and any(isinstance(part, UserPromptPart) for part in message.parts)
+    ]
+    return ctx.messages[starts[-1]:] if starts else ctx.messages
+
+
+def output_rejected(ctx: RunContext[AgentDeps], tool_name: str, prefix: str = "") -> bool:
+    """Wurde in diesem Lauf eine Ausgabe über `tool_name` zurückgewiesen (optional mit Hinweis, der so beginnt)?
+
+    """
+    return any(
+        isinstance(part, ToolReturnPart) and part.tool_name == tool_name and part.outcome == "retried"
+        and isinstance(part.content, str) and part.content.startswith(prefix)
+        for message in current_run(ctx)
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+    )  # fmt: skip
+
+
 def user_mentions(ctx: RunContext[AgentDeps], pattern: re.Pattern[str]) -> bool:
     """Passt das Muster auf eine der Nachrichten des Nutzers (inkl. früherer Nachrichten dieses Abenteuers)?"""
     return any(
@@ -342,10 +367,12 @@ def check_route_wish(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
 
     Sonst routet das Modell oft direkt, obwohl ein Fernweg den Wunsch abdeckt. Ein Aufruf mit `route_name` genügt,
     auch wenn er keinen passenden Fernweg fand: Dann plant das Modell mit dem Hinweis ohne Fernweg weiter.
+    Der Hinweis kommt pro Lauf nur einmal: Bei "entlang der Hunte" (kein Fernweg) plante gpt-5-mini mit Wegpunkten am
+    Fluss, versuchte nie einen route_name und wich nach drei Zurückweisungen auf eine Textantwort aus.
     """
     if output.transport not in NAMED_ROUTE_TRANSPORT or used_tool(ctx, "plan_hut_tour"):
         return
-    if not user_mentions(ctx, ROUTE_WORDS):
+    if not user_mentions(ctx, ROUTE_WORDS) or output_rejected(ctx, "final_plan", ROUTE_WISH_HINT):
         return
     tried = any(
         isinstance(part, ToolCallPart) and part.tool_name == "plan_route" and part.args_as_dict().get("route_name")
@@ -355,10 +382,12 @@ def check_route_wish(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
     )
     if not tried:
         raise ModelRetry(
-            "Der Nutzer wünscht einen bestimmten Verlauf (z. B. entlang einer Küste, eines Flusses oder auf einem "
+            f"{ROUTE_WISH_HINT} (z. B. entlang einer Küste, eines Flusses oder auf einem "
             "Fernweg). Rufe `plan_route` mit Start und Ziel und dem passenden Fernweg als `route_name` auf (z. B. "
             "\"Nordseeküsten-Radweg\", \"Elberadweg\"), wähle die Etappenorte aus `named_route.checkpoints` und "
-            "plane dann neu. Findet das Tool keinen passenden Fernweg, plane ohne route_name weiter."
+            "plane dann neu. Gibt es keinen Fernweg (z. B. ein Uferweg an einem kleinen Fluss), versuche den Namen "
+            "des Flusses oder Wegs als route_name; findet das Tool nichts, gib den Plan mit Deiner bisherigen Route "
+            "erneut über `final_plan` aus, er wird dann angenommen."
         )
 
 
@@ -503,6 +532,17 @@ def check_answer_complete(output: TextAnswer) -> None:
         )
 
 
+def check_no_plan_evasion(ctx: RunContext[AgentDeps]) -> None:
+    """Nach einem zurückgewiesenen Plan keine Textantwort: Sonst behauptet das Modell "Route angepasst", der Nutzer
+    sieht aber weiter den alten Plan (Sandkrug–Huntlosen entlang der Hunte)."""
+    if output_rejected(ctx, "final_plan"):
+        raise ModelRetry(
+            "Dein Plan wurde zurückgewiesen, mit `answer_user` sieht der Nutzer weiterhin den alten Plan. Behebe den "
+            "genannten Punkt und gib den Plan über `final_plan` aus, oder frage per `ask_user`, wenn Dir dafür eine "
+            "Angabe des Nutzers fehlt."
+        )
+
+
 def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> None:
     """Verbindungen hängt das Backend nur an, wenn sie in diesem Lauf abgefragt wurden (siehe runner)."""
     if not ctx.deps.train_queries and SHOWN_BELOW.search(output.message):
@@ -582,6 +622,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         check_default_transport(ctx, output)
         if isinstance(output, TextAnswer):
             check_answer_complete(output)
+            check_no_plan_evasion(ctx)
             check_connections_shown(ctx, output)
         if isinstance(output, TrainTripPlan):
             return check_train_trip(ctx, output)

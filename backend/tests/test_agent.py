@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from app.agent.plan_schema import AdventurePlan
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import check_blocked_sections, check_route_wish, check_stage_distances, planner_agent
+from app.agent.planner import check_blocked_sections, check_no_plan_evasion, check_route_wish, check_stage_distances, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
@@ -698,6 +698,40 @@ def test_route_wish_requires_named_route_attempt() -> None:
     check_route_wish(route_wish_context("Von Emden nach Wilhelmshaven radeln", {"transport": "cycling"}), plan)
     car = plan.model_copy(update={"transport": "car"})
     check_route_wish(route_wish_context(coast, {"transport": "car"}), car)
+
+
+def test_route_wish_hint_comes_once_per_run() -> None:
+    """Kein Fernweg für "entlang der Hunte": Nach einem Hinweis geht der Plan durch, statt dass das Modell nach drei
+    Zurückweisungen auf eine Textantwort ausweicht. In der nächsten Nachricht kommt der Hinweis wieder."""
+    plan = AdventurePlan.model_validate(make_plan() | {"transport": "hiking"})
+    ctx = route_wish_context("Gerne auch entlang der Hunte", {"waypoints": [], "transport": "hiking"})
+    with pytest.raises(ModelRetry, match="Namen des Flusses") as hint:
+        check_route_wish(ctx, plan)
+    ctx.messages.append(ModelRequest(parts=[
+        ToolReturnPart(tool_name="final_plan", content=str(hint.value), tool_call_id="c1", outcome="retried"),
+    ]))  # fmt: skip
+    check_route_wish(ctx, plan)
+    ctx.messages.append(ModelRequest(parts=[UserPromptPart(content="Und zurück auch entlang der Hunte")]))
+    with pytest.raises(ModelRetry):
+        check_route_wish(ctx, plan)
+
+
+def test_no_text_answer_after_rejected_plan() -> None:
+    """Nach einem zurückgewiesenen final_plan darf das Modell nicht per answer_user "Route angepasst" melden."""
+    ctx = route_wish_context("Gerne auch entlang der Hunte", {"transport": "hiking"})
+    check_no_plan_evasion(ctx)
+    ctx.messages.append(ModelRequest(parts=[
+        ToolReturnPart(tool_name="final_plan", content="Final result processed.", tool_call_id="c0"),
+    ]))  # fmt: skip
+    check_no_plan_evasion(ctx)  # angenommener Plan, z. B. aus einer früheren Nachricht
+    ctx.messages.append(ModelRequest(parts=[
+        ToolReturnPart(tool_name="final_plan", content="Startdatum liegt in der Vergangenheit.", tool_call_id="c1", outcome="retried"),
+    ]))  # fmt: skip
+    with pytest.raises(ModelRetry, match="final_plan"):
+        check_no_plan_evasion(ctx)
+    # Gespeicherter Verlauf früherer Nachrichten zählt nicht
+    ctx.messages.append(ModelRequest(parts=[UserPromptPart(content="Bitte den Bericht schreiben")]))
+    check_no_plan_evasion(ctx)
 
 
 def test_plan_must_admit_blocked_section_of_named_route() -> None:
