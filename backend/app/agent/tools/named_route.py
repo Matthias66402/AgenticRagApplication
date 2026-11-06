@@ -63,6 +63,11 @@ GRID_DEG = 0.01  # Zellgröße des Suchrasters (~1 km)
 # Wegpunkte bis zu dieser Entfernung werden normal zum Fernweg hin angebunden, das Teilstück folgt dann dem Fernweg
 # (Tønder und Hurup liegen 8-9 km von der Vestkystruten); weiter entfernte Teilstücke werden direkt geroutet
 MAX_SNAP_KM = 15.0
+# Lange Teilstücke dürfen weiter entfernt anbinden: bis zu diesem Anteil der Luftlinie, höchstens LONG_LEG_SNAP_KM.
+# Der Camino del Norte endet in OSM hinter Arzúa, 21 km vor Santiago; Irun–Santiago (~550 km Luftlinie) soll ihm
+# trotzdem folgen statt komplett direkt (durchs Landesinnere) geroutet zu werden.
+LONG_LEG_SNAP_SHARE = 0.1
+LONG_LEG_SNAP_KM = 50.0
 GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden überbrückt
 # Pfad länger als 6 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll (z. B. nur über das andere
 # Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
@@ -185,9 +190,9 @@ class RouteGraph:
                         found.append((km, node))
         return found
 
-    def snap(self, point: Point) -> tuple[int, float] | None:
-        """Nächster Knoten des Fernwegs (Knoten, Entfernung in km) oder None, wenn weiter als MAX_SNAP_KM."""
-        found = self.nearby(*point, MAX_SNAP_KM)
+    def snap(self, point: Point, radius_km: float = MAX_SNAP_KM) -> tuple[int, float] | None:
+        """Nächster Knoten des Fernwegs (Knoten, Entfernung in km) oder None, wenn weiter als `radius_km`."""
+        found = self.nearby(*point, radius_km)
         if not found:
             return None
         km, node = min(found)
@@ -412,6 +417,12 @@ class Guide:
     on_route_km: float
     off_route_legs: list[int]  # 1-basierte Nummern der Teilstücke, die nicht dem Fernweg folgen
     off_route_reasons: list[str] = field(default_factory=list)  # je Teilstück abseits ein Grund, für den Agenten
+    # Wegpunkte, die bei langen Teilstücken weiter als MAX_SNAP_KM vom Fernweg normal angebunden werden
+    long_connections: list[str] = field(default_factory=list)
+
+
+def leg_snap_km(straight_km: float) -> float:
+    return min(LONG_LEG_SNAP_KM, max(MAX_SNAP_KM, LONG_LEG_SNAP_SHARE * straight_km))
 
 
 def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
@@ -420,15 +431,23 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
     on_route_km = 0.0
     off_route_legs = []
     reasons = []
+    long_connections = []
     for leg, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
         path = None
-        start, goal = snaps[leg], snaps[leg + 1]
-        far = [str(i + 1) for i in (leg, leg + 1) if snaps[i] is None]
+        straight = haversine_km(*a, *b)
+        radius = leg_snap_km(straight)
+        wider = radius > MAX_SNAP_KM
+        start = snaps[leg] or (graph.snap(a, radius) if wider else None)
+        goal = snaps[leg + 1] or (graph.snap(b, radius) if wider else None)
+        far = [str(i + 1) for i, snap in ((leg, start), (leg + 1, goal)) if snap is None]
         if far:
-            reasons.append(f"Teilstück {leg + 1}: Wegpunkt {' und '.join(far)} weiter als {MAX_SNAP_KM:g} km vom Fernweg")
+            reasons.append(f"Teilstück {leg + 1}: Wegpunkt {' und '.join(far)} weiter als {radius:.0f} km vom Fernweg")
         else:
+            long_connections += [
+                f"Wegpunkt {i + 1} ({snap[1]:.0f} km)"
+                for i, snap in ((leg, start), (leg + 1, goal)) if snap[1] > MAX_SNAP_KM
+            ]
             path = graph.shortest_path(start[0], goal[0])
-            straight = haversine_km(*a, *b)
             if path is None:
                 reasons.append(f"Teilstück {leg + 1}: keine Verbindung auf dem Fernweg")
             elif path[1] > DETOUR_LIMIT * straight + 2:
@@ -447,7 +466,7 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
         else:
             off_route_legs.append(leg + 1)
         dense.append(b)
-    return Guide(dense, on_route_km, off_route_legs, reasons)
+    return Guide(dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)))
 
 
 async def catalog_overview(deps: AgentDeps) -> str:

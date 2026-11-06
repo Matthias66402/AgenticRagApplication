@@ -248,6 +248,14 @@ async def test_answer_ending_with_colon_is_retried(deps: AgentDeps) -> None:
     assert outcome.answer == "Fertig."
 
 
+async def test_announcement_instead_of_plan_is_retried(deps: AgentDeps) -> None:
+    """ "Ich erstelle jetzt den Plan … ich melde mich" beendet den Lauf ohne Plan; das Modell muss liefern."""
+    announcement = "Perfekt. Ich erstelle jetzt den detaillierten Tagesplan. Das dauert einen Moment; ich melde mich."
+    with planner_agent.override(model=scripted_model(("answer_user", {"message": announcement}), QUESTION)):
+        _, outcome = await collect("Keine Ruhetage", deps)
+    assert outcome.answer is None and outcome.question is not None
+
+
 def test_intake_context_from_history(deps: AgentDeps) -> None:
     history = [
         {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "Wanderung morgen"}]},

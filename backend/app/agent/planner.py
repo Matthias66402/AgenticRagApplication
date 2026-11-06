@@ -46,6 +46,12 @@ NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode
 
 # Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
 SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
+# Ankündigung statt Ergebnis ("Ich erstelle jetzt den Plan … ich melde mich"): Mit answer_user endet der Lauf
+ANNOUNCEMENT = re.compile(
+    r"\b(ich melde mich|melde mich (gleich|danach|wieder|anschließend)|(das )?dauert (einen|einen kurzen|einen kleinen) "
+    r"moment|ich (erstelle|suche|plane|berechne|prüfe) (jetzt|nun|gleich|als nächstes))\b",
+    re.IGNORECASE,
+)
 
 INSTRUCTIONS = """\
 Du bist ein erfahrener Outdoor-Tourenplaner für Deutschland, Österreich, die Schweiz und das übrige Europa.
@@ -167,7 +173,9 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
 - Fachfremde Fragen ohne Bezug zu Touren, Reisen oder Outdoor (z. B. Allgemeinwissen, Tierkunde, Programmierung)
   beantwortest Du nicht und rufst dafür keine Tools auf: Sag per `answer_user` kurz, dass Du dabei nicht helfen kannst,
   und biete an, eine Tour zu planen.
-- Die Nachricht in `answer_user` ist Deine vollständige Antwort; kündige darin nichts an, was dann fehlt.
+- Die Nachricht in `answer_user` ist Deine vollständige Antwort; kündige darin nichts an, was dann fehlt. Jede
+  Ausgabe beendet Deine Arbeit, ein "später" gibt es nicht: Statt anzukündigen, dass Du einen Plan erstellst,
+  rufe die nötigen Tools auf und gib ihn mit `final_plan` aus, auch bei vielen Etappen.
 """
 
 
@@ -353,7 +361,14 @@ def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
 
 
 def check_answer_complete(output: TextAnswer) -> None:
-    """Die Antwort ist die ganze Nachricht: gpt-5-mini gab einmal nur die Einleitung aus ("… und was wichtig ist:")."""
+    """Die Antwort ist die ganze Nachricht: gpt-5-mini gab einmal nur die Einleitung aus ("… und was wichtig ist:"),
+    ein anderes Mal nach allen Unterkunftssuchen nur "Ich erstelle jetzt den Tagesplan … ich melde mich"."""
+    if ANNOUNCEMENT.search(output.message):
+        raise ModelRetry(
+            "Du kannst Dich nicht später melden: Mit `answer_user` endet Deine Arbeit, und der Nutzer bekommt nur "
+            "diese Ankündigung. Erledige das Angekündigte jetzt mit Tools und gib das Ergebnis aus: eine Tour mit "
+            "`final_plan`, fehlende Angaben per `ask_user`."
+        )
     if output.message.rstrip().endswith(":"):
         raise ModelRetry(
             "Deine Antwort endet mit einem Doppelpunkt, der angekündigte Inhalt fehlt. Gib in `message` die vollständige "

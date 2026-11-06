@@ -424,6 +424,15 @@ async def plan_route(
                     "on_route_km": round(route_guide.on_route_km, 1),
                     "off_route_legs": route_guide.off_route_legs,
                 }
+                if route_guide.long_connections:
+                    notes.append(
+                        f"Abseits des Fernwegs normal angebunden: {', '.join(route_guide.long_connections)} bis zum "
+                        "nächsten Punkt des Fernwegs (z. B. weil er vor dem Ziel endet)."
+                    )
+                if route_guide.off_route_legs and route_guide.on_route_km == 0:
+                    notes.append(
+                        "Die Route folgt dem Fernweg an keiner Stelle; beschreibe sie im Plan nicht als dessen Verlauf."
+                    )
                 if route_guide.off_route_legs:
                     notes.append(
                         f"Teilstück(e) {', '.join(map(str, route_guide.off_route_legs))} folgen nicht dem Fernweg "

@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # Es teilt sich das Anfragelimit mit der Relevanzprüfung, die seit der gebündelten Bewertung nur 1-2 Anfragen je
     # Recherche braucht.
     intake_model: str = "openai:gpt-4o-mini"
+    # Längste Tour in Tagen (Obergrenze für AdventurePlan.duration_days). Fernwege wie der Camino del Norte brauchen
+    # bei ~25 km/Tag 35-40 Tage; bei 30 bot das Modell an, die Tour in zwei Pläne aufzuteilen.
+    max_duration_days: int = 60
 
     ors_api_key: str = ""
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"

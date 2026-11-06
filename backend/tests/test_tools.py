@@ -460,6 +460,20 @@ def test_named_route_connects_start_and_end_in_hinterland() -> None:
     assert route_guide.waypoints[:2] == [start, bow[0]] and route_guide.waypoints[-2:] == [bow[-1], end]
 
 
+def test_long_leg_follows_named_route_that_ends_before_the_goal() -> None:
+    """Fernweg endet ~21 km vor dem Ziel (Camino del Norte vor Santiago): Bei einem langen Teilstück trotzdem dem
+    Fernweg folgen und nur das Ende normal anbinden; bei einer kurzen Etappe bleibt es bei MAX_SNAP_KM."""
+    line = [(43.0, -2.0 - i * 0.1) for i in range(60)]  # ~480 km nach Westen
+    graph = named_route.build_graph(["Küstenweg"], [(list(range(1, 61)), line)])
+    goal = (43.0, -7.9 - 0.26)  # ~21 km westlich des Endes (-7.9)
+    route_guide = named_route.guide(graph, [line[0], goal])
+    assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(480, abs=10)
+    assert route_guide.long_connections == ["Wegpunkt 2 (21 km)"]
+    assert route_guide.waypoints[-2:] == [line[-1], goal]
+    short = named_route.guide(graph, [line[-3], goal])  # ~37 km Luftlinie, Ziel ~21 km vom Fernweg
+    assert short.off_route_legs == [1] and "weiter als 15 km" in short.off_route_reasons[0]
+
+
 def test_named_route_follows_long_coastal_bow() -> None:
     """Küstenwege um Buchten sind ein Mehrfaches der Luftlinie lang; genau diesem Verlauf soll die Route folgen."""
     bow = [(53.10, 8.20), (53.20, 8.20), (53.20, 8.30), (53.10, 8.30)]  # ~29 km bei ~7 km Luftlinie

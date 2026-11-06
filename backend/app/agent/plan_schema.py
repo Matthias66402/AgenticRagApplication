@@ -6,6 +6,11 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.config import get_settings
+
+# Längste Tour in Tagen (Einstellung MAX_DURATION_DAYS); das Modell sieht die Grenze im Schema von final_plan
+MAX_DURATION_DAYS = get_settings().max_duration_days
+
 
 class TransportMode(StrEnum):
     hiking = "hiking"
@@ -101,7 +106,7 @@ class AdventurePlan(BaseModel):
     summary: str = Field(description="2-4 Sätze Überblick über die Tour")
     transport: TransportMode
     start_date: dt.date
-    duration_days: int = Field(ge=1, le=30)
+    duration_days: int = Field(ge=1, le=MAX_DURATION_DAYS)
     start: Place
     destination: Place
     accommodation_type: AccommodationType | None = Field(

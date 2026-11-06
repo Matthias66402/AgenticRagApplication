@@ -8,8 +8,9 @@ from app.agent.rate_limit import RateLimitedModel, shared_budget
 
 # Ausgaben im strict-Modus: Ohne Constrained Decoding hängt gpt-5-mini gelegentlich zehntausende Leerzeichen an
 # die JSON-Argumente an und braucht dafür Minuten. Das Tokenlimit fängt solche Ausreißer zusätzlich ab
-# (ein normaler Plan inkl. Reasoning braucht 2.000-5.000 Tokens).
-MAX_OUTPUT_TOKENS = 12_000
+# (ein normaler Plan inkl. Reasoning braucht 2.000-5.000 Tokens; der Camino del Norte mit 30 Etappen 6.600 Tokens,
+# Runden mit vielen Tool-Aufrufen bis zu 6.000 Reasoning-Tokens, das ließ bei über 30 Etappen kaum Luft).
+MAX_OUTPUT_TOKENS = 20_000
 # Timeout je Anfrage (s). Beim Streaming gilt er für die Pause zwischen zwei Datenpaketen, bricht also nur eine
 # stehende Verbindung ab, keine lange, aber laufende Antwort; das SDK wiederholt die Anfrage dann. Ohne Angabe wartet
 # das OpenAI-SDK bis zu 600 s je Versuch, ein Chat-Durchlauf hinge damit bis zu einer halben Stunde.
