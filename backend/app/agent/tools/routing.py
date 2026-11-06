@@ -55,6 +55,7 @@ ESTIMATE_FACTORS: dict[TransportMode, tuple[float, float]] = {
     TransportMode.public_transport: (1.3, 50.0),
 }
 
+BLOCKED_VIA_STEP = 3  # jeder wievielte Stützpunkt eines umfahrenen Abschnitts in blocked_sections.via steht
 # checkpoints nur, wenn mindestens dieser Anteil der Route dem Fernweg folgt
 CHECKPOINT_MIN_ON_ROUTE_SHARE = 0.5
 
@@ -367,6 +368,9 @@ async def _route_guided(
             "to": {"lat": round(chunk[-1].lat, 5), "lon": round(chunk[-1].lon, 5)},
             "off_route_km": round(routed_km, 1),
             "named_route_km": round(along_km, 1),
+            # Verlauf des umfahrenen Fernwegs (jeder 3. Stützpunkt, ~6 km): Die Plan-Prüfung erkennt daran Orte, über
+            # die die Route nicht führt (z. B. Kornwerderzand auf dem Abschlussdeich)
+            "via": [[round(c.lat, 4), round(c.lon, 4)] for c in chunk[1:-1:BLOCKED_VIA_STEP]],
         })  # fmt: skip
     if blocked:
         notes.append(

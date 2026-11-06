@@ -50,6 +50,13 @@ STAGE_STRAIGHT_TOLERANCE = 1.1
 STAGE_STRAIGHT_SLACK_KM = 3.0
 # Zusammenfassung benennt, dass die Route einen gesperrten Abschnitt des Fernwegs umfährt
 BLOCKED_MENTIONED = re.compile(r"nicht befahrbar|gesperrt|Sperrung|Baustelle|umf[äa]hr|Umfahrung|Umweg", re.IGNORECASE)
+# Textstelle zu einem Ort im umfahrenen Abschnitt ist eine Verneinung ("nicht über Kornwerderzand")
+BLOCKED_NEGATION = re.compile(
+    r"\b(nicht|kein\w*|ohne|statt|anstatt|außer)\b|umf[äa]hr|Umfahrung|Umweg|gesperrt|Sperrung|Baustelle",
+    re.IGNORECASE,
+)
+# Orte bis zu dieser Entfernung vom umfahrenen Fernweg-Abschnitt gelten als darauf gelegen (km)
+BLOCKED_PLACE_KM = 4.0
 # Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
 SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
 # Ankündigung statt Ergebnis ("Ich erstelle jetzt den Plan … ich melde mich"): Mit answer_user endet der Lauf
@@ -376,6 +383,53 @@ def nearest_place(output: AdventurePlan, point: dict[str, float]) -> str:
     return min(places, key=lambda p: haversine_km(p.lat, p.lon, point["lat"], point["lon"])).name
 
 
+def geocoded_places(ctx: RunContext[AgentDeps]) -> list[tuple[str, float, float]]:
+    """(Kurzname, lat, lon) aller `geocode`-Treffer dieses Laufs, z. B. "Kornwerderzand"."""
+    return [
+        (str(hit["name"]).split(",")[0].strip(), hit["lat"], hit["lon"])
+        for message in ctx.messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_name == "geocode" and isinstance(part.content, list)
+        for hit in part.content
+        if isinstance(hit, dict) and hit.get("name") and "lat" in hit and "lon" in hit
+    ]  # fmt: skip
+
+
+def in_blocked_section(lat: float, lon: float, section: dict[str, Any]) -> bool:
+    """Liegt am umfahrenen Fernweg-Abschnitt, aber nicht an seinen Enden (dort verläuft die Route noch)."""
+    ends = [(section["from"]["lat"], section["from"]["lon"]), (section["to"]["lat"], section["to"]["lon"])]
+    if any(haversine_km(lat, lon, *end) <= BLOCKED_PLACE_KM for end in ends):
+        return False
+    return any(haversine_km(lat, lon, *point) <= BLOCKED_PLACE_KM for point in section.get("via", []))
+
+
+def claimed_blocked_places(
+    ctx: RunContext[AgentDeps], output: AdventurePlan, sections: list[dict[str, Any]]
+) -> list[tuple[str, str]]:
+    """(Ort, Textstelle) für Orte im umfahrenen Abschnitt, die der Plan ohne Verneinung nennt.
+
+    Mit nur dem Stichwort "nicht befahrbar" schrieb gpt-5-mini weiterhin "Die Route führt über den Afsluitdijk
+    (Kornwerderzand) als gewünschte Alternativroute; ein Abschnitt … ist laut Kartendaten nicht befahrbar".
+    """
+    names = {
+        name for name, lat, lon in geocoded_places(ctx)
+        if len(name) >= 3 and any(in_blocked_section(lat, lon, section) for section in sections)
+    }  # fmt: skip
+    if not names:
+        return []
+    texts = [output.title, output.summary]
+    for stage in output.stages:
+        texts += [stage.start.name, stage.end.name, stage.notes or ""]
+    claims = []
+    for text in texts:
+        for clause in re.split(r"(?<=[.!?;])\s+|\s+[–—-]\s+", text):
+            if BLOCKED_NEGATION.search(clause):
+                continue
+            claims += [(name, clause.strip()) for name in names if name.lower() in clause.lower()]
+    return list(dict.fromkeys(claims))
+
+
 def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) -> AdventurePlan:
     """Umfährt die Route einen laut Kartendaten gesperrten Abschnitt des Fernwegs, muss die Zusammenfassung das sagen;
     zusätzlich setzt das System einen festen Sicherheitshinweis. Trotz deutlicher Anweisung im Tool-Ergebnis schrieb
@@ -399,6 +453,13 @@ def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
             "(z. B. Baustelle). Schreib das in `summary` ausdrücklich (\"nicht befahrbar\", \"umfährt\") und behaupte "
             "nirgends, die Tour führe dort über den Fernweg oder einen gewünschten Abschnitt. Hatte der Nutzer genau "
             "diesen Abschnitt gewünscht, sag ihm, dass sich der Wunsch laut Kartendaten nicht umsetzen lässt."
+        )
+    if claims := claimed_blocked_places(ctx, output, sections):
+        raise ModelRetry(
+            f"Die Route führt nicht über {', '.join(sorted({name for name, _ in claims}))}: Dieser Abschnitt des "
+            f"Fernwegs ist laut Kartendaten nicht befahrbar, die Route umfährt ihn {'; '.join(texts)}. Dein Plan "
+            f"stellt es anders dar: {' | '.join(f'„{text}“' for _, text in claims)}. Formuliere diese Stellen um "
+            "(z. B. \"nicht über …\", \"umfährt …\") und wähle dort keine Etappenorte."
         )
     note = (
         f"Laut Kartendaten (OpenStreetMap) ist der Fernweg {'; '.join(texts)} nicht befahrbar, z. B. wegen einer "

@@ -722,3 +722,27 @@ def test_plan_must_admit_blocked_section_of_named_route() -> None:
     assert check_blocked_sections(ctx, claim.model_copy(update={"route_ids": ["r-2"]})) == claim.model_copy(
         update={"route_ids": ["r-2"]}
     )
+
+
+def test_plan_must_not_route_over_places_in_blocked_section() -> None:
+    """Geocodierte Orte auf dem umfahrenen Abschnitt (Kornwerderzand auf dem Abschlussdeich) darf der Plan nur verneint
+    nennen; "nicht befahrbar" an anderer Stelle der Zusammenfassung genügt nicht."""
+    blocked = {"from": {"lat": 53.168, "lon": 5.416}, "to": {"lat": 52.95, "lon": 4.719}, "off_route_km": 190,
+               "named_route_km": 72, "via": [[53.11, 5.37], [53.072, 5.335], [53.0, 5.17]]}  # fmt: skip
+    result = {"route_id": "r-1", "distance_km": 700, "named_route": {"routes": ["Nordseeküsten-Radweg"],
+              "blocked_sections": [blocked]}}  # fmt: skip
+    geocoded = [
+        {"name": "Kornwerderzand, Súdwest-Fryslân, Friesland", "lat": 53.0722, "lon": 5.3372},
+        {"name": "Harlingen, Friesland", "lat": 53.1747, "lon": 5.4226},  # Ende des Abschnitts, dort fährt die Route
+    ]
+    ctx = SimpleNamespace(messages=[ModelRequest(parts=[
+        ToolReturnPart(tool_name="geocode", content=geocoded), ToolReturnPart(tool_name="plan_route", content=result),
+    ])])  # fmt: skip
+    plan = AdventurePlan.model_validate(make_plan() | {"transport": "cycling", "route_ids": ["r-1"], "summary": (
+        "Die Route führt über den Afsluitdijk (Kornwerderzand) als gewünschte Alternativroute; ein Abschnitt ist laut "
+        "Kartendaten nicht befahrbar. Start in Harlingen."
+    )})  # fmt: skip
+    with pytest.raises(ModelRetry, match=r"führt nicht über Kornwerderzand.*„Die Route führt über den Afsluitdijk"):
+        check_blocked_sections(ctx, plan)
+    honest = "Die Route umfährt den Afsluitdijk (Kornwerderzand), er ist laut Kartendaten nicht befahrbar."
+    check_blocked_sections(ctx, plan.model_copy(update={"summary": honest}))
