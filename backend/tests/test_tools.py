@@ -434,6 +434,24 @@ async def test_named_route_from_catalog_without_overpass(ctx) -> None:
 
 
 @respx.mock
+async def test_unroutable_section_of_named_route_is_routed_freely(ctx) -> None:
+    """Erreicht kein Router einen Stützpunkt (Radweg über den Abschlussdeich), wird nur dieser Abschnitt zwischen
+    Anfang und Ende geroutet, statt die ganze Route ohne Fernweg zu berechnen."""
+    await add_test_route()
+    respx.post(url__startswith="https://api.openrouteservice.org/").respond(status_code=404)
+
+    def brouter(request: httpx.Request) -> httpx.Response:
+        if "8.250000,53.000000" in request.url.params["lonlats"]:  # Stützpunkt auf dem Fernweg nicht erreichbar
+            return httpx.Response(400, text="target island detected for section 0")
+        return brouter_echo(request)
+
+    respx.get(BROUTER_URL).mock(side_effect=brouter)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, "Testweg")
+    assert result["estimated"] is False and result["named_route"]["on_route_km"] == 23.2
+    assert "Abschnitt(e) 53.100, 8.200 bis 52.900, 8.200: Der Router findet dort keinen befahrbaren Weg" in result["note"]
+
+
+@respx.mock
 async def test_named_route_unknown_name_lists_routes_nearby(ctx) -> None:
     waymarked_down()
     respx.post(get_settings().overpass_url_list[0]).mock(side_effect=overpass_coast)
@@ -490,6 +508,9 @@ def test_leg_follows_named_route_as_far_as_it_goes() -> None:
     assert route_guide.waypoints[-2:] == [line[-1], goal]
     sideways = named_route.guide(graph, [line[-5], (49.5, 13.1)])  # ~170 km nach Norden, Fernweg nur ~30 km Teil
     assert sideways.off_route_legs == [1] and sideways.partial_legs == []
+    # Kurze Etappe im Hinterland, beide Enden 40-70 km vom Fernweg: kein Umweg über den Fernweg
+    inland = named_route.guide(graph, [(48.4, 9.0), (48.6, 9.6)])  # ~50 km Luftlinie
+    assert inland.off_route_legs == [1] and inland.partial_legs == []
 
 
 def test_named_route_follows_long_coastal_bow() -> None:

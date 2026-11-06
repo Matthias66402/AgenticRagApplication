@@ -72,6 +72,9 @@ LONG_LEG_SNAP_KM = 50.0
 # erst von dort normal geroutet, sofern dieser Abschnitt mindestens diesen Anteil der Luftlinie abdeckt (Fernweg im
 # Katalog endet in Passau, Ziel ist Wien: ~370 von 580 km auf dem Fernweg statt komplett direkt)
 PARTIAL_MIN_SHARE = 0.5
+# … und die direkten Anbindungen zusammen höchstens diesen Anteil ausmachen. Sonst wurde eine 55-km-Etappe, deren
+# Endpunkte 43 und 67 km landeinwärts lagen, über 226 km am Fernweg entlang geführt.
+PARTIAL_MAX_DETACHED_SHARE = 0.5
 GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden überbrückt
 # Pfad länger als 6 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll (z. B. nur über das andere
 # Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
@@ -444,8 +447,9 @@ def partial_path(
     entry, exit_ = start or graph.nearest(a), goal or graph.nearest(b)
     if entry is None or exit_ is None or entry[0] == exit_[0]:
         return None
+    straight = haversine_km(*a, *b)
     along = haversine_km(*graph.coords[entry[0]], *graph.coords[exit_[0]])
-    if along < PARTIAL_MIN_SHARE * haversine_km(*a, *b):
+    if along < PARTIAL_MIN_SHARE * straight or entry[1] + exit_[1] > PARTIAL_MAX_DETACHED_SHARE * straight:
         return None
     path = graph.shortest_path(entry[0], exit_[0])
     if path is None or path[1] > DETOUR_LIMIT * along + 2:
