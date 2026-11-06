@@ -11,7 +11,7 @@ from app.export.gpx import build_gpx, has_track, stage_tracks
 from app.export.pdf import build_pdf, map_viewport
 from app.export.trip import exportable_plan
 from app.models import Adventure
-from app.schemas.adventure import AdventureCreate, AdventureRead, AdventureSummary, AdventureUpdate
+from app.schemas.adventure import AdventureCreate, AdventureListItem, AdventureRead, AdventureUpdate, plan_places
 
 router = APIRouter(prefix="/api/adventures", tags=["adventures"])
 
@@ -36,10 +36,13 @@ async def get_export_plan(session: SessionDep, adventure_id: int, user_id: int) 
     return adventure, exportable_plan(adventure.plan)
 
 
-@router.get("", response_model=list[AdventureSummary])
-async def list_adventures(user: CurrentUser, session: SessionDep) -> list[Adventure]:
+@router.get("", response_model=list[AdventureListItem])
+async def list_adventures(user: CurrentUser, session: SessionDep) -> list[AdventureListItem]:
     query = select(Adventure).where(Adventure.owner_id == user.id).order_by(Adventure.updated_at.desc())
-    return list(await session.scalars(query))
+    return [
+        AdventureListItem.model_validate(adventure).model_copy(update={"places": plan_places(adventure.plan)})
+        for adventure in await session.scalars(query)
+    ]
 
 
 @router.post("", response_model=AdventureRead, status_code=status.HTTP_201_CREATED)

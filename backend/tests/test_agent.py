@@ -16,6 +16,7 @@ from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, ModelR
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
 from app.agent.plan_schema import AdventurePlan
+from app.schemas.adventure import plan_places
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
 from app.agent.planner import check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_route_wish, check_stage_distances, planner_agent
@@ -523,6 +524,21 @@ async def test_train_trip_with_bike_from_arrival_station(client: httpx.AsyncClie
     gpx = await client.get(f"/api/adventures/{adventure['id']}/gpx", headers=user_headers)
     assert gpx.status_code == 200 and gpx.headers["x-gpx-has-track"] == "true"
     assert "<name>Start: Bremen Hbf</name>" in gpx.text and "<name>Ziel: Jugendherberge</name>" in gpx.text
+
+    # Übersichtsliste: Orte der Reisekarte für die Suche
+    listed = (await client.get("/api/adventures", headers=user_headers)).json()
+    places = next(a["places"] for a in listed if a["id"] == adventure["id"])
+    assert "Jugendherberge" in places and "Bremen Hbf" in places
+
+
+def test_plan_places_for_search() -> None:
+    """Orte für die Suche in der Übersicht: gekürzt, ohne Duplikate, mit Unterkünften; ohne Plan leer."""
+    plan = make_plan(days=2, accommodation="hostel")
+    plan["start"] = {"name": "Vareler Hafen, Hohenberge, Varel", "lat": 53.4, "lon": 8.17}
+    plan["stages"][0]["end"] = {"name": "Dangast, Varel, Landkreis Friesland", "lat": 53.45, "lon": 8.12}
+    plan["stages"][0]["accommodation"] = {"name": "Jugendherberge Dangast", "lat": 53.45, "lon": 8.12}
+    assert plan_places(plan) == ["Vareler Hafen", "Garmisch", "Dangast", "Jugendherberge Dangast"]
+    assert plan_places(None) == []
 
 
 async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

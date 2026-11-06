@@ -181,6 +181,12 @@ export interface AdventureSummary {
   updated_at: string;
 }
 
+/** Eintrag der Übersichtsliste */
+export interface AdventureListItem extends AdventureSummary {
+  /** Start, Ziel, Etappenorte, Unterkünfte bzw. Bahnhöfe des Plans, für die Suche */
+  places: string[];
+}
+
 export interface Adventure extends AdventureSummary {
   plan: StoredPlan | null;
   messages: ChatMessage[];

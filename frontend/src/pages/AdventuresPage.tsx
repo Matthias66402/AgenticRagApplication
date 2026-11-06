@@ -1,17 +1,41 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, json } from "../api/client";
-import type { Adventure, AdventureSummary } from "../api/types";
+import type { Adventure, AdventureListItem } from "../api/types";
 import { ConfirmButton } from "../components/ConfirmButton";
 import { formatDateTime } from "../lib/labels";
 
+/** Kleinbuchstaben ohne Akzente, damit "zurich" auch "Zürich" findet. */
+const normalize = (text: string) =>
+  text
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
 export function AdventuresPage() {
   const navigate = useNavigate();
-  const [adventures, setAdventures] = useState<AdventureSummary[] | null>(null);
+  const [adventures, setAdventures] = useState<AdventureListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Suchbegriff in der URL: bleibt erhalten, wenn man aus einem Abenteuer zurückkommt
+  const [searchParams, setSearchParams] = useSearchParams();
+  const query = searchParams.get("q") ?? "";
+  const filtered = useMemo(() => {
+    const words = normalize(query).split(/\s+/).filter(Boolean);
+    return (
+      adventures?.filter((a) => {
+        // Titel und Orte des Plans (Start, Ziel, Etappenorte, Unterkünfte), z. B. "Dangast" auch ohne Titelnennung
+        const text = normalize([a.title, ...a.places].join(" "));
+        return words.every((word) => text.includes(word));
+      }) ?? null
+    );
+  }, [adventures, query]);
+
+  function search(text: string) {
+    setSearchParams(text ? { q: text } : {}, { replace: true });
+  }
 
   useEffect(() => {
-    api<AdventureSummary[]>("/api/adventures").then(setAdventures).catch((e) => setError(e.message));
+    api<AdventureListItem[]>("/api/adventures").then(setAdventures).catch((e) => setError(e.message));
   }, []);
 
   async function createAdventure() {
@@ -50,18 +74,29 @@ export function AdventuresPage() {
           </button>
         </div>
       ) : (
-        <div className="grid">
-          {adventures.map((a) => (
-            <Link key={a.id} to={`/adventures/${a.id}`} className="card adventure-card">
-              <div className="row between">
-                <span className={`badge ${a.status}`}>{a.status === "planned" ? "Geplant" : "Entwurf"}</span>
-                <ConfirmButton onConfirm={() => remove(a.id)} />
-              </div>
-              <h2>{a.title}</h2>
-              <p className="muted small">Zuletzt bearbeitet {formatDateTime(a.updated_at)}</p>
-            </Link>
-          ))}
-        </div>
+        <>
+          <input
+            type="search"
+            className="search"
+            placeholder="Titel oder Ort suchen, z. B. Wanderung oder Dangast"
+            aria-label="Abenteuer durchsuchen"
+            value={query}
+            onChange={(e) => search(e.target.value)}
+          />
+          {filtered?.length === 0 && <p className="muted">Kein Abenteuer passt zu „{query}“.</p>}
+          <div className="grid">
+            {filtered?.map((a) => (
+              <Link key={a.id} to={`/adventures/${a.id}`} className="card adventure-card">
+                <div className="row between">
+                  <span className={`badge ${a.status}`}>{a.status === "planned" ? "Geplant" : "Entwurf"}</span>
+                  <ConfirmButton onConfirm={() => remove(a.id)} />
+                </div>
+                <h2>{a.title}</h2>
+                <p className="muted small">Zuletzt bearbeitet {formatDateTime(a.updated_at)}</p>
+              </Link>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

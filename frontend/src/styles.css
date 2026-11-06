@@ -140,6 +140,7 @@ button.link:hover { color: var(--text); }
 
 /* Abenteuerliste */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.search { width: 100%; max-width: 420px; }
 .adventure-card { color: var(--text); display: flex; flex-direction: column; gap: 6px; transition: border-color 0.15s; }
 .adventure-card:hover { text-decoration: none; border-color: var(--primary); }
 .empty { text-align: center; padding: 40px; }
