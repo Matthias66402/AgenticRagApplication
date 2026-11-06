@@ -15,7 +15,7 @@ from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.common import haversine_km
 from app.agent.tools.geocode import geocode, station_fallback
 from app.agent.tools.routing import (
-    BROUTER_URL, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route, walking_hours,
+    BROUTER_URL, ESTIMATE_ADVICE, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route, walking_hours,
 )  # fmt: skip
 from app.agent.tools.sun import sun_times
 from app.agent.tools.transit import (
@@ -248,6 +248,8 @@ async def test_route_estimates_when_all_providers_fail(ctx) -> None:
     result = await plan_route(ctx, [START, END], TransportMode.cycling)
     assert result["estimated"] is True
     assert "cycling-regular" in result["note"] and "BRouter" in result["note"]
+    # Keine Etappenorte auf der Luftlinie verteilen, sondern mit Orten am Weg erneut routen
+    assert result["note"].endswith(ESTIMATE_ADVICE)
 
 
 def test_elevation_gain_ignores_noise() -> None:
@@ -472,6 +474,22 @@ def test_long_leg_follows_named_route_that_ends_before_the_goal() -> None:
     assert route_guide.waypoints[-2:] == [line[-1], goal]
     short = named_route.guide(graph, [line[-3], goal])  # ~37 km Luftlinie, Ziel ~21 km vom Fernweg
     assert short.off_route_legs == [1] and "weiter als 15 km" in short.off_route_reasons[0]
+
+
+def test_leg_follows_named_route_as_far_as_it_goes() -> None:
+    """Fernweg endet weit vor dem Ziel (Katalog-D6 endet in Passau, Ziel Wien): bis zu seinem Ende folgen, dann direkt
+    anbinden, statt das ganze Teilstück abseits zu routen. Trägt der Fernweg kaum zur Strecke bei, bleibt es abseits."""
+    line = [(48.0, 8.5 + i * 0.1) for i in range(51)]  # ~370 km nach Osten bis 13.5° O
+    graph = named_route.build_graph(["Donauweg"], [(list(range(1, 52)), line)])
+    goal = (48.2, 16.4)  # ~215 km hinter dem Ende
+    route_guide = named_route.guide(graph, [line[0], goal])
+    assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(372, abs=1)
+    assert route_guide.partial_legs == [
+        "Teilstück 1: 372 km auf dem Fernweg, dann direkt angebunden (Wegpunkt 2 216 km entfernt)"
+    ]
+    assert route_guide.waypoints[-2:] == [line[-1], goal]
+    sideways = named_route.guide(graph, [line[-5], (49.5, 13.1)])  # ~170 km nach Norden, Fernweg nur ~30 km Teil
+    assert sideways.off_route_legs == [1] and sideways.partial_legs == []
 
 
 def test_named_route_follows_long_coastal_bow() -> None:

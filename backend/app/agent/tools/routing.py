@@ -55,6 +55,12 @@ ESTIMATE_FACTORS: dict[TransportMode, tuple[float, float]] = {
     TransportMode.public_transport: (1.3, 50.0),
 }
 
+ESTIMATE_ADVICE = (
+    "Ohne Geometrie: Verteile Etappenorte nicht auf der Luftlinie, sie lägen abseits des Wegs. Wähle bekannte Orte "
+    "entlang der Strecke (`geocode`) und rufe `plan_route` mit ihnen als Wegpunkten erneut auf; kürzere Teilstücke "
+    "lassen sich meist berechnen."
+)
+
 # Kilometer-Marken entlang eines Fernwegs zur Wahl der Etappenorte; bei langen Routen größere Abstände
 CHECKPOINT_SPACING_KM: dict[TransportMode, float] = {
     TransportMode.cycling: 10.0,
@@ -429,6 +435,12 @@ async def plan_route(
                         f"Abseits des Fernwegs normal angebunden: {', '.join(route_guide.long_connections)} bis zum "
                         "nächsten Punkt des Fernwegs (z. B. weil er vor dem Ziel endet)."
                     )
+                if route_guide.partial_legs:
+                    notes.append(
+                        f"Nur teilweise auf dem Fernweg ({'; '.join(route_guide.partial_legs)}), der Rest normal "
+                        "geroutet. Endet der Fernweg dort, geht es eventuell unter anderem Namen weiter: dann beide "
+                        "Namen mit Komma in route_name angeben."
+                    )
                 if route_guide.off_route_legs and route_guide.on_route_km == 0:
                     notes.append(
                         "Die Route folgt dem Fernweg an keiner Stelle; beschreibe sie im Plan nicht als dessen Verlauf."
@@ -444,8 +456,11 @@ async def plan_route(
         route, label, chain_problems = await _route_chain(ctx, chain, waypoints)
         problems += chain_problems
     if route is None:
-        # Schätzung statt Abbruch, damit der Agent weiterplanen kann
-        return _estimate(waypoints, transport, " ".join(notes + problems))
+        # Schätzung statt Abbruch, damit der Agent weiterplanen kann. Ohne den Hinweis verteilte gpt-5-mini die
+        # Etappen eines Donau-Radwegs gleichmäßig auf der Luftlinie (München, Chiemsee) statt an der Donau.
+        estimate = _estimate(waypoints, transport, " ".join(dict.fromkeys(notes + problems)))
+        estimate["note"] += " " + ESTIMATE_ADVICE
+        return estimate
 
     route_id = f"r-{uuid.uuid4().hex[:8]}"
     ctx.deps.routes[route_id] = simplify_track(

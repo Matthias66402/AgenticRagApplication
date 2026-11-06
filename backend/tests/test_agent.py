@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from app.agent.plan_schema import AdventurePlan
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import check_route_wish, planner_agent
+from app.agent.planner import check_route_wish, check_stage_distances, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
@@ -158,6 +158,18 @@ def test_multi_day_requires_accommodation() -> None:
     with pytest.raises(ValidationError, match="genau 2 Etappen"):
         AdventurePlan.model_validate(make_plan(days=2, accommodation="hut") | {"stages": make_plan()["stages"]})
     assert AdventurePlan.model_validate(make_plan(days=2, accommodation="hut")).duration_days == 2
+
+
+def test_stage_shorter_than_straight_line_is_retried() -> None:
+    """Etappenorte und Distanz passen nicht zusammen (Chiemsee → Donauwörth mit 73 km statt ~125 km Luftlinie)."""
+    plan = make_plan(distance_km=73.14)
+    stage = plan["stages"][0]
+    stage["start"] = {"name": "Campingplatz", "lat": 48.0795, "lon": 12.4113}
+    stage["end"] = {"name": "Donauwörth", "lat": 48.7180, "lon": 10.7807}
+    with pytest.raises(ModelRetry, match=r"Tag 1 \(Campingplatz → Donauwörth: 73.14 km angegeben, 1\d\d km Luftlinie"):
+        check_stage_distances(AdventurePlan.model_validate(plan))
+    stage["distance_km"] = 140  # Route länger als die Luftlinie
+    check_stage_distances(AdventurePlan.model_validate(plan))
 
 
 async def test_question_when_information_missing(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

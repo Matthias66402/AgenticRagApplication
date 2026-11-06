@@ -68,6 +68,10 @@ MAX_SNAP_KM = 15.0
 # trotzdem folgen statt komplett direkt (durchs Landesinnere) geroutet zu werden.
 LONG_LEG_SNAP_SHARE = 0.1
 LONG_LEG_SNAP_KM = 50.0
+# Liegt ein Wegpunkt auch dann zu weit weg, folgt das Teilstück dem Fernweg bis zu dessen nächstem Punkt und wird
+# erst von dort normal geroutet, sofern dieser Abschnitt mindestens diesen Anteil der Luftlinie abdeckt (Fernweg im
+# Katalog endet in Passau, Ziel ist Wien: ~370 von 580 km auf dem Fernweg statt komplett direkt)
+PARTIAL_MIN_SHARE = 0.5
 GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden überbrückt
 # Pfad länger als 6 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll (z. B. nur über das andere
 # Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
@@ -197,6 +201,15 @@ class RouteGraph:
             return None
         km, node = min(found)
         return node, km
+
+    def nearest(self, point: Point) -> tuple[int, float] | None:
+        """Nächster Knoten des Fernwegs in beliebiger Entfernung (Knoten, Entfernung in km); None ohne Knoten."""
+        if not self.coords:
+            return None
+        lat, lon = point
+        scale = math.cos(math.radians(lat))
+        node = min(self.coords, key=lambda n: (self.coords[n][0] - lat) ** 2 + ((self.coords[n][1] - lon) * scale) ** 2)
+        return node, haversine_km(lat, lon, *self.coords[node])
 
     def shortest_path(self, start: int, goal: int) -> tuple[list[Point], float] | None:
         """Dijkstra innerhalb des Fernwegs; (Punkte, Länge in km) oder None ohne Verbindung."""
@@ -419,6 +432,25 @@ class Guide:
     off_route_reasons: list[str] = field(default_factory=list)  # je Teilstück abseits ein Grund, für den Agenten
     # Wegpunkte, die bei langen Teilstücken weiter als MAX_SNAP_KM vom Fernweg normal angebunden werden
     long_connections: list[str] = field(default_factory=list)
+    # Teilstücke, die dem Fernweg nur zum Teil folgen (Wegpunkt zu weit weg), je ein Text für den Agenten
+    partial_legs: list[str] = field(default_factory=list)
+
+
+def partial_path(
+    graph: RouteGraph, a: Point, b: Point, start: tuple[int, float] | None, goal: tuple[int, float] | None
+) -> tuple[tuple[int, float], tuple[int, float], tuple[list[Point], float]] | None:
+    """Teilstück mit zu weit entferntem Wegpunkt: dem Fernweg zwischen den Punkten folgen, die Start und Ziel am
+    nächsten liegen, wenn das mindestens PARTIAL_MIN_SHARE der Luftlinie abdeckt; (Einstieg, Ausstieg, Pfad)."""
+    entry, exit_ = start or graph.nearest(a), goal or graph.nearest(b)
+    if entry is None or exit_ is None or entry[0] == exit_[0]:
+        return None
+    along = haversine_km(*graph.coords[entry[0]], *graph.coords[exit_[0]])
+    if along < PARTIAL_MIN_SHARE * haversine_km(*a, *b):
+        return None
+    path = graph.shortest_path(entry[0], exit_[0])
+    if path is None or path[1] > DETOUR_LIMIT * along + 2:
+        return None
+    return entry, exit_, path
 
 
 def leg_snap_km(straight_km: float) -> float:
@@ -432,6 +464,7 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
     off_route_legs = []
     reasons = []
     long_connections = []
+    partial_legs = []
     for leg, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
         path = None
         straight = haversine_km(*a, *b)
@@ -440,7 +473,15 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
         start = snaps[leg] or (graph.snap(a, radius) if wider else None)
         goal = snaps[leg + 1] or (graph.snap(b, radius) if wider else None)
         far = [str(i + 1) for i, snap in ((leg, start), (leg + 1, goal)) if snap is None]
-        if far:
+        if far and (partial := partial_path(graph, a, b, start, goal)):
+            start, goal, path = partial
+            detached = ", ".join(
+                f"Wegpunkt {i + 1} {snap[1]:.0f} km" for i, snap in ((leg, start), (leg + 1, goal)) if snap[1] > radius
+            )
+            partial_legs.append(
+                f"Teilstück {leg + 1}: {path[1]:.0f} km auf dem Fernweg, dann direkt angebunden ({detached} entfernt)"
+            )
+        elif far:
             reasons.append(f"Teilstück {leg + 1}: Wegpunkt {' und '.join(far)} weiter als {radius:.0f} km vom Fernweg")
         else:
             long_connections += [
@@ -466,7 +507,7 @@ def guide(graph: RouteGraph, waypoints: list[Point]) -> Guide:
         else:
             off_route_legs.append(leg + 1)
         dense.append(b)
-    return Guide(dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)))
+    return Guide(dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)), partial_legs)
 
 
 async def catalog_overview(deps: AgentDeps) -> str:

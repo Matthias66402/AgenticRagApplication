@@ -44,6 +44,10 @@ ROUTE_WORDS = re.compile(
 # Fortbewegungsarten, für die plan_route einem Fernweg folgen kann (app.agent.tools.named_route.ROUTE_TYPES)
 NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode.hiking}
 
+# Luftlinie einer Etappe darf ihre Distanz höchstens um diesen Faktor plus Rest überschreiten (gerundete Werte,
+# Etappenende an der Unterkunft statt am berechneten Wegpunkt)
+STAGE_STRAIGHT_TOLERANCE = 1.1
+STAGE_STRAIGHT_SLACK_KM = 3.0
 # Verweis auf angehängte Verbindungen in einer Antwort ("siehst du unten", "darunter angezeigt")
 SHOWN_BELOW = re.compile(r"\b(unten|darunter)\b", re.IGNORECASE)
 # Ankündigung statt Ergebnis ("Ich erstelle jetzt den Plan … ich melde mich"): Mit answer_user endet der Lauf
@@ -360,6 +364,25 @@ def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
         )
 
 
+def check_stage_distances(output: AdventurePlan) -> None:
+    """Keine Etappe ist kürzer als ihre Luftlinie. Bei einem Donau-Radweg verteilte gpt-5-mini die Etappen gleichmäßig
+    (je 73 km) und mischte nachträglich Orte hinein: Tag 6 führte vom Chiemsee ~125 km zurück nach Donauwörth."""
+    if output.transport == TransportMode.public_transport:
+        return
+    wrong = []
+    for stage in output.stages:
+        straight = haversine_km(stage.start.lat, stage.start.lon, stage.end.lat, stage.end.lon)
+        if straight > STAGE_STRAIGHT_TOLERANCE * stage.distance_km + STAGE_STRAIGHT_SLACK_KM:
+            wrong.append(f"Tag {stage.day} ({stage.start.name} → {stage.end.name}: {stage.distance_km:g} km angegeben, "
+                         f"{straight:.0f} km Luftlinie)")  # fmt: skip
+    if wrong:
+        raise ModelRetry(
+            f"Etappe kürzer als die Luftlinie zwischen Start und Ziel: {'; '.join(wrong)}. Etappenorte und Distanzen "
+            "passen nicht zusammen. Wähle die Etappenorte nacheinander entlang der Strecke, berechne die Route mit "
+            "ihnen als Wegpunkten per `plan_route` und übernimm Distanzen aus deren `segments`."
+        )
+
+
 def check_answer_complete(output: TextAnswer) -> None:
     """Die Antwort ist die ganze Nachricht: gpt-5-mini gab einmal nur die Einleitung aus ("… und was wichtig ist:"),
     ein anderes Mal nach allen Unterkunftssuchen nur "Ich erstelle jetzt den Tagesplan … ich melde mich"."""
@@ -484,6 +507,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
                 "return_journey": as_found(output.return_journey, known),
             }
         )
+        check_stage_distances(output)
         limit = MAX_STAGE_KM[output.transport]
         too_long = [s for s in output.stages if s.distance_km > limit]
         if too_long:
