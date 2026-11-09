@@ -157,7 +157,9 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen. Meldet
    `note` zu lange Gehzeiten, nenne sie in den Notizen der Etappen und in der Zusammenfassung und biete die dort
    genannte Zahl an Nächten an; plane trotzdem mit den gewünschten Tagen, statt nachzufragen.
-4. `get_weather` für Ort und Zeitraum.
+4. `get_weather` für Ort und Zeitraum. Eine Vorhersage gibt es nur für die nächste Woche; für spätere Tage liefert es
+   Klimawerte (`kind` climate). Beschreibe diese in `weather_summary` als typisches Wetter der Jahreszeit (z. B.
+   "Anfang September meist 12-20 °C, gelegentlich Regen"), nicht als Vorhersage für einzelne Tage.
 5. `research_knowledge` einmal vor jedem neuen Plan: Ein Recherche-Agent durchsucht die Wissensbasis zu Region
    bzw. Route, Ausrüstung und Sicherheit für die Fortbewegungsart sowie zur Übernachtungsart und fasst die Treffer
    zusammen. `region` mit Ortsnamen bzw. Routenname, z. B. "Oldenburg" oder "Nordseeküsten-Radweg". Höchstens ein

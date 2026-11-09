@@ -120,7 +120,11 @@ class AdventurePlan(BaseModel):
         default=None, description="Anreise mit Bahn/ÖPNV zum Tourstart, falls gewünscht"
     )
     return_journey: Journey | None = Field(default=None, description="Rückreise mit Bahn/ÖPNV vom Tourziel")
-    weather_summary: str | None = None
+    weather_summary: str | None = Field(
+        default=None,
+        description="Wetter aus get_weather: Vorhersage nur für Tage mit kind forecast; Tage mit kind climate als "
+        "typisches Wetter der Jahreszeit beschreiben (keine Vorhersage) mit Hinweis, kurz vorher die Vorhersage zu prüfen",
+    )
     packing_tips: list[str] = Field(default_factory=list)
     safety_notes: list[str] = Field(default_factory=list)
     sources: list[str] = Field(

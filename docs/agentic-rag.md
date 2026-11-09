@@ -189,7 +189,7 @@ Jedes Tool ist eine normale Python-Funktion. PydanticAI erzeugt aus **Docstring 
 | `plan_route` | `routing.py`, `named_route.py` | OpenRouteService → BRouter → Schätzung; mit `route_name` Verlauf des Fernwegs aus OSM (Overpass) | Strecke, Höhenmeter, Werte je Etappe; beim Wandern als Dauer die Gehzeit nach DAV-Formel |
 | `find_accommodation` | `accommodation.py` | Nominatim-Kategoriesuche → Overpass | Hütten, Camping, Hotels nahe Etappenenden |
 | `plan_hut_tour` | `huts.py` | Nominatim-Kategoriesuche, dann `plan_route` | Hüttenwanderung von A nach B: Hütten auf dem Weg samt Route |
-| `get_weather` | `weather.py` | Open-Meteo | Vorhersage (≤ 15 Tage) bzw. Klimamittel |
+| `get_weather` | `weather.py` | Open-Meteo | Vorhersage (nächste 7 Tage), danach Klimamittel der letzten Jahre |
 | `estimate_hiking_time` | `routing.py` | lokal (DAV-Formel) | Gehzeit für Etappen ohne berechnete Route (sonst liefert sie `plan_route`) |
 | `sun_times` | `sun.py` | lokal (`astral`) | Tageslicht bei langen Etappen |
 | `find_train_connections` | `transit.py` | Transitous (MOTIS-Fahrplanrouter) | An- und Abreise mit Bahn/ÖPNV |

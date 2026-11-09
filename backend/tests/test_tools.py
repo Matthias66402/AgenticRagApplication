@@ -646,6 +646,40 @@ async def test_weather_climate_far_future(ctx) -> None:
     assert result["days"][0]["temp_max_c"] == 20.0
 
 
+@respx.mock
+async def test_weather_climate_beyond_one_week(ctx) -> None:
+    """Zwei Wochen voraus ist eine Tagesvorhersage nicht belastbar: nur Klimawerte, keine Vorhersage abfragen."""
+    forecast = respx.get(FORECAST_URL)
+    respx.get(ARCHIVE_URL).respond(
+        json={"daily": {"temperature_2m_max": [20.0], "temperature_2m_min": [10.0], "precipitation_sum": [2.0]}}
+    )
+    result = await get_weather(ctx, 47.0, 11.0, TODAY + dt.timedelta(days=10), 1)
+    assert result["kind"] == "climate"
+    assert "nicht als Vorhersage" in result["note"]
+    assert not forecast.called
+
+
+@respx.mock
+async def test_weather_mixed_forecast_and_climate(ctx) -> None:
+    def forecast(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["end_date"] == "2026-07-07"  # letzter Tag der Vorhersage-Woche
+        return httpx.Response(200, json={"daily": {
+            "time": ["2026-07-06", "2026-07-07"], "weather_code": [0, 3],
+            "temperature_2m_max": [25.0, 22.0], "temperature_2m_min": [12.0, 11.0], "precipitation_sum": [0.0, 1.0],
+            "precipitation_probability_max": [5, 30], "wind_speed_10m_max": [10.0, 15.0],
+        }})  # fmt: skip
+
+    respx.get(FORECAST_URL).mock(side_effect=forecast)
+    respx.get(ARCHIVE_URL).respond(json={"daily": {
+        "temperature_2m_max": [21.0, 23.0], "temperature_2m_min": [9.0, 10.0], "precipitation_sum": [3.0, 0.0],
+    }})  # fmt: skip
+    result = await get_weather(ctx, 47.0, 11.0, dt.date(2026, 7, 6), 4)
+    assert result["kind"] == "mixed"
+    assert [d["kind"] for d in result["days"]] == ["forecast", "forecast", "climate", "climate"]
+    assert [d["date"] for d in result["days"]][2:] == ["2026-07-08", "2026-07-09"]
+    assert "2026-07-07" in result["note"]
+
+
 async def test_weather_rejects_past(ctx) -> None:
     assert "error" in await get_weather(ctx, 47.0, 11.0, dt.date(2026, 6, 1), 1)
 
