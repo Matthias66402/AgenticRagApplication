@@ -21,6 +21,7 @@ from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_setting
 from app.agent.research import research_agent
 from app.agent.planner import check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_route_wish, check_stage_distances, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
+from app.agent.tools import weather as weather_module
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
 from app.evaluation.planner import retry_feedback
@@ -30,6 +31,9 @@ from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, add_test_route,
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
 # Auftrag an den Recherche-Agenten (in Tests per conftest.fake_research ohne LLM)
 RESEARCH = {"region": "Garmisch", "transport": "hiking"}
+# Wetter für make_plan (Open-Meteo per conftest.fake_weather)
+WEATHER = ("get_weather", {"lat": 47.49, "lon": 11.09, "start_date": TOMORROW.isoformat(), "days": 1})
+pytestmark = pytest.mark.usefixtures("fake_weather")
 
 
 def _tomorrow_same_local_time(match: re.Match[str]) -> str:
@@ -68,6 +72,7 @@ def make_plan(distance_km: float = 15.0, days: int = 1, accommodation: str | Non
             for d in range(days)
         ],
         "route_ids": [],
+        "weather_summary": "Sonnig, 5-15 °C.",
         "sources": ["Testquelle"],
     }
 
@@ -197,6 +202,8 @@ async def test_plan_with_tool_call_and_self_correction(
         ("estimate_hiking_time", {"distance_km": 15, "ascent_m": 600}),
         ("final_plan", make_plan(distance_km=15)),  # ohne Recherche → Validator verlangt research_knowledge
         ("research_knowledge", RESEARCH),
+        ("final_plan", make_plan(distance_km=80)),  # ohne Wetter → Validator verlangt get_weather
+        WEATHER,
         ("final_plan", make_plan(distance_km=80)),  # unplausibel lange Etappe → erneute Korrektur
         ("final_plan", make_plan(distance_km=15)),
     )
@@ -213,7 +220,8 @@ async def test_plan_with_tool_call_and_self_correction(
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
     assert stored["status"] == "planned"
     assert stored["title"] == "Testtour"
-    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["estimate_hiking_time", "research_knowledge"]
+    tools = [c["tool"] for c in stored["messages"][1]["tool_calls"]]
+    assert tools == ["estimate_hiking_time", "research_knowledge", "get_weather"]
 
 
 JOURNEY = {
@@ -259,6 +267,7 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
     }  # fmt: skip
     model = scripted_model(
         ("research_knowledge", RESEARCH),
+        WEATHER,
         ("final_plan", plan),  # Verbindung ohne Fahrplanabfrage → Validator verlangt find_train_connections
         ("find_train_connections", connection_args),
         # nicht gefundene Verbindung → Validator verlangt eine gefundene
@@ -274,9 +283,10 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
     assert events[-2]["plan"]["outbound_journey"]["legs"][0]["line"] == "RB6"
     assert events[-2]["plan"]["return_journey"] is None
     stored = (await client.get(f"/api/adventures/{adventure['id']}", headers=user_headers)).json()
-    assert [c["tool"] for c in stored["messages"][1]["tool_calls"]] == ["research_knowledge", "find_train_connections"]
+    tools = [c["tool"] for c in stored["messages"][1]["tool_calls"]]
+    assert tools == ["research_knowledge", "get_weather", "find_train_connections"]
     # Datendienste ergänzt das Backend aus dem Verlauf, nicht das Modell
-    assert [s["name"] for s in stored["plan"]["data_sources"]] == ["Transitous"]
+    assert sorted(s["name"] for s in stored["plan"]["data_sources"]) == ["Open-Meteo", "Transitous"]
 
 
 @respx.mock
@@ -309,7 +319,8 @@ async def test_plan_links_bahn_search_without_timetable(client: httpx.AsyncClien
         ("find_train_connections", outside),
         ("ask_user", {"question": "Wie lange?"}),
     )
-    await send("Einen Tag", ("research_knowledge", RESEARCH), ("final_plan", plan))
+    weather = ("get_weather", {"lat": 47.49, "lon": 11.09, "start_date": start.isoformat()})
+    await send("Einen Tag", ("research_knowledge", RESEARCH), weather, ("final_plan", plan))
     [link] = await links()
     assert link["label"] == f"München → Garmisch · {WEEKDAYS[start.weekday()]} {start:%d.%m.%Y}, ab 06:00"
     assert link["url"].startswith("https://www.bahn.de/buchung/fahrplan/suche#")
@@ -665,6 +676,7 @@ async def test_plan_uses_route_from_run_with_question(client: httpx.AsyncClient,
         lambda _: ("plan_route", {"waypoints": [START.model_dump(), END.model_dump()], "transport": "hiking"}),
         lambda _: ("ask_user", {"question": "Wann möchtest Du los?"}),
         lambda _: ("research_knowledge", RESEARCH),
+        lambda _: WEATHER,
         # Dieselbe Route je Tag genannt → nur einmal im Plan, sonst erscheint das Höhenprofil doppelt
         lambda messages: ("final_plan", make_plan() | {"route_ids": [route_id(messages)] * 2}),
     ]
@@ -712,7 +724,8 @@ async def test_plan_must_use_route_along_long_distance_route(
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling"}),
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling", "route_name": "Testweg"}),
         lambda _: ("plan_route", {"waypoints": waypoints, "transport": "cycling", "route_name": "Testweg"}),
-        lambda _: ("research_knowledge", RESEARCH),
+        lambda _: ("research_knowledge", RESEARCH | {"transport": "cycling"}),  # Recherche gilt je Fortbewegungsart
+        lambda _: WEATHER,
         lambda messages: plan(messages, 0),  # ältere Route ohne Fernweg
         lambda messages: plan(messages, 1),  # ältere Route entlang des Fernwegs
     ]
@@ -725,6 +738,30 @@ async def test_plan_must_use_route_along_long_distance_route(
     assert parse_sse(response.text)[-2]["plan"]["route_ids"] == [route_ids[1]]
     assert any("Route ohne Fernweg statt der Route entlang Testweg" in text for text in retries), retries
     assert len(retries) == 1
+
+
+async def test_plan_needs_weather_summary(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Wetter abgefragt, aber nicht übernommen → Korrektur; liefert Open-Meteo einen Fehler, geht der Plan ohne durch."""
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    without = make_plan() | {"weather_summary": None}
+    model = scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", without), ("final_plan", make_plan()))
+    with planner_agent.override(model=model):
+        response = await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung"})
+    assert parse_sse(response.text)[-2]["plan"]["weather_summary"] == "Sonnig, 5-15 °C."
+
+
+async def test_plan_without_weather_when_service_fails(
+    client: httpx.AsyncClient, user_headers: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unavailable(*args: Any) -> list[dict[str, Any]]:
+        raise httpx.ConnectError("Open-Meteo nicht erreichbar")
+
+    monkeypatch.setattr(weather_module, "_forecast", unavailable)
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    without = make_plan() | {"weather_summary": None}
+    with planner_agent.override(model=scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", without))):
+        response = await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung"})
+    assert parse_sse(response.text)[-2]["plan"]["weather_summary"] is None
 
 
 async def test_cannot_chat_in_foreign_adventure(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:

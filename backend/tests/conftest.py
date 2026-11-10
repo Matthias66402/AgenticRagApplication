@@ -7,7 +7,9 @@ os.environ["DATABASE_URL"] = os.environ.get(
 # Keine Traces aus Tests nach Langfuse senden, auch wenn .env Keys enthält
 os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 
+import datetime as dt  # noqa: E402
 from collections.abc import AsyncIterator, Iterator  # noqa: E402
+from typing import Any  # noqa: E402
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -20,6 +22,7 @@ from app.config import get_settings  # noqa: E402
 from app.db import SessionLocal, engine  # noqa: E402
 from app.agent.intake import intake_agent  # noqa: E402
 from app.agent.research import research_agent  # noqa: E402
+from app.agent.tools import weather  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import User, UserRole  # noqa: E402
 from app.rag.embeddings import get_embedder  # noqa: E402
@@ -101,3 +104,23 @@ async def user_headers(client: httpx.AsyncClient) -> dict[str, str]:
 async def admin_headers(client: httpx.AsyncClient) -> dict[str, str]:
     await create_user("admin@example.com", role=UserRole.admin, name="Admin")
     return await auth_headers(client, "admin@example.com")
+
+
+@pytest.fixture
+def fake_weather(monkeypatch: pytest.MonkeyPatch) -> None:
+    """get_weather ohne Open-Meteo: feste Werte als Vorhersage bzw. Klimawerte."""
+    def days(start: dt.date, end: dt.date, kind: str) -> list[dict[str, Any]]:
+        count = (end - start).days + 1
+        return [
+            {"date": (start + dt.timedelta(days=i)).isoformat(), "kind": kind, "temp_max_c": 15.0, "temp_min_c": 5.0}
+            for i in range(count)
+        ]
+
+    async def forecast(http: Any, base: Any, start: dt.date, end: dt.date) -> list[dict[str, Any]]:
+        return days(start, end, "forecast")
+
+    async def climate(http: Any, base: Any, start: dt.date, end: dt.date, today: dt.date) -> list[dict[str, Any]]:
+        return days(start, end, "climate")
+
+    monkeypatch.setattr(weather, "_forecast", forecast)
+    monkeypatch.setattr(weather, "_climate", climate)

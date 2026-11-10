@@ -15,12 +15,11 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, ToolOutput
 
 from app.agent.deps import AgentDeps
+from app.agent.history import researched_for
 from app.agent.models import build_model
 from app.agent.plan_schema import AccommodationType, TransportMode
 from app.config import get_settings
 
-# Recherche-Tools im Verlauf; search_knowledge: frühere Abenteuer, in denen der Planer noch selbst gesucht hat
-RESEARCH_TOOLS = {"research_knowledge", "search_knowledge"}
 WEEKDAYS = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 
 MAX_OUTPUT_TOKENS = 1000
@@ -148,7 +147,6 @@ class ConversationContext:
     user_messages: list[str] = field(default_factory=list)  # letzte Nutzernachrichten, älteste zuerst
     question: str | None = None  # letzte Rückfrage des Planers
     geocoded: set[str] = field(default_factory=set)  # bereits nachgeschlagene Orte, klein geschrieben
-    researched: bool = False  # Wissensbasis schon durchsucht
 
 
 def conversation_context(history_json: list[Any]) -> ConversationContext:
@@ -160,7 +158,6 @@ def conversation_context(history_json: list[Any]) -> ConversationContext:
                 context.user_messages.append(part["content"])
             elif kind == "tool-call":
                 tool_name = part.get("tool_name")
-                context.researched |= tool_name in RESEARCH_TOOLS
                 args = part.get("args")
                 if not isinstance(args, dict):
                     continue  # unvollständige Argumente; für den Kontext unwichtig
@@ -204,7 +201,8 @@ async def plan_prefetch(message: str, history_json: list[Any], deps: AgentDeps) 
             key = (name.lower(), place.country_codes)
             unique.setdefault(key, PlaceQuery(place_name=name, country_codes=place.country_codes))
     research = result.output.research
-    if research is not None and (context.researched or not research.region.strip()):
+    # Wie die Ausgabeprüfung des Planers: nur Recherchen aus Tourenplanungen mit derselben Fortbewegungsart
+    if research is not None and (researched_for(history_json, research.transport.value) or not research.region.strip()):
         research = None
     if result.output.topic in ("fachfremd", "intern"):
         return Prefetch(off_topic=result.output.topic)

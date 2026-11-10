@@ -4,11 +4,12 @@ import re
 from typing import Any
 
 from pydantic_ai import (
-    Agent, ModelMessage, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool, ToolCallPart, ToolOutput,
-    ToolReturnPart, UserPromptPart,
+    Agent, ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool,
+    ToolCallPart, ToolOutput, ToolReturnPart, UserPromptPart,
 )  # fmt: skip
 
 from app.agent.deps import AgentDeps
+from app.agent.history import researched_for, weather_results
 from app.agent.plan_schema import (
     MAX_STAGE_KM, AccessRoute, AccommodationType, AdventurePlan, ClarificationQuestion, EgressRoute, Journey, TextAnswer,
     TrainTripPlan, TransportMode,
@@ -165,7 +166,7 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen. Meldet
    `note` zu lange Gehzeiten, nenne sie in den Notizen der Etappen und in der Zusammenfassung und biete die dort
    genannte Zahl an Nächten an; plane trotzdem mit den gewünschten Tagen, statt nachzufragen.
-4. `get_weather` für Ort und Zeitraum. Eine Vorhersage gibt es nur für die nächste Woche; für spätere Tage liefert es
+4. `get_weather` für Ort und Zeitraum, bei jedem Plan (auch Tagestouren), Ergebnis in `weather_summary`. Eine Vorhersage gibt es nur für die nächste Woche; für spätere Tage liefert es
    Klimawerte (`kind` climate). Beschreibe diese in `weather_summary` als typisches Wetter der Jahreszeit (z. B.
    "Anfang September meist 12-20 °C, gelegentlich Regen"), nicht als Vorhersage für einzelne Tage.
 5. `research_knowledge` einmal vor jedem neuen Plan: Ein Recherche-Agent durchsucht die Wissensbasis zu Region
@@ -174,7 +175,8 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    `extra_topic`, z. B. Fahrradmitnahme in der Bahn (Schritt 7) oder Wildcampen im jeweiligen Land.
    `packing_tips` und `safety_notes` stammen aus dem Ergebnis, Hinweise zur Region gehören auch in die
    Etappen-Notizen. Passt der Nutzer nur einen bestehenden Plan an, entfällt die Recherche, wenn ihr Ergebnis
-   schon im Verlauf steht.
+   schon im Verlauf steht. Recherchen zu anderen Fragen (z. B. zu Deiner Arbeitsweise) oder für eine andere
+   Fortbewegungsart zählen nicht.
 6. Bei Wanderungen enthält `duration_hours` von `plan_route` bzw. `plan_hut_tour` schon die Gehzeit je Etappe
    (DAV-Formel); übernimm sie. `estimate_hiking_time` nur für Etappen ohne berechnete Route (Schätzung). Bei
    langen Etappen `sun_times`.
@@ -632,6 +634,21 @@ def check_stage_distances(output: AdventurePlan) -> None:
         )
 
 
+def check_weather(history_json: list[Any], output: AdventurePlan) -> None:
+    """Jeder Tourplan mit Wetter: gpt-5-mini ließ `get_weather` in gut der Hälfte der Pläne weg (Abenteuer 196).
+    Liefert Open-Meteo einen Fehler, geht der Plan ohne Wetter durch."""
+    results = weather_results(history_json, output.start_date)
+    if not results:
+        raise ModelRetry(
+            f"Zu jedem Plan gehört das Wetter: Rufe `get_weather` für den Startort mit start_date "
+            f"{output.start_date.isoformat()} und days {output.duration_days} auf und fasse das Ergebnis in "
+            "`weather_summary` zusammen."
+        )
+    succeeded = any(isinstance(r, dict) and "error" not in r for r in results)
+    if succeeded and not (output.weather_summary or "").strip():
+        raise ModelRetry("Übernimm das Wetter aus dem `get_weather`-Ergebnis in `weather_summary`.")
+
+
 def check_answer_complete(output: TextAnswer) -> None:
     """Die Antwort ist die ganze Nachricht: gpt-5-mini gab einmal nur die Einleitung aus ("… und was wichtig ist:"),
     ein anderes Mal nach allen Unterkunftssuchen nur "Ich erstelle jetzt den Tagesplan … ich melde mich"."""
@@ -749,14 +766,15 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             return check_train_trip(ctx, output)
         if not isinstance(output, AdventurePlan):
             return output
-        # search_knowledge: frühere Abenteuer, in denen der Planer die Wissensbasis noch selbst durchsucht hat
-        if not used_tool(ctx, "research_knowledge") and not used_tool(ctx, "search_knowledge"):
+        history_json = ModelMessagesTypeAdapter.dump_python(ctx.messages, mode="json")
+        if not researched_for(history_json, output.transport.value):
             raise ModelRetry(
                 "Bevor Du den Plan ausgibst, recherchiere mit `research_knowledge` in der Wissensbasis Regeln und Tipps "
-                "zu Fortbewegungsart, Übernachtung und Region und berücksichtige sie im Plan."
+                "zu Fortbewegungsart, Übernachtung und Region dieser Tour und berücksichtige sie im Plan."
             )
         if output.start_date < ctx.deps.today:
             raise ModelRetry(f"Das Startdatum {output.start_date} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+        check_weather(history_json, output)
         check_named_route_used(ctx, output)
         check_hut_tour(ctx, output)
         check_route_wish(ctx, output)

@@ -2,6 +2,7 @@ import json
 from typing import Any
 
 import httpx
+import pytest
 from pydantic_ai import (
     ModelRequest, ModelResponse, RequestUsage, RetryFeedbackPart, RetryInfo, ToolCallPart, ToolReturnPart,
 )  # fmt: skip
@@ -14,7 +15,9 @@ from app.evaluation.planner import (
     CASES_FILE, OUTPUT_NAMES, CaseRun, check_output, covered_seconds, measure, measure_usage, phase_seconds,
     run_case, summarize, tool_time_stats,
 )  # fmt: skip
-from tests.test_agent import RESEARCH, make_plan, scripted_model
+from tests.test_agent import RESEARCH, WEATHER, make_plan, scripted_model
+
+pytestmark = pytest.mark.usefixtures("fake_weather")
 
 
 def deps(routes: dict[str, Any] | None = None) -> AgentDeps:
@@ -84,17 +87,17 @@ def test_measure_and_summarize() -> None:
 async def test_run_case_measures_planner_and_research() -> None:
     """Ganzer Fall über den Graphen mit geskripteten Modellen: Aufzeichnung umfasst auch den Recherche-Agenten."""
     case = {"id": "t", "message": "Wanderung ab Garmisch morgen", "expected_output": "final_plan", "transport": "hiking"}
-    model = scripted_model(("research_knowledge", RESEARCH), ("final_plan", make_plan()))
+    model = scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", make_plan()))
     async with httpx.AsyncClient() as http:
         with planner_agent.override(model=model):
             run = await run_case(case, 1, http)
     assert run.error is None and run.output == "final_plan"
-    assert run.tool_calls == {"research_knowledge": 1, "final_plan": 1}
-    # 2 Planer-Aufrufe (FunctionModel) + Intake (1) und Recherche-Agent (2: Suche + Zusammenfassung), beide TestModel
-    assert run.requests_by_model == {"function::stream": 2, "test": 3}
-    assert run.requests == 5
+    assert run.tool_calls == {"research_knowledge": 1, "get_weather": 1, "final_plan": 1}
+    # 3 Planer-Aufrufe (FunctionModel) + Intake (1) und Recherche-Agent (2: Suche + Zusammenfassung), beide TestModel
+    assert run.requests_by_model == {"function::stream": 3, "test": 3}
+    assert run.requests == 6
     # Zeiten: Dauer des Tool-Aufrufs (Ausgabe-Tools wie final_plan haben keine) und Ende der Graph-Knoten
-    research, final = run.calls
+    research, _, final = run.calls
     assert research["seconds"] >= 0 and "seconds" not in final
     assert list(run.node_done_seconds) == ["intake", "planner", "finish_plan"]
     assert run.node_done_seconds["intake"] <= run.node_done_seconds["planner"] <= run.seconds

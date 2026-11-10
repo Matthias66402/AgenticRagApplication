@@ -24,7 +24,9 @@ from app.agent.tools import geocode as geocode_module
 from app.agent.runner import RunOutcome, run_planner
 from app.config import get_settings
 from app.db import SessionLocal
-from tests.test_agent import RESEARCH, make_plan, scripted_model
+from tests.test_agent import RESEARCH, WEATHER, make_plan, scripted_model
+
+pytestmark = pytest.mark.usefixtures("fake_weather")
 
 QUESTION = ("ask_user", {"question": "Wo startest Du?", "missing_fields": ["start"]})
 
@@ -308,7 +310,7 @@ def test_intake_context_from_history(deps: AgentDeps) -> None:
     ]  # fmt: skip
     context = conversation_context(history)
     assert context.user_messages == ["Wanderung morgen"] and context.question == "Wohin soll es gehen?"
-    assert context.geocoded == {"garmisch-partenkirchen"} and context.researched is False
+    assert context.geocoded == {"garmisch-partenkirchen"}
     deps.home = "Nelkenstraße 10, 26121 Oldenburg"
     prompt = intake_prompt("Nach Mittenwald", context, deps)
     assert "Wohnadresse: Nelkenstraße 10" in prompt and "Letzte Rückfrage des Planers: Wohin" in prompt
@@ -332,6 +334,20 @@ async def test_prefetch_skips_what_history_already_has(deps: AgentDeps) -> None:
     assert prefetch.research is not None and prefetch.research.transport == TransportMode.hiking
 
 
+async def test_prefetch_research_after_questions_about_approach(deps: AgentDeps) -> None:
+    """Abenteuer 196: Recherchen bei Fragen zur Routenwahl ersetzen nicht die Recherche für die erste Tour."""
+    history = [
+        {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "Wie wählst Du die Routen aus?"}]},
+        {"kind": "response", "parts": [
+            {"part_kind": "tool-call", "tool_name": "research_knowledge", "args": {"region": "Europa", "transport": "hiking"}},
+            {"part_kind": "tool-call", "tool_name": "answer_user", "args": {"message": "Bei Fernwegen …"}},
+        ]},
+    ]  # fmt: skip
+    with intake_finds(research=RESEARCH):
+        prefetch = await plan_prefetch("Wanderung ab Garmisch", history, deps)
+    assert prefetch.research is not None
+
+
 @respx.mock
 async def test_prefetched_research_satisfies_planner(deps: AgentDeps) -> None:
     """Geocoding und Recherche laufen parallel vor dem Planer; der Plan besteht den Validator, ohne dass der Planer
@@ -342,7 +358,10 @@ async def test_prefetched_research_satisfies_planner(deps: AgentDeps) -> None:
 
     async def planner_step(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[DeltaToolCalls]:
         seen["messages"] = messages
-        yield {0: DeltaToolCall(name="final_plan", json_args=json.dumps(make_plan()))}
+        if len(messages) == 3:  # Prompt, vorab ausgeführte Aufrufe und deren Ergebnisse
+            yield {0: DeltaToolCall(name=WEATHER[0], json_args=json.dumps(WEATHER[1]))}
+        else:
+            yield {0: DeltaToolCall(name="final_plan", json_args=json.dumps(make_plan()))}
 
     with intake_finds({"place_name": "Garmisch-Partenkirchen"}, research=RESEARCH):
         with planner_agent.override(model=FunctionModel(stream_function=planner_step)):
@@ -357,7 +376,7 @@ async def test_prefetched_research_satisfies_planner(deps: AgentDeps) -> None:
     research_call = seen["messages"][1].parts[1]
     assert research_call.args == {"region": "Garmisch", "transport": "hiking"}  # JSON wie vom Modell
     assert outcome.plan is not None and outcome.error is None
-    assert sorted(c["tool"] for c in outcome.tool_calls) == ["geocode", "research_knowledge"]
+    assert sorted(c["tool"] for c in outcome.tool_calls) == ["geocode", "get_weather", "research_knowledge"]
     assert {e["type"] for e in events} == {"tool_call", "tool_result"}
 
 
