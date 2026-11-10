@@ -155,8 +155,11 @@ def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage]
             checks["journeys"] = output.outbound_journey is not None and output.return_journey is not None
     if isinstance(output, TrainTripPlan) and case.get("access"):
         checks["access"] = output.access is not None
-    if isinstance(output, TextAnswer):
+    if isinstance(output, TextAnswer) and case.get("train_query"):
         checks["train_query"] = "find_train_connections" in calls
+    if case.get("no_tools"):
+        # z. B. Absage oder Frage zur Arbeitsweise: keine Recherche o. Ä. (Abenteuer 196), nur die Ausgabe
+        checks["no_tools"] = all(name in OUTPUT_NAMES.values() for name in calls)
     return checks
 
 

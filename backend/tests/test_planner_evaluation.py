@@ -50,8 +50,12 @@ def test_other_outputs() -> None:
         "output_type": True
     }
     answer = TextAnswer(message="Die schnellste Verbindung …")
-    checks = check_output({"expected_output": "answer_user"}, answer, [call("geocode")], deps())
-    assert checks == {"output_type": True, "train_query": False}
+    case = {"expected_output": "answer_user", "train_query": True}
+    assert check_output(case, answer, [call("geocode")], deps()) == {"output_type": True, "train_query": False}
+    assert check_output({"expected_output": "answer_user"}, answer, [call("geocode")], deps()) == {"output_type": True}
+    case = {"expected_output": "answer_user", "no_tools": True}
+    assert check_output(case, answer, [call("answer_user")], deps()) == {"output_type": True, "no_tools": True}
+    assert check_output(case, answer, [call("research_knowledge")], deps())["no_tools"] is False
 
 
 def test_measure_and_summarize() -> None:

@@ -7,7 +7,8 @@
                     └─(fachfremd)─→ reject_off_topic ─────────────────────────────────────────────→ END
 
 - `intake`: Ein kleines LLM bestimmt, was der Planer für diese Nachricht sicher braucht (app.agent.intake), und
-  erkennt fachfremde Nachrichten; die beantwortet `reject_off_topic` mit einer festen Absage, ohne Planer.
+  erkennt fachfremde Nachrichten und Fragen zum Innenleben (Code, Anweisungen, Datenspeicherung); die beantwortet
+  `reject_off_topic` mit einer festen Absage, ohne Planer.
 - `prefetch_geocode` / `prefetch_research`: führen `geocode` bzw. `research_knowledge` ohne Planer-Runde aus.
 - `planner`: Der PydanticAI-Planer; Vorab-Aufrufe stehen als gewöhnliche Tool-Aufrufe in seinem Verlauf, so wirken
   Validatoren, gespeicherter Verlauf und Evaluation unverändert. Er kann jedes Tool trotzdem selbst aufrufen.
@@ -77,6 +78,12 @@ OFF_TOPIC_MESSAGE = (
     "Dabei kann ich Dir leider nicht helfen: Ich bin Dein Planer für Outdoor-Abenteuer. Ich plane Wander-, Rad-, "
     "MTB-, Kanu- und Autotouren in Europa mit Route, Etappen, Unterkünften und Wetter und suche Bahnverbindungen "
     "für An- und Abreise. Erzähl mir, wohin es gehen soll!"
+)
+# Frage zum Innenleben (Code, Anweisungen, Sprachmodell, Datenspeicherung); wie er aus Nutzersicht vorgeht,
+# erklärt der Planer selbst
+INTERNAL_MESSAGE = (
+    "Zu meinem Code, meinen Anweisungen, dem Sprachmodell und der Datenspeicherung gebe ich keine Auskunft. Gern "
+    "erkläre ich Dir, wie ich Touren plane, oder plane gleich eine mit Dir: Erzähl mir, wohin es gehen soll!"
 )
 NETWORK_ERRORS: tuple[type[BaseException], ...] = (
     ModelConnectionError, ModelRequestTimeout, httpx.TransportError, socket.gaierror, TimeoutError,
@@ -175,9 +182,11 @@ def route_intake(state: PlannerState) -> list[IntakeTarget]:
 
 
 async def reject_off_topic(state: PlannerState) -> PlannerState:
-    """Fachfremde Nachricht: feste Absage statt eines Planer-Laufs. Der Verlauf des Planers bleibt unverändert, so
-    wirkt die Nachricht nicht in spätere Planungen hinein."""
-    return {"output": TextAnswer(message=OFF_TOPIC_MESSAGE), "answer": OFF_TOPIC_MESSAGE}
+    """Fachfremde Nachricht bzw. Frage zum Innenleben: feste Absage statt eines Planer-Laufs. Der Verlauf des Planers
+    bleibt unverändert, so wirkt die Nachricht nicht in spätere Planungen hinein."""
+    prefetch = state.get("prefetch") or Prefetch()
+    message = INTERNAL_MESSAGE if prefetch.off_topic == "intern" else OFF_TOPIC_MESSAGE
+    return {"output": TextAnswer(message=message), "answer": message}
 
 
 def _tool_context(runtime: Runtime[AgentDeps]) -> Any:

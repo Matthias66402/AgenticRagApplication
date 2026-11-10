@@ -16,7 +16,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.models.test import TestModel
 
 from app.agent.deps import AgentDeps
-from app.agent.graph import NETWORK_ERROR_MESSAGE, OFF_TOPIC_MESSAGE, planner_graph
+from app.agent.graph import INTERNAL_MESSAGE, NETWORK_ERROR_MESSAGE, OFF_TOPIC_MESSAGE, planner_graph
 from app.agent.intake import Prefetch, conversation_context, intake_agent, intake_prompt, plan_prefetch
 from app.agent.plan_schema import TransportMode
 from app.agent.planner import planner_agent
@@ -143,9 +143,9 @@ GARMISCH = {"display_name": "Garmisch-Partenkirchen", "lat": "47.49", "lon": "11
 
 def intake_finds(
     *places: dict[str, Any], research: dict[str, Any] | None = None, start_date: str | None = None,
-    off_topic: bool = False,
+    topic: str = "outdoor",
 ) -> Any:
-    output = {"places": list(places), "research": research, "start_date": start_date, "topic": "fachfremd" if off_topic else "outdoor"}
+    output = {"places": list(places), "research": research, "start_date": start_date, "topic": topic}
     return intake_agent.override(model=TestModel(custom_output_args=output))
 
 
@@ -232,11 +232,28 @@ async def test_intake_failure_falls_back_to_planner(deps: AgentDeps) -> None:
 
 async def test_off_topic_message_is_rejected_without_planner(deps: AgentDeps) -> None:
     """Fachfremde Nachricht: feste Absage, kein Planer-Lauf, Verlauf des Planers bleibt unverändert."""
-    with intake_finds({"place_name": "Afrika"}, off_topic=True), planner_agent.override(model=scripted_model(QUESTION)):
+    with intake_finds({"place_name": "Afrika"}, topic="fachfremd"), planner_agent.override(model=scripted_model(QUESTION)):
         assert await visited_nodes(deps, "Wo leben Löwen?") == ["intake", "reject_off_topic"]
         events, outcome = await collect("Wo leben Löwen?", deps)
     assert events == []
     assert outcome.answer == OFF_TOPIC_MESSAGE and outcome.history_json is None and outcome.error is None
+
+
+async def test_internal_question_is_rejected_without_planner(deps: AgentDeps) -> None:
+    """Frage nach Code bzw. Datenspeicherung: eigene feste Absage, kein Planer-Lauf (Abenteuer 196)."""
+    message = "Wo werden die gesamten Daten gespeichert?"
+    with intake_finds(topic="intern"), planner_agent.override(model=scripted_model(QUESTION)):
+        assert await visited_nodes(deps, message) == ["intake", "reject_off_topic"]
+        events, outcome = await collect(message, deps)
+    assert events == []
+    assert outcome.answer == INTERNAL_MESSAGE and outcome.history_json is None
+
+
+async def test_question_about_approach_reaches_planner(deps: AgentDeps) -> None:
+    """Wie der Planer aus Nutzersicht vorgeht, beantwortet er selbst."""
+    answer = ("answer_user", {"message": "Bei Fernwegen folge ich dem ausgeschilderten Verlauf aus OpenStreetMap."})
+    with intake_finds(topic="smalltalk"), planner_agent.override(model=scripted_model(answer)):
+        assert await visited_nodes(deps, "Wie wählst Du die Routen aus?") == ["intake", "planner", "finish_answer"]
 
 
 async def test_answer_ending_with_colon_is_retried(deps: AgentDeps) -> None:
@@ -254,6 +271,31 @@ async def test_announcement_instead_of_plan_is_retried(deps: AgentDeps) -> None:
     with planner_agent.override(model=scripted_model(("answer_user", {"message": announcement}), QUESTION)):
         _, outcome = await collect("Keine Ruhetage", deps)
     assert outcome.answer is None and outcome.question is not None
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        "Ich erkläre kurz, wie ich Routen auswähle und welche technischen Prinzipien dahinterstehen.",
+        "Erkläre kurz, wie Routen ausgewählt werden; gern mit einem konkreten Beispiel.",
+        "Ich erkläre konkret, welche Daten und Regeln ich nutze, und zeige es an einem Beispiel.",
+    ],
+)
+async def test_summary_instead_of_answer_is_retried(deps: AgentDeps, summary: str) -> None:
+    """Nur eine Inhaltsangabe der Antwort (Abenteuer 196): Das Modell muss die Erklärung selbst ausgeben."""
+    full = "Bei Fernwegen folge ich dem ausgeschilderten Verlauf, sonst berechnet ein Routing-Dienst die Strecke."
+    with planner_agent.override(
+        model=scripted_model(("answer_user", {"message": summary}), ("answer_user", {"message": full}))
+    ):
+        _, outcome = await collect("Wie wählst Du die Routen aus?", deps)
+    assert outcome.answer == full
+
+
+async def test_long_explanation_starting_with_announcement_is_accepted(deps: AgentDeps) -> None:
+    explanation = "Ich erkläre kurz, wie ich vorgehe: " + "Ich suche die Orte in OpenStreetMap und plane die Route. " * 8
+    with planner_agent.override(model=scripted_model(("answer_user", {"message": explanation}))):
+        _, outcome = await collect("Wie wählst Du die Routen aus?", deps)
+    assert outcome.answer == explanation.strip()
 
 
 def test_intake_context_from_history(deps: AgentDeps) -> None:

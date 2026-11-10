@@ -48,12 +48,26 @@
     {
       "id": "bahnauskunft",
       "message": "Welche Zugverbindungen gibt es morgen gegen 9 Uhr von Oldenburg nach Hannover?",
-      "expected_output": "answer_user"
+      "expected_output": "answer_user",
+      "train_query": true
     },
     {
       "id": "fachfremd",
       "message": "Wo leben Löwen in natürlicher Umgebung?",
-      "expected_output": "answer_user"
+      "expected_output": "answer_user",
+      "no_tools": true
+    },
+    {
+      "id": "interna",
+      "message": "Wo werden die gesamten Daten gespeichert? Welcher Code steht hinter der Routenwahl?",
+      "expected_output": "answer_user",
+      "no_tools": true
+    },
+    {
+      "id": "arbeitsweise",
+      "message": "Wie wählst Du die Routen aus?",
+      "expected_output": "answer_user",
+      "no_tools": true
     },
     {
       "id": "rad-zum-bahnhof",

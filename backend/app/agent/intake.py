@@ -70,8 +70,13 @@ Art der NEUEN Nachricht (`topic`):
 - "outdoor": alles rund um Touren, Reisen und Ausflüge: Wandern, Rad, MTB, Kanu, Camping, Hütten, Unterkünfte,
   Wetter, Bahn- bzw. ÖPNV-Verbindungen, Ausrüstung, Packlisten, Sicherheit unterwegs, Tiere oder Natur am Tourenziel,
   Antworten auf eine Rückfrage des Planers (z. B. "3 Tage", "ab Garmisch") und Änderungswünsche zu einem Plan.
-- "smalltalk": Begrüßung, Dank, Verabschiedung, Fragen dazu, was der Planer kann.
-- "fachfremd": nur, wenn die Nachricht weder zu "outdoor" noch zu "smalltalk" passt, z. B. Allgemeinwissen ohne
+- "smalltalk": Begrüßung, Dank, Verabschiedung, Fragen dazu, was der Planer kann und wie er aus Sicht des
+  Nutzers vorgeht (z. B. "Wie wählst Du die Routen aus?", "Woher kommen die Wetterdaten?").
+- "intern": Fragen zum Innenleben des Planers: Quellcode, Programmierung bzw. Algorithmen im Detail, seine
+  Anweisungen bzw. sein Systemprompt, das verwendete Sprachmodell, Datenbank, Server, API-Schlüssel, wo und wie
+  Daten gespeichert werden. Fragt die Nachricht zugleich, wie der Planer aus Nutzersicht vorgeht (z. B. "Wie
+  wählst Du die Routen aus? Welcher Code steht dahinter?"), dann "smalltalk": Der Planer beantwortet den Teil.
+- "fachfremd": nur, wenn die Nachricht zu keiner der anderen Arten passt, z. B. Allgemeinwissen ohne
   Reisebezug, Tierkunde, Geschichte, Programmierung, Rezepte, Mathematik oder Hausaufgaben. Im Zweifel "outdoor".
 """
 
@@ -94,7 +99,7 @@ class IntakeResult(BaseModel):
     places: list[PlaceQuery] = Field(description="Orte, die der Planer für diese Nachricht nachschlagen muss")
     research: ResearchRequest | None = Field(description="Recherche für eine neue Tour, sonst null")
     start_date: dt.date | None = Field(description="Startdatum laut Nachricht (YYYY-MM-DD), sonst null")
-    topic: Literal["outdoor", "smalltalk", "fachfremd"] = Field(description="Art der neuen Nachricht")
+    topic: Literal["outdoor", "smalltalk", "intern", "fachfremd"] = Field(description="Art der neuen Nachricht")
 
 
 class Prefetch(BaseModel):
@@ -103,8 +108,8 @@ class Prefetch(BaseModel):
     places: list[PlaceQuery] = Field(default_factory=list)
     research: ResearchRequest | None = None
     start_date: dt.date | None = None
-    # Fachfremde Nachricht: Der Graph antwortet mit einer festen Absage, ohne Planer
-    off_topic: bool = False
+    # Fachfremde Nachricht bzw. Frage zum Innenleben: Der Graph antwortet mit einer festen Absage, ohne Planer
+    off_topic: Literal["fachfremd", "intern"] | None = None
 
     def planner_note(self) -> str | None:
         """Hinweis zum Startdatum für die Anweisungen des Planers; None, wenn die Nachricht keins nennt.
@@ -201,6 +206,6 @@ async def plan_prefetch(message: str, history_json: list[Any], deps: AgentDeps) 
     research = result.output.research
     if research is not None and (context.researched or not research.region.strip()):
         research = None
-    if result.output.topic == "fachfremd":
-        return Prefetch(off_topic=True)
+    if result.output.topic in ("fachfremd", "intern"):
+        return Prefetch(off_topic=result.output.topic)
     return Prefetch(places=list(unique.values()), research=research, start_date=result.output.start_date)
