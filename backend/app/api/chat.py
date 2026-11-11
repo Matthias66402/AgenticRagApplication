@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
+from pydantic_ai import ModelMessagesTypeAdapter, ModelRequest, UserPromptPart
 
 from app.agent.data_sources import data_sources
 from app.agent.deps import AgentDeps
@@ -91,6 +92,17 @@ def outcome_kind(outcome: RunOutcome) -> str:
     return "plan" if outcome.plan else "question" if outcome.question else "answer" if outcome.answer else "none"
 
 
+def with_unanswered_message(history: list[Any], user_message: str) -> list[Any]:
+    """Verlauf plus die Nachricht eines gescheiterten Laufs (z. B. Netzwerkfehler).
+
+    Sonst fehlt sie dem Planer beim nächsten Lauf: In Abenteuer 201 ging so "Nein, bitte bis nach Kaliningrad"
+    verloren, auf "bitte erneut versuchen!" fragte er dieselbe Frage noch einmal. PydanticAI hängt die nächste
+    Nachricht an diese offene Anfrage an.
+    """
+    request = ModelRequest(parts=[UserPromptPart(user_message)])
+    return [*history, *ModelMessagesTypeAdapter.dump_python([request], mode="json")]
+
+
 async def save_outcome(adventure_id: int, user_message: str, outcome: RunOutcome, deps: AgentDeps) -> None:
     async with SessionLocal() as session:
         adventure = await session.get(Adventure, adventure_id)
@@ -107,6 +119,8 @@ async def save_outcome(adventure_id: int, user_message: str, outcome: RunOutcome
         )
         if outcome.history_json is not None:
             adventure.agent_history = outcome.history_json
+        elif outcome.error:
+            adventure.agent_history = with_unanswered_message(adventure.agent_history or [], user_message)
         # deps.routes enthält auch die vorher offenen Routen (siehe chat); ohne Plan bleiben alle für den nächsten Lauf
         adventure.pending_routes = {} if outcome.plan is not None else deps.routes
         if outcome.plan is not None:

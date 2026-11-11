@@ -142,6 +142,7 @@ async def import_routes(names: list[str], force: bool) -> None:
                 route = route or LongDistanceRoute(name=entry["name"])
                 route.aliases = entry["aliases"]
                 route.route_type = entry["route_type"]
+                route.course = entry.get("course", "")
                 route.relation_ids = entry["relation_ids"]
                 route.ways = ways
                 route.length_km = round(ways_length_km(ways), 1)

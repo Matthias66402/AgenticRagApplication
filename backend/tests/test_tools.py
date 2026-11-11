@@ -399,6 +399,7 @@ async def add_test_route() -> None:
     async with SessionLocal() as session:
         session.add(LongDistanceRoute(
             name="Testweg", aliases=["Testradweg", "T1"], route_type="bicycle", relation_ids=[99],
+            course="Nordheim – Südheim",
             ways=[[[1, 2, 3], [[53.10, 8.20], [53.00, 8.25], [52.90, 8.20]]]], length_km=23.2,
         ))  # fmt: skip
         await session.commit()

@@ -567,6 +567,31 @@ async def test_follow_up_uses_history(client: httpx.AsyncClient, user_headers: d
     assert seen_history[1] > seen_history[0]
 
 
+async def test_message_of_failed_run_stays_in_history(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+    """Abenteuer 201: Nach einem Netzwerkfehler fehlte die Antwort des Nutzers, "bitte erneut versuchen!" führte zur
+    selben Rückfrage."""
+    adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
+    prompts: list[list[str]] = []
+    calls = 0
+
+    def respond(messages: list[ModelMessage]) -> Step:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise httpx.ConnectError("Verbindung abgelehnt")
+        prompts.append([
+            part.content for message in messages if isinstance(message, ModelRequest)
+            for part in message.parts if isinstance(part, UserPromptPart)
+        ])  # fmt: skip
+        return ("ask_user", {"question": "Bis wohin?"})
+
+    with planner_agent.override(model=streaming_model(respond)):
+        for text in ["Radtour ab Swinemünde", "Bis nach Kaliningrad", "bitte erneut versuchen!"]:
+            await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": text})
+
+    assert prompts[1] == ["Radtour ab Swinemünde", "Bis nach Kaliningrad", "bitte erneut versuchen!"]
+
+
 async def test_agent_knows_home_and_default_transport(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     instructions: list[str] = []
@@ -603,7 +628,7 @@ async def test_agent_knows_imported_long_distance_routes(
         await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Tour"})
 
     assert "Fernwege mit vorab importiertem Verlauf" in instructions[0]
-    assert "- Testweg (bicycle), auch: Testradweg, T1" in instructions[0]
+    assert "- Testweg (bicycle), auch: Testradweg, T1; Verlauf: Nordheim – Südheim" in instructions[0]
 
 
 async def set_default_transport(client: httpx.AsyncClient, headers: dict[str, str], transport: str | None) -> None:

@@ -542,14 +542,17 @@ async def catalog_overview(deps: AgentDeps) -> str:
 
     Ohne diese Liste rät das Modell Namen wie "North Sea Cycle Route", die erst eine langsame Live-Suche auslösen.
     """
-    columns = (LongDistanceRoute.name, LongDistanceRoute.aliases, LongDistanceRoute.route_type)
+    columns = (LongDistanceRoute.name, LongDistanceRoute.aliases, LongDistanceRoute.route_type, LongDistanceRoute.course)
     try:
         async with deps.session_factory() as session:
             rows = (await session.execute(select(*columns).order_by(LongDistanceRoute.name))).all()
     except SQLAlchemyError:
         return ""
     return "\n".join(
-        f"- {r.name} ({r.route_type})" + (f", auch: {', '.join(r.aliases)}" if r.aliases else "") for r in rows
+        f"- {r.name} ({r.route_type})"
+        + (f", auch: {', '.join(r.aliases)}" if r.aliases else "")
+        + (f"; Verlauf: {r.course}" if r.course else "")
+        for r in rows
     )
 
 

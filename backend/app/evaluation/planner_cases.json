@@ -31,6 +31,14 @@
       "named_route": true
     },
     {
+      "id": "rad-ostsee-polen-richtung",
+      "message": "Ich möchte ab dem 15.07.2027 einen Fahrradurlaub auf dem Ostseeradweg unternehmen. Ich möchte in Swinemünde starten und eine 10-Tägige Tour richtung Osten unternehmen und täglich zwischen 50 und 75km fahren, in Ausnahmen auch bis zu 85km. Übernachten möchte ich primär auf Campingplätzen, ggf. auch in Hostels",
+      "expected_output": "final_plan",
+      "transport": "cycling",
+      "duration_days": 10,
+      "named_route": true
+    },
+    {
       "id": "rad-westkueste-daenemark",
       "message": "Ich möchte ab dem 1. Mai 2027 eine Radtour möglichst nah entlang der Nordsee-Küste Richtung norden fahren, in Tonder starten und in hurup enden. Täglich möchte ich zwischen 50 und 60 km fahren. Und übernachten möchte ich möglichst in Shelters, sonst auf Campingplätzen, als Fallback in Hotels.",
       "expected_output": "final_plan",

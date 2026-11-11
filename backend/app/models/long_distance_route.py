@@ -23,6 +23,9 @@ class LongDistanceRoute(Base):
     aliases: Mapped[list[str]] = mapped_column(JSONB, default=list)
     # OSM-Routentyp: bicycle oder hiking
     route_type: Mapped[str] = mapped_column(String(20))
+    # Verlauf in Kurzform für den Planer, z. B. "Flensburg – Lübeck – … – Krynica Morska (vor der Grenze zu Russland)";
+    # zeigt, wo der Fernweg endet, wenn der Nutzer nur eine Richtung nennt
+    course: Mapped[str] = mapped_column(String(300), default="", server_default="")
     relation_ids: Mapped[list[int]] = mapped_column(JSONB, default=list)
     # Wege der Relationen: [[Knoten-IDs], [[lat, lon], ...]]; groß, daher nur bei Bedarf geladen
     ways: Mapped[list[Any]] = deferred(mapped_column(JSONB, default=list, nullable=False))
