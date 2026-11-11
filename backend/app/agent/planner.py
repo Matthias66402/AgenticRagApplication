@@ -55,6 +55,10 @@ ROUTE_WISH_HINT = "Der Nutzer wünscht einen bestimmten Verlauf"
 # Fortbewegungsarten, für die plan_route einem Fernweg folgen kann (app.agent.tools.named_route.ROUTE_TYPES)
 NAMED_ROUTE_TRANSPORT = {TransportMode.cycling, TransportMode.mtb, TransportMode.hiking}
 
+# Anfang des Hinweises von check_stays, daran erkennbar, ob er in diesem Lauf schon kam
+STAYS_HINT = "Diese Etappen enden ohne Unterkunft"
+# Etappenende mit dem Namen eines Kilometerpunkts statt eines Orts ("Checkpoint km 171", "km 171")
+CHECKPOINT_NAME = re.compile(r"\bcheckpoint\b|^\s*km\s*\d", re.IGNORECASE)
 # Luftlinie einer Etappe darf ihre Distanz höchstens um diesen Faktor plus Rest überschreiten (gerundete Werte,
 # Etappenende an der Unterkunft statt am berechneten Wegpunkt)
 STAGE_STRAIGHT_TOLERANCE = 1.1
@@ -166,7 +170,11 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der Plan nutzt dann diese Route;
    passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
 3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart (Ausweichwünsche wie
-   "sonst Camping, sonst Hotel" als `fallback_types`, alle Etappenenden im selben Schritt). Danach `plan_route`
+   "sonst Camping, sonst Hotel" als `fallback_types`, alle Etappenenden im selben Schritt). Findet sich an einem
+   Etappenende nichts, verschiebe es (benachbarte Checkpoints bzw. Orte an der Strecke, Tagesdistanz beachten) und
+   suche dort erneut, statt eine Etappe ohne Unterkunft zu planen. Wird dadurch eine Etappe länger als gewünscht,
+   verschiebe auch die Nachbaretappen (andere Checkpoints bzw. Unterkünfte), statt nachzufragen: Rückfragen zur
+   Etappenlänge nur, wenn schon die Gesamtstrecke nicht in Tage × gewünschte Tagesdistanz passt. Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
    Hüttenwanderung (Wandern, Übernachtung hut bzw. bivouac, Start ungleich Ziel): statt Schritt 2 und 3 nach
    `geocode` gleich `plan_hut_tour` mit Anzahl der Nächte (= Tage - 1), im selben Schritt `get_weather` für das
@@ -646,6 +654,36 @@ def check_stage_distances(output: AdventurePlan) -> None:
         )
 
 
+def check_stays(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Jede Etappe vor dem letzten Tag endet an einer Unterkunft bzw. einem realen Ort.
+
+    Abenteuer 201 (Ostseeradweg, Evaluation): Fand `find_accommodation` an einem Checkpoint nichts, übernahm
+    gpt-5-mini die Etappe trotzdem, ohne Unterkunft und mit "Checkpoint km 171" als Etappenende, statt das Ende ein
+    Stück zu verschieben. Der Hinweis kommt pro Lauf nur einmal: Gibt es in der Gegend wirklich nichts, geht der
+    Plan beim zweiten Mal mit Hinweis in den Notizen durch.
+    """
+    if output.duration_days < 2 or output_rejected(ctx, "final_plan", STAYS_HINT):
+        return
+    missing = [
+        f"Tag {stage.day} ({stage.end.name})"
+        for stage in output.stages[:-1]
+        if stage.accommodation is None or CHECKPOINT_NAME.search(stage.end.name)
+    ]
+    if missing:
+        raise ModelRetry(
+            f"{STAYS_HINT}: {', '.join(missing)}. Verschiebe jedes dieser Etappenenden entlang der Strecke, statt "
+            "die Etappe ohne Unterkunft zu lassen: Suche mit `find_accommodation` (gewünschte Art und "
+            "`fallback_types`, alle im selben Schritt) an zwei bis drei Punkten etwas früher und später, bei einem "
+            "Fernweg an benachbarten `named_route.checkpoints` (etwa 10-25 km davor bzw. danach), sonst an "
+            "größeren Orten an der Strecke (`geocode`). Wähle den Treffer, bei dem diese und die folgende Etappe "
+            "am besten zur gewünschten Tagesdistanz passen, und nur wenn sich so nichts findet, einen Radius bis "
+            "10 km. Rufe dann `plan_route` mit den Unterkünften als Wegpunkten erneut auf und übernimm Distanzen "
+            "aus den `segments`. Etappenende ist die Unterkunft bzw. der Ort, kein Checkpoint. Findet sich "
+            "nirgends etwas, gib den Plan erneut über `final_plan` aus und schreibe das in die Etappen-Notizen; "
+            "er wird dann angenommen."
+        )
+
+
 def check_weather(history_json: list[Any], output: AdventurePlan) -> None:
     """Jeder Tourplan mit Wetter: gpt-5-mini ließ `get_weather` in gut der Hälfte der Pläne weg (Abenteuer 196).
     Liefert Open-Meteo einen Fehler, geht der Plan ohne Wetter durch."""
@@ -805,6 +843,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             }
         )
         check_stage_distances(output)
+        check_stays(ctx, output)
         output = check_blocked_sections(ctx, output)
         limit = MAX_STAGE_KM[output.transport]
         too_long = [s for s in output.stages if s.distance_km > limit]

@@ -19,7 +19,7 @@ from app.agent.plan_schema import AdventurePlan
 from app.schemas.adventure import plan_places
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_route_wish, check_stage_distances, planner_agent
+from app.agent.planner import check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_route_wish, check_stage_distances, check_stays, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools import weather as weather_module
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
@@ -866,6 +866,32 @@ def test_route_wish_hint_comes_once_per_run() -> None:
     ctx.messages.append(ModelRequest(parts=[UserPromptPart(content="Und zurück auch entlang der Hunte")]))
     with pytest.raises(ModelRetry):
         check_route_wish(ctx, plan)
+
+
+def test_stage_without_stay_is_moved_once_per_run() -> None:
+    """Abenteuer 201: Etappenende "Checkpoint km 171" ohne Unterkunft. Einmal pro Lauf zurück mit dem Auftrag, das
+    Etappenende zu verschieben; findet sich nirgends etwas, geht der Plan beim zweiten Mal durch."""
+    data = make_plan(days=3, accommodation="camping") | {"transport": "cycling"}
+    stay = {"name": "Kemping Bartek", "type": "camping", "lat": 54.04, "lon": 14.87}
+    data["stages"][0] |= {"accommodation": stay}
+    data["stages"][1] |= {"end": {"name": "Checkpoint km 171", "lat": 54.3, "lon": 16.3}}
+    plan = AdventurePlan.model_validate(data)
+    ctx = route_wish_context("Radtour an der Ostsee", {"transport": "cycling"})
+    with pytest.raises(ModelRetry, match=r"Tag 2 \(Checkpoint km 171\)\. Verschiebe") as hint:
+        check_stays(ctx, plan)
+    ctx.messages.append(ModelRequest(parts=[
+        ToolReturnPart(tool_name="final_plan", content=str(hint.value), tool_call_id="c1", outcome="retried"),
+    ]))  # fmt: skip
+    check_stays(ctx, plan)
+
+    # Unterkunft vorhanden, aber Etappenende als Kilometerpunkt benannt
+    data["stages"][1] |= {"accommodation": stay, "end": {"name": "km 171", "lat": 54.3, "lon": 16.3}}
+    with pytest.raises(ModelRetry, match=r"Tag 2 \(km 171\)"):
+        check_stays(route_wish_context("Radtour", {"transport": "cycling"}), AdventurePlan.model_validate(data))
+    # Letzter Tag und Tagestouren brauchen keine Unterkunft
+    data["stages"][1]["end"] = {"name": "Kołobrzeg", "lat": 54.18, "lon": 15.58}
+    check_stays(route_wish_context("Radtour", {"transport": "cycling"}), AdventurePlan.model_validate(data))
+    check_stays(route_wish_context("Radtour", {"transport": "cycling"}), AdventurePlan.model_validate(make_plan()))
 
 
 def test_no_text_answer_after_rejected_plan() -> None:

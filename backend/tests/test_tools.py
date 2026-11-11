@@ -767,7 +767,9 @@ async def test_accommodation_fallback_types_in_order(ctx) -> None:
     respx.get(geocode_module.NOMINATIM_URL).respond(json=[])
     result = await find_accommodation(ctx, 57.0, 9.0, AccommodationType.bivouac, fallback_types=types)
     assert result["results"] == []
-    assert result["note"] == "Keine Unterkünfte vom Typ bivouac, camping, hotel im Umkreis von 5 km."
+    assert result["note"] == (
+        f"Keine Unterkünfte vom Typ bivouac, camping, hotel im Umkreis von 5 km. {accommodation.SHIFT_STAGE_HINT}"
+    )
 
 
 @respx.mock

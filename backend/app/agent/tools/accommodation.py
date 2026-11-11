@@ -53,6 +53,11 @@ DETAIL_TAGS = [
 ]  # fmt: skip
 
 MAX_RESULTS = 8
+# Hinweis bei leerem Ergebnis: Etappenende verschieben statt eine Etappe ohne Unterkunft zu planen (Abenteuer 201)
+SHIFT_STAGE_HINT = (
+    "Verschiebe das Etappenende entlang der Strecke (z. B. auf einen Checkpoint 10-25 km davor oder danach bzw. "
+    "einen größeren Ort an der Strecke) und suche dort erneut, statt die Etappe ohne Unterkunft zu planen."
+)
 NOMINATIM_LIMIT = 40  # Nominatim sortiert nicht nach Entfernung → großzügig abfragen, selbst sortieren
 
 # Overpass (Ersatzquelle)
@@ -222,7 +227,9 @@ async def find_accommodation(
                 result["note"] = f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km."
             return result
         empty.append(current.value)
-    result["note"] = f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km."
+    result["note"] = (
+        f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km. {SHIFT_STAGE_HINT}"
+    )
     return result
 
 
