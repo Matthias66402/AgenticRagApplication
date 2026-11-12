@@ -19,7 +19,7 @@ from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnsw
 from app.schemas.adventure import plan_places
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import QUIET_WORDS, ROUTE_WORDS, check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_quiet_wish, check_route_wish, check_stage_distances, check_stays, planner_agent
+from app.agent.planner import QUIET_WORDS, ROUTE_WORDS, check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_quiet_wish, check_round_trip, check_route_wish, check_stage_distances, check_stays, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools import weather as weather_module
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
@@ -841,7 +841,8 @@ def quiet_context(messages: list[str], *calls: dict[str, Any]) -> SimpleNamespac
         history.append(ModelRequest(parts=[ToolReturnPart(
             tool_name="plan_route", content={"route_id": f"r-{index}", "distance_km": 61.2}, tool_call_id=f"c{index}",
         )]))  # fmt: skip
-    return SimpleNamespace(messages=history)
+    settings = get_settings().model_copy(update={"avoid_main_roads_enabled": True})
+    return SimpleNamespace(messages=history, deps=SimpleNamespace(settings=settings))
 
 
 def test_quiet_wish_requires_avoid_main_roads() -> None:
@@ -898,6 +899,40 @@ def test_two_routes_for_same_stretch_are_rejected() -> None:
         check_duplicate_routes(ctx, plan.model_copy(update={"route_ids": ["r-hafen", "r-direkt"]}))
     check_duplicate_routes(ctx, plan.model_copy(update={"route_ids": ["r-hafen", "r-weiter"]}))
     check_duplicate_routes(ctx, plan.model_copy(update={"route_ids": ["r-runde-ost", "r-runde-west"]}))
+
+
+def test_round_trip_on_same_way_back_is_rejected_once() -> None:
+    """Abenteuer 210: Oldenburg → Bad Zwischenahn → Apen → Oldenburg, Apen hinter Bad Zwischenahn: Rückweg über
+    dieselbe Strecke. Einmal pro Lauf zurück; wünscht der Nutzer ausdrücklich denselben Weg, geht der Plan durch."""
+    oldenburg, zwischenahn, apen = [53.139, 8.215], [53.185, 8.003], [53.221, 7.81]
+    routes = {
+        "r-210": [oldenburg, zwischenahn, apen, zwischenahn, oldenburg],
+        "r-211": [oldenburg, zwischenahn, [53.258, 7.927], [53.256, 8.115], [53.247, 8.202], oldenburg],
+        "r-hin": [oldenburg, zwischenahn, apen],
+        "r-zurueck": [apen, zwischenahn, oldenburg],
+    }
+    plan = AdventurePlan.model_validate(make_plan() | {"transport": "cycling"})
+    ctx = SimpleNamespace(
+        deps=SimpleNamespace(routes=routes),
+        messages=[ModelRequest(parts=[UserPromptPart(content="Rundtour über Bad Zwischenahn, anderer Rückweg")])],
+    )
+    with pytest.raises(ModelRetry, match="Schleife") as hint:
+        check_round_trip(ctx, plan.model_copy(update={"route_ids": ["r-210"]}))
+    # Auf zwei Etappen bzw. Routen verteilt ebenso
+    with pytest.raises(ModelRetry):
+        check_round_trip(ctx, plan.model_copy(update={"route_ids": ["r-hin", "r-zurueck"]}))
+    check_round_trip(ctx, plan.model_copy(update={"route_ids": ["r-211"]}))
+    check_round_trip(ctx, plan.model_copy(update={"route_ids": ["r-hin"]}))  # keine Rundtour
+
+    ctx.messages.append(ModelRequest(parts=[
+        ToolReturnPart(tool_name="final_plan", content=str(hint.value), tool_call_id="c1", outcome="retried"),
+    ]))  # fmt: skip
+    check_round_trip(ctx, plan.model_copy(update={"route_ids": ["r-210"]}))
+
+    same_way = SimpleNamespace(deps=ctx.deps, messages=[
+        ModelRequest(parts=[UserPromptPart(content="Nach Apen und auf demselben Weg zurück")]),
+    ])  # fmt: skip
+    check_round_trip(same_way, plan.model_copy(update={"route_ids": ["r-210"]}))
 
 
 def test_route_wish_hint_comes_once_per_run() -> None:

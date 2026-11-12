@@ -21,7 +21,7 @@ from app.agent.tools.common import haversine_km
 from app.agent.tools.huts import MIN_HUT_TOUR_KM, plan_hut_tour
 from app.agent.tools.named_route import catalog_overview
 from app.agent.tools.research import research_knowledge
-from app.agent.tools.routing import estimate_hiking_time, plan_route
+from app.agent.tools.routing import LOOP_MAX_DOUBLED_SHARE, doubled_km, estimate_hiking_time, is_loop, plan_route
 from app.agent.tools.sun import sun_times
 from app.agent.tools.transit import find_train_connections
 from app.agent.tools.weather import get_weather
@@ -53,6 +53,14 @@ QUIET_WORDS = re.compile(
     re.IGNORECASE,
 )
 QUIET_WISH_HINT = "Der Nutzer möchte Hauptstraßen meiden"
+# Ausdrücklicher Wunsch, auf demselben Weg zurückzufahren: dann ist eine doppelt befahrene Rundtour gewollt
+SAME_WAY_BACK = re.compile(
+    r"(gleiche[nm]?|selbe[nm]?|denselben|derselben|demselben) (weg|strecke|route)"
+    r"|auf dem hinweg zurück|hin und zurück auf",
+    re.IGNORECASE,
+)
+# Anfang des Hinweises von check_round_trip, daran erkennbar, ob er in diesem Lauf schon kam
+ROUND_TRIP_HINT = "Die Rundtour führt zum großen Teil auf demselben Weg zurück"
 # Zwei Routen gelten als Varianten derselben Strecke, wenn Start und Ziel je höchstens ROUTE_SAME_END_KM auseinander
 # liegen und mindestens ROUTE_DUPLICATE_SHARE der Punkte der einen höchstens ROUTE_SHARED_KM neben der anderen
 ROUTE_SAME_END_KM = 1.0
@@ -176,8 +184,12 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Wünscht der Nutzer ruhige Wege, wenig Verkehr bzw. möglichst keine (befahrenen) Hauptstraßen, übergib bei jedem
    `plan_route` dieser Tour `avoid_main_roads` true, auch bei späteren Änderungen, und gib danach ohne Rückfrage
    den Plan aus. Nenne in Zusammenfassung bzw. Notizen die km an Hauptstraßen aus `main_roads` (vorher und
-   nachher) und die größten Abschnitte. Behaupte nie, Du hättest eine Route ruhiger neu berechnet, wenn Du
-   `plan_route` nicht mit `avoid_main_roads` bzw. anderen Wegpunkten aufgerufen hast.
+   nachher) und die größten Abschnitte; fehlt `main_roads`, sag laut Hinweis, dass sie nicht geprüft wurden.
+   Behaupte nie, Du hättest eine Route ruhiger neu berechnet, wenn Du `plan_route` nicht mit `avoid_main_roads`
+   bzw. anderen Wegpunkten aufgerufen hast.
+   Rundtour (Start = Ziel): Wähle Zwischenorte, die zusammen eine Schleife bilden (z. B. hin über einen Ort im
+   Westen, zurück über einen im Norden), nicht hintereinander auf einer Linie: Sonst führt der Rückweg über
+   dieselbe Strecke. `round_trip.doubled_km` zeigt, wie viel doppelt gefahren wird; folge dem Hinweis dazu.
    Rufe es zuerst mit Start, den vom Nutzer genannten Zwischenorten und dem Ziel auf (ohne selbst gewählte
    Etappenorte): Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
    die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
@@ -516,7 +528,7 @@ def check_quiet_wish(ctx: RunContext[AgentDeps], output: AdventurePlan | Clarifi
     und fragte zweimal, ob es noch strenger sein soll. Fernweg-Touren (route_name) sind ausgenommen; der Hinweis kommt
     pro Lauf nur einmal.
     """
-    if not user_mentions(ctx, QUIET_WORDS):
+    if not ctx.deps.settings.avoid_main_roads_enabled or not user_mentions(ctx, QUIET_WORDS):
         return
     if any(output_rejected(ctx, name, QUIET_WISH_HINT) for name in ("final_plan", "ask_user", "answer_user")):
         return
@@ -669,6 +681,28 @@ def check_duplicate_routes(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
                     f"route_ids enthält mit {first} und {second} zwei Routen für dieselbe Strecke; Karte und GPX "
                     "zeigen dann beide. Übernimm nur die Route, zu der Etappen, Distanz und Beschreibung passen."
                 )
+
+
+def check_round_trip(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
+    """Rundtour (Start = Ziel), die überwiegend auf demselben Weg zurückführt, geht einmal pro Lauf zurück.
+
+    Abenteuer 210: "Rundtour über Bad Zwischenahn, anderer Rückweg" wurde Oldenburg → Bad Zwischenahn → Apen →
+    Oldenburg; Apen liegt hinter Bad Zwischenahn, 47 von 54 km wurden zweimal gefahren. Mit dem Hinweis von
+    `plan_route` allein ist das nicht sicher: Er geht zwischen vielen Aufrufen leicht unter.
+    """
+    if user_mentions(ctx, SAME_WAY_BACK) or output_rejected(ctx, "final_plan", ROUND_TRIP_HINT):
+        return
+    track = [point for rid in dict.fromkeys(output.route_ids) for point in ctx.deps.routes.get(rid, [])]
+    if not is_loop(track):
+        return
+    doubled, total = doubled_km(track)
+    if total and doubled / total >= LOOP_MAX_DOUBLED_SHARE:
+        raise ModelRetry(
+            f"{ROUND_TRIP_HINT}: {doubled:.0f} von {total:.0f} km werden hin und zurück gefahren. Wähle "
+            "Zwischenorte, die eine Schleife bilden (seitlich versetzt statt hintereinander auf einer Linie), rufe "
+            "`plan_route` damit auf und gib den Plan mit der neuen route_id aus. Geht es nicht anders (z. B. "
+            "Sackgasse), nenne den doppelt gefahrenen Abschnitt in den Notizen."
+        )
 
 
 def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) -> AdventurePlan:
@@ -906,6 +940,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         check_route_wish(ctx, output)
         check_quiet_wish(ctx, output)
         check_duplicate_routes(ctx, output)
+        check_round_trip(ctx, output)
         if (output.outbound_journey or output.return_journey) and not used_tool(ctx, "find_train_connections"):
             raise ModelRetry(
                 "An- und Rückreise nur mit Verbindungen aus `find_train_connections` angeben. "

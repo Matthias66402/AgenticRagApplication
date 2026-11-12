@@ -46,6 +46,14 @@ GUIDED_CONCURRENCY = 3
 QUIET_ROUNDS = 3
 QUIET_DETOUR_COST = 0.5
 QUIET_MAX_DETOUR = 0.4
+# Rundtour: Start und Ziel höchstens LOOP_END_KM auseinander. Doppelt gefahren ist ein Punkt der Route, wenn ein
+# mindestens DOUBLED_MIN_GAP_M weiter entlang der Route liegender Punkt höchstens DOUBLED_NEAR_M neben ihm liegt
+# (Abtastung alle DOUBLED_STEP_M). Ab LOOP_MAX_DOUBLED_SHARE doppelt gefahren gilt sie als Hin- und Rückweg.
+LOOP_END_KM = 2.0
+DOUBLED_STEP_M = 25.0
+DOUBLED_NEAR_M = 40.0
+DOUBLED_MIN_GAP_M = 1500.0
+LOOP_MAX_DOUBLED_SHARE = 0.2
 # Höhen-Hysterese für selbst berechnete Höhenmeter (filtert Messrauschen der Höhendaten)
 ELEVATION_HYSTERESIS_M = 10.0
 
@@ -226,6 +234,59 @@ def checkpoints(geometry: list[list[float]], transport: TransportMode) -> list[d
             result.append({"km": round(travelled), "lat": round(b[0], 5), "lon": round(b[1], 5)})
             next_mark += spacing
     return result
+
+
+def is_loop(geometry: list[list[float]]) -> bool:
+    """Start und Ziel (fast) gleich: Rundtour."""
+    return len(geometry) > 1 and haversine_km(*geometry[0][:2], *geometry[-1][:2]) <= LOOP_END_KM
+
+
+def doubled_km(geometry: list[list[float]]) -> tuple[float, float]:
+    """(doppelt gefahrene km, Gesamt-km): Teile der Route, die sie an anderer Stelle noch einmal befährt.
+
+    Abenteuer 210: Rundtour Oldenburg → Bad Zwischenahn → Apen → Oldenburg; Apen liegt hinter Bad Zwischenahn, der
+    Rückweg führte über dieselbe Strecke zurück (47 von 54 km doppelt). Hin und zurück zählen beide Richtungen.
+    """
+    if len(geometry) < 2:
+        return 0.0, 0.0
+    lat0 = math.radians(geometry[0][0])
+    xy = [(p[1] * 111320.0 * math.cos(lat0), p[0] * 110540.0) for p in geometry]
+    samples = [xy[0]]
+    carry = 0.0  # Strecke seit der letzten Abtastung
+    for a, b in zip(xy, xy[1:]):
+        length = math.dist(a, b)
+        position = DOUBLED_STEP_M - carry
+        while position <= length:
+            t = position / length
+            samples.append((a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])))
+            position += DOUBLED_STEP_M
+        carry = length - (position - DOUBLED_STEP_M)
+    cell = DOUBLED_NEAR_M
+    grid: dict[tuple[int, int], list[int]] = {}
+    for index, (x, y) in enumerate(samples):
+        grid.setdefault((int(x // cell), int(y // cell)), []).append(index)
+    gap = DOUBLED_MIN_GAP_M / DOUBLED_STEP_M
+    doubled = 0
+    for index, (x, y) in enumerate(samples):
+        cx, cy = int(x // cell), int(y // cell)
+        if any(
+            abs(other - index) >= gap and math.dist(samples[other], (x, y)) <= DOUBLED_NEAR_M
+            for dx in (-1, 0, 1) for dy in (-1, 0, 1) for other in grid.get((cx + dx, cy + dy), ())
+        ):  # fmt: skip
+            doubled += 1
+    return doubled * DOUBLED_STEP_M / 1000, len(samples) * DOUBLED_STEP_M / 1000
+
+
+def loop_note(doubled: float, total: float) -> str | None:
+    """Hinweis für den Agenten, wenn eine Rundtour zu großen Teilen auf demselben Weg zurückführt."""
+    if not total or doubled / total < LOOP_MAX_DOUBLED_SHARE:
+        return None
+    return (
+        f"Rundtour: {doubled:.0f} von {total:.0f} km ({100 * doubled / total:.0f} %) führen hin und zurück über "
+        "dieselbe Strecke. Wünscht der Nutzer einen Rundkurs bzw. anderen Rückweg, wähle Zwischenorte, die eine "
+        "Schleife bilden (seitlich versetzt statt hintereinander auf einer Linie; nicht über einen Ort hinaus und "
+        "denselben Weg zurück), und rufe `plan_route` erneut auf."
+    )
 
 
 def _estimate(waypoints: list[Coordinate], transport: TransportMode, reason: str) -> dict[str, Any]:
@@ -541,7 +602,8 @@ async def plan_route(
         mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon,
         checkpoints: Punkte entlang der Route mit Kilometerstand für die Wahl der Etappenorte, blocked_sections:
         Abschnitte, auf denen der Fernweg laut Kartendaten nicht befahrbar ist und die Route ihn umfährt);
-        mit avoid_main_roads zusätzlich main_roads (km auf bzw. neben Hauptstraßen vorher/nachher, größte Abschnitte).
+        mit avoid_main_roads zusätzlich main_roads (km auf bzw. neben Hauptstraßen vorher/nachher, größte Abschnitte);
+        bei Rundtouren (Start = Ziel, mit Zwischenorten) round_trip (km bzw. % hin und zurück auf derselben Strecke).
     """
     if len(waypoints) < 2:
         return tool_error("Mindestens Start und Ziel als Wegpunkte angeben.")
@@ -561,7 +623,13 @@ async def plan_route(
     named_route: dict[str, Any] | None = None
     direct: tuple[RouteData | None, str, list[str]] | None = None
     main_roads: dict[str, Any] | None = None
-    if avoid_main_roads and transport not in ROUTE_TYPES:
+    if avoid_main_roads and not ctx.deps.settings.avoid_main_roads_enabled:
+        notes.append(
+            "Hauptstraßen meiden ist derzeit abgeschaltet (Kartendienst unzuverlässig): normal geroutet, Abschnitte "
+            "an bzw. neben Hauptstraßen sind möglich. Sag das dem Nutzer, statt eine Route abseits von Hauptstraßen "
+            "zu versprechen; ein erneuter Aufruf ändert daran nichts."
+        )
+    elif avoid_main_roads and transport not in ROUTE_TYPES:
         notes.append("avoid_main_roads gilt nur für Rad, MTB und Wandern; normal geroutet.")
     elif avoid_main_roads and route_name:
         # Der Fernweg legt den Verlauf fest; Ausweichen würde ihn verlassen
@@ -699,6 +767,12 @@ async def plan_route(
         result["named_route"] = named_route
     if main_roads:
         result["main_roads"] = main_roads
+    track = ctx.deps.routes[route_id]
+    if len(waypoints) > 2 and is_loop(track):
+        doubled, total = doubled_km(track)
+        result["round_trip"] = {"doubled_km": round(doubled, 1), "doubled_pct": round(100 * doubled / (total or 1))}
+        if note := loop_note(doubled, total):
+            notes.append(note)
     if notes:
         result["note"] = " ".join(notes)
     return result

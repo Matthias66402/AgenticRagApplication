@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     nominatim_user_agent: str = "AgenticRagAdventurePlanner/0.1"
     overpass_urls: str = "https://overpass-api.de/api/interpreter,https://overpass.private.coffee/api/interpreter"
     http_timeout_seconds: float = 20.0
+    # plan_route(avoid_main_roads): Hauptstraßen per Overpass erkennen und umfahren. Aus, solange Overpass oft
+    # überlastet ist (Abenteuer 210: Aufrufe ~35 s oder ohne Ergebnis); dann normal geroutet mit Hinweis.
+    avoid_main_roads_enabled: bool = False
     # Kartenhintergrund im PDF-Export; leer = nur Route und Marker ohne Karte
     map_tile_url: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
     # Fahrplanauskunft für An- und Abreise (MOTIS-API, z. B. Transitous); leer = aus

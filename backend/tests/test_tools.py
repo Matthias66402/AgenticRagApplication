@@ -60,6 +60,12 @@ async def ctx():
         )
 
 
+
+@pytest.fixture
+def quiet_roads_enabled(ctx) -> None:
+    ctx.deps.settings = ctx.deps.settings.model_copy(update={"avoid_main_roads_enabled": True})
+
+
 @respx.mock
 async def test_geocode(ctx) -> None:
     geocode_module._cache.clear()
@@ -269,6 +275,7 @@ def brouter_quiet(request: httpx.Request) -> httpx.Response:
 
 
 @respx.mock
+@pytest.mark.usefixtures("quiet_roads_enabled")
 async def test_route_avoids_main_roads(ctx) -> None:
     """Abenteuer 206: Radwege neben Landesstraßen zählen als Hauptstraße; BRouter bekommt sie als Sperrflächen."""
     ors = respx.post(url__startswith="https://api.openrouteservice.org/").respond(json=ORS_OK)
@@ -293,6 +300,7 @@ async def test_route_avoids_main_roads(ctx) -> None:
 
 
 @respx.mock
+@pytest.mark.usefixtures("quiet_roads_enabled")
 async def test_main_roads_reported_when_unavoidable(ctx) -> None:
     """Weicht BRouter nicht aus, bleibt die Route und der Plan nennt die km an der Landesstraße."""
     respx.post(url__startswith="https://overpass").respond(json=MAIN_ROAD)
@@ -303,6 +311,7 @@ async def test_main_roads_reported_when_unavoidable(ctx) -> None:
 
 
 @respx.mock
+@pytest.mark.usefixtures("quiet_roads_enabled")
 async def test_avoid_main_roads_without_overpass_says_so(ctx) -> None:
     respx.post(url__startswith="https://overpass").respond(status_code=504)
     respx.get(BROUTER_URL).respond(json=BROUTER_OK)
@@ -313,10 +322,50 @@ async def test_avoid_main_roads_without_overpass_says_so(ctx) -> None:
 
 
 @respx.mock
+@pytest.mark.usefixtures("quiet_roads_enabled")
 async def test_avoid_main_roads_not_for_car(ctx) -> None:
     respx.post(ORS_URL.format(profile="driving-car")).respond(json=ORS_OK)
     result = await plan_route(ctx, [START, END], TransportMode.car, avoid_main_roads=True)
     assert "main_roads" not in result and "nur für Rad" in result["note"]
+
+
+@respx.mock
+async def test_avoid_main_roads_switched_off(ctx) -> None:
+    """Abgeschaltet (Overpass unzuverlässig): normal mit ORS geroutet, ohne Overpass, mit ehrlichem Hinweis."""
+    overpass = respx.post(url__startswith="https://overpass").respond(json=MAIN_ROAD)
+    respx.post(ORS_URL.format(profile="cycling-regular")).respond(json=ORS_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, avoid_main_roads=True)
+    assert not overpass.called and "main_roads" not in result
+    assert result["source"].startswith("OpenRouteService")
+    assert "derzeit abgeschaltet" in result["note"]
+
+
+def ors_track(*points: tuple[float, float], km: float) -> dict[str, Any]:
+    feature = ORS_OK["features"][0]
+    summary = {"distance": km * 1000, "duration": km * 200}
+    return {"features": [{
+        "geometry": {"coordinates": [[lon, lat, 5] for lat, lon in points]},
+        "properties": feature["properties"] | {"summary": summary},
+    }]}  # fmt: skip
+
+
+@respx.mock
+async def test_round_trip_back_on_same_way_is_reported(ctx) -> None:
+    """Abenteuer 210: Rundtour über zwei Orte hintereinander auf einer Linie → Rückweg über dieselbe Strecke."""
+    there_and_back = ors_track((53.1, 8.2), (53.0, 8.2), (52.9, 8.2), (53.1, 8.2), km=44)
+    respx.post(ORS_URL.format(profile="cycling-regular")).respond(json=there_and_back)
+    result = await plan_route(ctx, [START, VIA, END, START], TransportMode.cycling)
+    assert result["round_trip"]["doubled_pct"] > 90
+    assert "Schleife" in result["note"]
+
+
+@respx.mock
+async def test_round_trip_loop_passes(ctx) -> None:
+    loop = ors_track((53.1, 8.2), (53.0, 8.2), (53.0, 8.4), (53.1, 8.4), (53.1, 8.2), km=58)
+    respx.post(ORS_URL.format(profile="cycling-regular")).respond(json=loop)
+    result = await plan_route(ctx, [START, VIA, Coordinate(lat=53.1, lon=8.4), START], TransportMode.cycling)
+    assert result["round_trip"]["doubled_km"] < 0.5  # nur der Treffpunkt von Start und Ziel
+    assert "note" not in result
 
 
 def test_elevation_gain_ignores_noise() -> None:
