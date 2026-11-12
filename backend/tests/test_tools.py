@@ -551,6 +551,45 @@ async def test_named_route_from_catalog_without_overpass(ctx) -> None:
 
 
 @respx.mock
+async def test_catalog_route_far_away_is_searched_live_by_its_other_names(ctx) -> None:
+    """Abenteuer 216/217: "Ostsee-Radweg" Malmö → Kalmar traf den Katalogeintrag in Deutschland und Polen; in Schweden
+    heißt derselbe Fernweg EuroVelo 10. Hier: "Testradweg" (Katalog bei Oldenburg) weit im Norden als "T1"."""
+    await add_test_route()
+    north = [(55.0, 10.0), (55.0, 10.1), (55.0, 10.2)]
+
+    def waymarked(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/list/by_area"):
+            return httpx.Response(200, json={"results": [
+                {"type": "relation", "id": 7, "ref": "T1", "name": "T1 Nordroute - Abschnitt 3", "group": "INT"},
+            ]})  # fmt: skip
+        way = {"id": 70, "geometry": [{"lat": lat, "lon": lon} for lat, lon in north]}
+        return httpx.Response(200, json={"route": {"route_type": "linear", "ways": [waymarked_way(way)]}})
+
+    respx.get(url__startswith=WAYMARKED_CYCLING).mock(side_effect=waymarked)
+    respx.get(BROUTER_URL).mock(side_effect=brouter_echo)
+    start, end = (Coordinate(lat=lat, lon=lon) for lat, lon in (north[0], north[-1]))
+    result = await plan_route(ctx, [start, end], TransportMode.cycling, "Testradweg")
+    assert result["named_route"]["routes"] == ["T1 Nordroute"]
+    assert result["named_route"]["source"] == "waymarked" and result["named_route"]["off_route_legs"] == []
+
+
+def test_gap_in_named_route_is_bridged() -> None:
+    """EuroVelo 10 ist in OpenStreetMap zwischen Karlshamn und Ronneby unterbrochen (36 km): Die Lücke wird frei
+    geroutet, statt das ganze Teilstück abseits des Fernwegs zu berechnen. Zu große Lücken bleiben abseits."""
+    west = [(56.2, 14.0 + i * 0.1) for i in range(9)]  # bis 14.8° O
+    east = [(56.2, 15.3 + i * 0.1) for i in range(9)]  # ab 15.3° O, ~31 km Lücke
+    graph = named_route.build_graph(["EuroVelo 10"], [(list(range(1, 10)), west), (list(range(11, 20)), east)])
+    route_guide = named_route.guide(graph, [west[0], east[-1]])
+    assert route_guide.off_route_legs == [] and route_guide.gap_legs == ["Teilstück 1: 31 km"]
+    assert route_guide.on_route_km == pytest.approx(99, abs=1)  # ohne die Lücke
+    assert west[-1] in route_guide.waypoints and east[0] in route_guide.waypoints
+
+    far_east = [(56.2, 15.6 + i * 0.1) for i in range(9)]  # ~50 km Lücke
+    graph = named_route.build_graph(["EuroVelo 10"], [(list(range(1, 10)), west), (list(range(11, 20)), far_east)])
+    assert named_route.guide(graph, [west[0], far_east[-1]]).off_route_legs == [1]
+
+
+@respx.mock
 async def test_unroutable_section_of_named_route_is_routed_freely(ctx) -> None:
     """Erreicht kein Router einen Stützpunkt (Radweg über den Abschlussdeich), wird nur dieser Abschnitt zwischen
     Anfang und Ende geroutet, statt die ganze Route ohne Fernweg zu berechnen."""

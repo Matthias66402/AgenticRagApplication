@@ -19,7 +19,7 @@ from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnsw
 from app.schemas.adventure import plan_places
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import QUIET_WORDS, ROUTE_WORDS, check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_quiet_wish, check_round_trip, check_route_wish, check_stage_distances, check_stays, planner_agent
+from app.agent.planner import DAILY_DISTANCE, FIXED_DURATION, QUIET_WORDS, ROUTE_WORDS, check_blocked_sections, check_duplicate_routes, check_duration_question, check_no_plan_evasion, check_quiet_wish, check_round_trip, check_route_wish, check_stage_distances, check_stays, check_wild_camping_question, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools import weather as weather_module
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
@@ -873,6 +873,28 @@ def test_quiet_wish_requires_avoid_main_roads() -> None:
     check_quiet_wish(quiet_context(wish, normal), menu)
 
 
+def test_no_duration_question_with_daily_distance() -> None:
+    """Abenteuer 217: Tagesetappen 60-75 km vorgegeben, keine Dauer → "8 oder 9 Tage?" geht einmal zurück."""
+    wish = "Malmö nach Kalmar. Tagesetappen sollten zwischen 60 und 75km liegen, ggf. bis 85km."
+    route = {"waypoints": [], "transport": "cycling"}
+    question = ClarificationQuestion(question="Lieber 8 Tage mit zwei langen Etappen oder 9 Tage im Wunschbereich?")
+    ctx = quiet_context([wish], route)
+    with pytest.raises(ModelRetry, match="Tage ergeben sich aus der Strecke") as hint:
+        check_duration_question(ctx, question)
+    ctx.messages.append(ModelRequest(parts=[
+        ToolReturnPart(tool_name="ask_user", content=str(hint.value), tool_call_id="c9", outcome="retried"),
+    ]))  # fmt: skip
+    check_duration_question(ctx, question)  # einmal pro Lauf
+
+    check_duration_question(quiet_context([wish]), question)  # vor der ersten Route (z. B. fehlendes Datum)
+    check_duration_question(quiet_context([wish + " Ich habe 5 Tage Zeit."], route), question)  # Widerspruch
+    check_duration_question(quiet_context(["Von Malmö nach Kalmar"], route), question)  # keine Tagesdistanz
+    other = ClarificationQuestion(question="Ab welchem Datum möchtest du starten?")
+    check_duration_question(quiet_context([wish], route), other)
+    assert DAILY_DISTANCE.search("Täglich möchte ich zwischen 55 und 75km fahren")
+    assert DAILY_DISTANCE.search("etwa 70 km pro Tag") and not FIXED_DURATION.search("ab 15.07.2027 mehrtägig")
+
+
 def test_main_road_wish_is_no_route_wish() -> None:
     """"entlang von Hauptstraßen" ist kein Verlauf, für den ein Fernweg gesucht werden müsste."""
     assert not ROUTE_WORDS.search("so wenig wie möglich entlang von befahrenen Hauptstraßen entlang fahren")
@@ -975,6 +997,24 @@ def test_stage_without_stay_is_moved_once_per_run() -> None:
     data["stages"][1]["end"] = {"name": "Kołobrzeg", "lat": 54.18, "lon": 15.58}
     check_stays(route_wish_context("Radtour", {"transport": "cycling"}), AdventurePlan.model_validate(data))
     check_stays(route_wish_context("Radtour", {"transport": "cycling"}), AdventurePlan.model_validate(make_plan()))
+
+
+def test_wild_camping_allowed_needs_no_stay_and_no_question() -> None:
+    """Abenteuer 217: "Ist kein Campingplatz verfügbar, nutze ich das Jedermannsrecht": Etappenende ohne Platz ist in
+    Ordnung (nur kein Checkpoint als Name), und die Rückfrage "Wildcampen oder Etappen verschieben?" geht zurück."""
+    wish = "Malmö nach Kalmar mit Camping. Ist kein Campingplatz verfügbar, nutze ich das Jedermannsrecht."
+    data = make_plan(days=3, accommodation="camping") | {"transport": "cycling"}
+    data["stages"][1] |= {"end": {"name": "Ronneby", "lat": 56.21, "lon": 15.28}}
+    check_stays(route_wish_context(wish, {"transport": "cycling"}), AdventurePlan.model_validate(data))
+    data["stages"][1] |= {"end": {"name": "Checkpoint km 340", "lat": 56.21, "lon": 15.28}}
+    with pytest.raises(ModelRetry, match="Checkpoint km 340"):
+        check_stays(route_wish_context(wish, {"transport": "cycling"}), AdventurePlan.model_validate(data))
+
+    question = ClarificationQuestion(question="Für Nacht 6 kein Campingplatz: A) Wildcampen, B) Etappen verschieben?")
+    route = {"waypoints": [], "transport": "cycling"}
+    with pytest.raises(ModelRetry, match="Wildcampen"):
+        check_wild_camping_question(quiet_context([wish], route), question)
+    check_wild_camping_question(quiet_context(["Malmö nach Kalmar mit Camping"], route), question)
 
 
 def test_no_text_answer_after_rejected_plan() -> None:

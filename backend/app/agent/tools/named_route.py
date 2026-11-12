@@ -15,6 +15,7 @@ import math
 import re
 import time
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -76,6 +77,10 @@ PARTIAL_MIN_SHARE = 0.5
 # Endpunkte 43 und 67 km landeinwärts lagen, über 226 km am Fernweg entlang geführt.
 PARTIAL_MAX_DETACHED_SHARE = 0.5
 GAP_KM = 0.1  # Lücken zwischen Wegen der Relation bis zu dieser Länge werden überbrückt
+# Größere Lücken im Verlauf (in OSM unterbrochene Relation, z. B. EuroVelo 10 zwischen Karlshamn und Ronneby) bis zu
+# dieser Länge frei geroutet überbrücken, höchstens MAX_BRIDGES je Teilstück
+BRIDGE_KM = 40.0
+MAX_BRIDGES = 5
 # Pfad länger als 6 × Luftlinie (+2 km) → Fernweg verbindet die Punkte nicht sinnvoll (z. B. nur über das andere
 # Flussufer weit entfernt). Küstenwege um Halbinseln und Buchten sind oft 3-4 × so lang wie die Luftlinie
 # (Nordseeküsten-Radweg Emden–Wilhelmshaven: 201 km bei 62 km Luftlinie); genau diesen Verlauf will der Nutzer.
@@ -183,6 +188,7 @@ class RouteGraph:
     coords: dict[int, Point] = field(default_factory=dict, repr=False)
     edges: dict[int, dict[int, float]] = field(default_factory=dict, repr=False)
     grid: dict[tuple[int, int], list[int]] = field(default_factory=dict, repr=False)
+    _components: dict[int, int] = field(default_factory=dict, repr=False)
 
     def _connect(self, a: int, b: int) -> None:
         km = haversine_km(*self.coords[a], *self.coords[b])
@@ -219,6 +225,55 @@ class RouteGraph:
         scale = math.cos(math.radians(lat))
         node = min(self.coords, key=lambda n: (self.coords[n][0] - lat) ** 2 + ((self.coords[n][1] - lon) * scale) ** 2)
         return node, haversine_km(lat, lon, *self.coords[node])
+
+    def component(self, node: int) -> int:
+        """Nummer des zusammenhängenden Teils des Netzes, zu dem der Knoten gehört (beim ersten Aufruf berechnet)."""
+        if not self._components:
+            for first in self.coords:
+                if first in self._components:
+                    continue
+                number = len(self._components)
+                self._components[first] = number
+                stack = [first]
+                while stack:
+                    for neighbour in self.edges.get(stack.pop(), {}):
+                        if neighbour not in self._components:
+                            self._components[neighbour] = number
+                            stack.append(neighbour)
+        return self._components[node]
+
+    def bridged_path(self, start: int, goal: int) -> tuple[list[Point], float, float] | None:
+        """Pfad über Lücken im Verlauf: im Teil des Starts bis zum Knoten, der dem Ziel am nächsten liegt, von dort
+        zum nächsten Knoten eines anderen Teils (höchstens BRIDGE_KM, näher am Ziel) usw.; (Punkte, km auf dem
+        Fernweg, km in Lücken) oder None."""
+        target = self.coords[goal]
+        points: list[Point] = []
+        on_route = gaps = 0.0
+        current = start
+        for _ in range(MAX_BRIDGES):
+            part = self.component(current)
+            if part == self.component(goal):
+                break
+            members = [n for n, c in self._components.items() if c == part]
+            exit_ = min(members, key=lambda n: haversine_km(*self.coords[n], *target))
+            remaining = haversine_km(*self.coords[exit_], *target)
+            candidates = [
+                (km, node) for km, node in self.nearby(*self.coords[exit_], BRIDGE_KM)
+                if self.component(node) != part and haversine_km(*self.coords[node], *target) < remaining
+            ]  # fmt: skip
+            path = self.shortest_path(current, exit_)
+            if not candidates or path is None:
+                return None
+            km, current = min(candidates)
+            points += path[0]
+            on_route += path[1]
+            gaps += km
+        else:
+            return None
+        path = self.shortest_path(current, goal)
+        if path is None:
+            return None
+        return points + path[0], on_route + path[1], gaps
 
     def shortest_path(self, start: int, goal: int) -> tuple[list[Point], float] | None:
         """Dijkstra innerhalb des Fernwegs; (Punkte, Länge in km) oder None ohne Verbindung."""
@@ -336,8 +391,9 @@ def not_found_message(name: str, ranked: list[tuple[int, str]]) -> str:
 
 
 async def waymarked_graph(
-    ctx: RunContext[AgentDeps], name: str, transport: TransportMode, waypoints: list[Point]
-) -> RouteGraph | str:
+    ctx: RunContext[AgentDeps], name: str, transport: TransportMode, waypoints: list[Point],
+    other_names: Sequence[str] = (),
+) -> RouteGraph | str:  # fmt: skip
     """Graph aus Waymarked Trails: Routen im Umkreis der Wegpunkte, davon die passenden mit ihrem Verlauf.
 
     `list/by_area` liefert nur die obersten Relationen (Superrouten mit allen Abschnitten).
@@ -352,7 +408,11 @@ async def waymarked_graph(
             params = {"bbox": area_bbox(point, MAX_SNAP_KM), "limit": 100}
             for result in (await waymarked_get(http, user_agent, f"{base}/list/by_area", params)).get("results", []):
                 near.setdefault((base, result["id"]), result)
-    found = {key: r for key, r in near.items() if matches(name, {"name": r.get("name", ""), "ref": r.get("ref", "")})}
+    wanted = [name, *other_names]
+    found = {
+        key: r for key, r in near.items()
+        if any(matches(n, {"name": r.get("name", ""), "ref": r.get("ref", "")}) for n in wanted)
+    }  # fmt: skip
     if not found:
         return not_found_message(name, [(WAYMARKED_GROUP_RANK.get(r.get("group"), 4), short_name(r)) for r in near.values()])
 
@@ -445,6 +505,8 @@ class Guide:
     partial_legs: list[str] = field(default_factory=list)
     # Teilstücke, auf denen der Fernweg ein Umweg gegenüber der direkten Route wäre (frei geroutet), je ein Text
     detour_legs: list[str] = field(default_factory=list)
+    # Teilstücke mit Lücken im Verlauf des Fernwegs, die frei geroutet überbrückt wurden, je ein Text
+    gap_legs: list[str] = field(default_factory=list)
 
 
 def partial_path(
@@ -481,6 +543,7 @@ def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | No
     long_connections = []
     partial_legs = []
     detour_legs = []
+    gap_legs: list[str] = []
     for leg, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
         path = None
         straight = haversine_km(*a, *b)
@@ -505,6 +568,9 @@ def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | No
                 for i, snap in ((leg, start), (leg + 1, goal)) if snap[1] > MAX_SNAP_KM
             ]
             path = graph.shortest_path(start[0], goal[0])
+            if path is None and (bridged := graph.bridged_path(start[0], goal[0])):
+                path = bridged[0], bridged[1]
+                gap_legs.append(f"Teilstück {leg + 1}: {bridged[2]:.0f} km")
             if path is None:
                 reasons.append(f"Teilstück {leg + 1}: keine Verbindung auf dem Fernweg")
             elif path[1] > DETOUR_LIMIT * straight + 2:
@@ -533,7 +599,8 @@ def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | No
             off_route_legs.append(leg + 1)
         dense.append(b)
     return Guide(
-        dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)), partial_legs, detour_legs
+        dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)), partial_legs, detour_legs,
+        gap_legs,
     )
 
 
@@ -560,8 +627,10 @@ async def catalog_overview(deps: AgentDeps) -> str:
 _catalog_graphs: dict[int, tuple[Any, RouteGraph]] = {}
 
 
-async def catalog_graph(ctx: RunContext[AgentDeps], name: str, transport: TransportMode) -> RouteGraph | None:
-    """Graph eines importierten Fernwegs oder None, wenn der Katalog keinen passenden enthält."""
+async def catalog_graph(
+    ctx: RunContext[AgentDeps], name: str, transport: TransportMode
+) -> tuple[RouteGraph, list[str]] | None:
+    """(Graph, Name und weitere Namen) eines importierten Fernwegs oder None, wenn der Katalog keinen passenden enthält."""
     route_types = ROUTE_TYPES[transport].split("|")
     columns = (LongDistanceRoute.id, LongDistanceRoute.name, LongDistanceRoute.aliases, LongDistanceRoute.imported_at)
     try:
@@ -570,9 +639,10 @@ async def catalog_graph(ctx: RunContext[AgentDeps], name: str, transport: Transp
             match = next((r for r in rows if catalog_matches(name, [r.name, *r.aliases])), None)
             if match is None:
                 return None
+            names = [match.name, *match.aliases]
             cached = _catalog_graphs.get(match.id)
             if cached and cached[0] == match.imported_at:
-                return cached[1]
+                return cached[1], names
             ways = await session.scalar(select(LongDistanceRoute.ways).where(LongDistanceRoute.id == match.id))
     except SQLAlchemyError:
         return None  # z. B. Tabelle fehlt (Migration nicht ausgeführt) → live über Waymarked Trails bzw. Overpass
@@ -580,12 +650,12 @@ async def catalog_graph(ctx: RunContext[AgentDeps], name: str, transport: Transp
         [match.name], [(nodes, [(lat, lon) for lat, lon in coords]) for nodes, coords in ways or []], "catalog"
     )
     _catalog_graphs[match.id] = (match.imported_at, graph)
-    return graph
+    return graph, names
 
 
 async def overpass_graph(
     ctx: RunContext[AgentDeps], name: str, transport: TransportMode, waypoints: list[Point],
-    bbox: tuple[float, float, float, float],
+    bbox: tuple[float, float, float, float], other_names: Sequence[str] = (),
 ) -> RouteGraph | str:  # fmt: skip
     """Graph aus Overpass (Ersatz für Waymarked Trails): Relationen nahe den Wegpunkten, Wege in der Bounding Box.
 
@@ -594,7 +664,7 @@ async def overpass_graph(
     """
     data = await query_overpass(ctx, relation_query(transport, waypoints), timeout=OVERPASS_TIMEOUT_SECONDS)
     relations = [r for r in data.get("elements", []) if r.get("type") == "relation"]
-    found = [r for r in relations if matches(name, r.get("tags", {}))]
+    found = [r for r in relations if any(matches(n, r.get("tags", {})) for n in (name, *other_names))]
     if not found:
         tags = [r.get("tags", {}) for r in relations]
         return not_found_message(name, [(NETWORK_RANK.get(t.get("network", ""), 3), short_name(t)) for t in tags])
@@ -619,8 +689,15 @@ async def load_route_graph(
     Raises:
         httpx.HTTPError: Weder Waymarked Trails noch Overpass erreichbar.
     """
-    if graph := await catalog_graph(ctx, name, transport):
-        return graph
+    other_names: list[str] = []
+    if catalog := await catalog_graph(ctx, name, transport):
+        graph, names = catalog
+        if any(graph.snap(point) for point in waypoints):
+            return graph
+        # Abenteuer 216/217: "Ostsee-Radweg" von Malmö nach Kalmar traf den Katalogeintrag (Deutschland, Polen),
+        # 500 km entfernt; die Route folgte ihm "an keiner Stelle". Dort gilt derselbe Fernweg unter anderem Namen
+        # (EuroVelo 10), daher live mit allen Namen des Eintrags suchen.
+        other_names = [n for n in names if normalize(n) != normalize(name)]
 
     bbox = search_bbox(waypoints)
     key = (normalize(name), transport, bbox)
@@ -629,9 +706,9 @@ async def load_route_graph(
         return cached[1]
 
     try:
-        graph = await waymarked_graph(ctx, name, transport, waypoints)
+        graph = await waymarked_graph(ctx, name, transport, waypoints, other_names)
     except (httpx.HTTPError, ValueError, KeyError):  # nicht erreichbar oder unerwartete Antwort
-        graph = await overpass_graph(ctx, name, transport, waypoints, bbox)
+        graph = await overpass_graph(ctx, name, transport, waypoints, bbox, other_names)
     if isinstance(graph, str):
         return graph
     if len(_graphs) >= MAX_CACHED_GRAPHS:

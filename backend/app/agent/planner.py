@@ -59,6 +59,23 @@ SAME_WAY_BACK = re.compile(
     r"|auf dem hinweg zurück|hin und zurück auf",
     re.IGNORECASE,
 )
+# Gewünschte Tagesdistanz ("täglich zwischen 55 und 75 km", "Tagesetappen 60-75 km", "70 km pro Tag") bzw. feste Dauer
+DAILY_DISTANCE = re.compile(
+    r"(täglich|tages\w*|pro tag|am tag|je tag)[^.!?]{0,40}?\d+\s*km|\d+\s*km[^.!?]{0,20}?(pro tag|am tag|täglich)",
+    re.IGNORECASE,
+)
+FIXED_DURATION = re.compile(
+    r"\b(\d+|eine[nm]?|zwei|drei|vier|fünf|sechs|sieben|acht|neun|zehn|elf|zwölf|\w+zehn)\s*"
+    r"(tage?n?|übernachtungen|nächte|wochen?)\b",
+    re.IGNORECASE,
+)
+DURATION_QUESTION = re.compile(r"\btage?n?\b|dauer|etappe", re.IGNORECASE)
+# Anfang des Hinweises von check_duration_question, daran erkennbar, ob er in diesem Lauf schon kam
+DURATION_HINT = "Der Nutzer hat eine Tagesdistanz, aber keine Dauer vorgegeben"
+# Nutzer erlaubt Übernachten ohne Platz: Etappenende ohne gefundene Unterkunft ist dann in Ordnung
+WILD_CAMPING = re.compile(r"jedermannsrecht|wild\s?(zelten|campen|camping)|allemansrätt", re.IGNORECASE)
+STAY_QUESTION = re.compile(r"campingplatz|unterkunft|wildcamp|wild zelten|jedermannsrecht|biwak", re.IGNORECASE)
+WILD_CAMPING_HINT = "Der Nutzer erlaubt Wildcampen"
 # Anfang des Hinweises von check_round_trip, daran erkennbar, ob er in diesem Lauf schon kam
 ROUND_TRIP_HINT = "Die Rundtour führt zum großen Teil auf demselben Weg zurück"
 # Zwei Routen gelten als Varianten derselben Strecke, wenn Start und Ziel je höchstens ROUTE_SAME_END_KM auseinander
@@ -181,6 +198,12 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Nennt der Nutzer mehrere Fernwege bzw. Abschnitte nacheinander (z. B. "erst den Hunteradweg, dann den
    Weserradweg"), übergib alle in Reihenfolge der Tour, durch Komma getrennt ("Hunteradweg, Weserradweg"), statt
    nur einen davon zu nehmen.
+   Rufe es zuerst mit Start, den vom Nutzer genannten Zwischenorten und dem Ziel auf (ohne selbst gewählte
+   Etappenorte): Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
+   die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
+   Tagesdistanz und suche Unterkünfte dort (`find_accommodation`, max. 5 km), statt Orte zu raten. Findet das Tool
+   den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der Plan nutzt dann diese Route;
+   passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
    Wünscht der Nutzer ruhige Wege, wenig Verkehr bzw. möglichst keine (befahrenen) Hauptstraßen, übergib bei jedem
    `plan_route` dieser Tour `avoid_main_roads` true, auch bei späteren Änderungen, und gib danach ohne Rückfrage
    den Plan aus. Nenne in Zusammenfassung bzw. Notizen die km an Hauptstraßen aus `main_roads` (vorher und
@@ -190,12 +213,6 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Rundtour (Start = Ziel): Wähle Zwischenorte, die zusammen eine Schleife bilden (z. B. hin über einen Ort im
    Westen, zurück über einen im Norden), nicht hintereinander auf einer Linie: Sonst führt der Rückweg über
    dieselbe Strecke. `round_trip.doubled_km` zeigt, wie viel doppelt gefahren wird; folge dem Hinweis dazu.
-   Rufe es zuerst mit Start, den vom Nutzer genannten Zwischenorten und dem Ziel auf (ohne selbst gewählte
-   Etappenorte): Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
-   die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
-   Tagesdistanz und suche Unterkünfte dort (`find_accommodation`, max. 5 km), statt Orte zu raten. Findet das Tool
-   den Namen nicht, wiederhole mit dem passenden Namen aus der genannten Liste. Der Plan nutzt dann diese Route;
-   passt sie nicht in die gewünschten Tage, frage nach mehr Tagen statt abzukürzen.
 3. Mehrtägig: `find_accommodation` nahe den Etappenenden mit der gewünschten Übernachtungsart (Ausweichwünsche wie
    "sonst Camping, sonst Hotel" als `fallback_types`, alle Etappenenden im selben Schritt). Findet sich an einem
    Etappenende nichts, verschiebe es (benachbarte Checkpoints bzw. Orte an der Strecke, Tagesdistanz beachten) und
@@ -203,6 +220,9 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    verschiebe auch die Nachbaretappen (andere Checkpoints bzw. Unterkünfte), statt nachzufragen: Rückfragen zur
    Etappenlänge nur, wenn schon die Gesamtstrecke nicht in Tage × gewünschte Tagesdistanz passt. Danach `plan_route`
    erneut mit den gewählten Unterkünften als Wegpunkte, damit die `segments` die echten Etappenwerte liefern.
+   Erlaubt der Nutzer Wildcampen (z. B. "sonst Jedermannsrecht", "sonst wild zelten"), ist ein Etappenende ohne
+   gefundene Unterkunft in Ordnung: Ende an einem realen Ort bei der gewünschten Tagesdistanz, in den Notizen
+   "Wildcampen (Jedermannsrecht)" samt Regeln aus der Recherche; frage dazu nicht nach.
    Hüttenwanderung (Wandern, Übernachtung hut bzw. bivouac, Start ungleich Ziel): statt Schritt 2 und 3 nach
    `geocode` gleich `plan_hut_tour` mit Anzahl der Nächte (= Tage - 1), im selben Schritt `get_weather` für das
    Gebiet (z. B. Startort) und den ganzen Zeitraum. Es wählt Hütten, die auf dem Weg liegen, und
@@ -350,6 +370,47 @@ def check_default_transport(ctx: RunContext[AgentDeps], output: PlannerOutput) -
             f"Der Nutzer hat weder Zug noch Bahn genannt, also ist das keine Bahnauskunft. Plane eine Tour mit seiner "
             f"Standard-Fortbewegungsart {label} (transport={transport})."
         )
+
+
+def check_duration_question(ctx: RunContext[AgentDeps], output: ClarificationQuestion) -> None:
+    """Mit Tagesdistanz und ohne feste Dauer ergeben sich die Tage aus der Strecke; einmal pro Lauf zurück.
+
+    Abenteuer 217: Malmö → Kalmar, "Tagesetappen zwischen 60 und 75 km, ggf. bis 85 km": Nach Route und Campingsuche
+    fragte gpt-5-mini "8 Tage mit zwei sehr langen Etappen oder 9 Tage im Wunschbereich?", statt die 9 Tage zu planen.
+    """
+    if (
+        not route_results(ctx)
+        or not DURATION_QUESTION.search(output.question)
+        or not user_mentions(ctx, DAILY_DISTANCE)
+        or user_mentions(ctx, FIXED_DURATION)
+        or output_rejected(ctx, "ask_user", DURATION_HINT)
+    ):
+        return
+    raise ModelRetry(
+        f"{DURATION_HINT}: Die Tage ergeben sich aus der Strecke. Frage nicht nach der Dauer oder Etappenlänge, sondern "
+        "wähle so viele Tage, dass die Etappen im gewünschten Bereich liegen (lieber einen Tag mehr als zu lange "
+        "Etappen), und gib den Plan über `final_plan` aus."
+    )
+
+
+def check_wild_camping_question(ctx: RunContext[AgentDeps], output: ClarificationQuestion) -> None:
+    """Hat der Nutzer Wildcampen erlaubt, wird nicht gefragt, ob an Etappenenden ohne Platz wild gecampt wird.
+
+    Abenteuer 217 (nachgespielt): "Ist kein Campingplatz verfügbar, nutze ich das Jedermannsrecht" → Rückfrage
+    "Nacht 6 ohne Campingplatz: A) Wildcampen, B) Etappen verschieben, C) einen Tag mehr?".
+    """
+    if (
+        not route_results(ctx)
+        or not STAY_QUESTION.search(output.question)
+        or not user_mentions(ctx, WILD_CAMPING)
+        or output_rejected(ctx, "ask_user", WILD_CAMPING_HINT)
+    ):
+        return
+    raise ModelRetry(
+        f"{WILD_CAMPING_HINT} (Jedermannsrecht), wo sich kein Platz findet. Frage nicht danach, sondern plane diese "
+        "Etappenenden an einem realen Ort bei der gewünschten Tagesdistanz, schreibe \"Wildcampen (Jedermannsrecht)\" "
+        "in die Etappen-Notizen und gib den Plan über `final_plan` aus."
+    )
 
 
 def found_connections(ctx: RunContext[AgentDeps]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -772,10 +833,12 @@ def check_stays(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
     """
     if output.duration_days < 2 or output_rejected(ctx, "final_plan", STAYS_HINT):
         return
+    # Mit erlaubtem Wildcampen darf die Unterkunft fehlen, das Etappenende muss trotzdem ein realer Ort sein
+    wild = user_mentions(ctx, WILD_CAMPING)
     missing = [
         f"Tag {stage.day} ({stage.end.name})"
         for stage in output.stages[:-1]
-        if stage.accommodation is None or CHECKPOINT_NAME.search(stage.end.name)
+        if (stage.accommodation is None and not wild) or CHECKPOINT_NAME.search(stage.end.name)
     ]
     if missing:
         raise ModelRetry(
@@ -918,6 +981,9 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         check_default_transport(ctx, output)
         if isinstance(output, (ClarificationQuestion, TextAnswer)):
             check_quiet_wish(ctx, output)
+        if isinstance(output, ClarificationQuestion):
+            check_duration_question(ctx, output)
+            check_wild_camping_question(ctx, output)
         if isinstance(output, TextAnswer):
             check_answer_complete(output)
             check_no_plan_evasion(ctx)

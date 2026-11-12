@@ -688,6 +688,13 @@ async def plan_route(
                         f"Abseits des Fernwegs normal angebunden: {', '.join(route_guide.long_connections)} bis zum "
                         "nächsten Punkt des Fernwegs (z. B. weil er vor dem Ziel endet)."
                     )
+                if route_guide.gap_legs:
+                    named_route["gap_legs"] = route_guide.gap_legs
+                    notes.append(
+                        "Der Verlauf des Fernwegs ist in OpenStreetMap unterbrochen; die Lücken sind normal geroutet "
+                        f"({'; '.join(route_guide.gap_legs)}). Die Route folgt sonst dem Fernweg; erwähne die "
+                        "Lücken kurz in den Notizen, ohne den Fernweg deshalb in Frage zu stellen."
+                    )
                 if route_guide.detour_legs:
                     named_route["detour_legs"] = route_guide.detour_legs
                     notes.append(
