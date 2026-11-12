@@ -15,11 +15,11 @@ from pydantic import ValidationError
 from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, ModelRetry, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
-from app.agent.plan_schema import AdventurePlan
+from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
 from app.schemas.adventure import plan_places
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
 from app.agent.research import research_agent
-from app.agent.planner import check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_route_wish, check_stage_distances, check_stays, planner_agent
+from app.agent.planner import QUIET_WORDS, ROUTE_WORDS, check_blocked_sections, check_duplicate_routes, check_no_plan_evasion, check_quiet_wish, check_route_wish, check_stage_distances, check_stays, planner_agent
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
 from app.agent.tools import weather as weather_module
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
@@ -831,6 +831,54 @@ def test_route_wish_requires_named_route_attempt() -> None:
     check_route_wish(route_wish_context("Von Emden nach Wilhelmshaven radeln", {"transport": "cycling"}), plan)
     car = plan.model_copy(update={"transport": "car"})
     check_route_wish(route_wish_context(coast, {"transport": "car"}), car)
+
+
+def quiet_context(messages: list[str], *calls: dict[str, Any]) -> SimpleNamespace:
+    """Verlauf mit Nutzernachrichten und plan_route-Aufrufen samt Ergebnis (route_id r-0, r-1, ...)."""
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content=m)]) for m in messages]
+    for index, args in enumerate(calls):
+        history.append(ModelResponse(parts=[ToolCallPart(tool_name="plan_route", args=args, tool_call_id=f"c{index}")]))
+        history.append(ModelRequest(parts=[ToolReturnPart(
+            tool_name="plan_route", content={"route_id": f"r-{index}", "distance_km": 61.2}, tool_call_id=f"c{index}",
+        )]))  # fmt: skip
+    return SimpleNamespace(messages=history)
+
+
+def test_quiet_wish_requires_avoid_main_roads() -> None:
+    """Abenteuer 206: dreimal dieselbe Route trotz "so wenig wie möglich Hauptstraßen", dazu Rückfragen."""
+    plan = AdventurePlan.model_validate(make_plan() | {"transport": "cycling", "route_ids": ["r-0"]})
+    wish = [
+        "Rundtour über Bad Zwischenahn, ca. 60 km",
+        "Gerne die Route anpassen, ich möchte so wenig wie möglich entlang von befahrenen Hauptstraßen fahren.",
+    ]
+    normal = {"transport": "cycling", "waypoints": []}
+    with pytest.raises(ModelRetry, match="avoid_main_roads"):
+        check_quiet_wish(quiet_context(wish, normal), plan)
+    # Rückfrage "soll ich noch strenger vorgehen?" statt neu zu routen
+    question = ClarificationQuestion(question="Soll ich noch strenger vorgehen?")
+    with pytest.raises(ModelRetry, match="avoid_main_roads"):
+        check_quiet_wish(quiet_context(wish, normal), question)
+    quiet = normal | {"avoid_main_roads": True}
+    check_quiet_wish(quiet_context(wish, normal, quiet), plan.model_copy(update={"route_ids": ["r-1"]}))
+    # Gilt weiter in späteren Nachrichten ("noch strenger"), ohne Wunsch keine Pflicht
+    check_quiet_wish(quiet_context([*wish, "Gerne noch strenger vorgehen."], quiet), plan)
+    check_quiet_wish(quiet_context(wish[:1], normal), plan)
+    # Rückfrage vor der ersten Route (fehlende Angaben) ist in Ordnung
+    check_quiet_wish(quiet_context(wish), question)
+    # Nachgespielt: ruhige Route berechnet, dann per answer_user drei Varianten zur Auswahl statt des Plans
+    menu = TextAnswer(message="Welche Variante möchtest Du: 1) möglichst ruhig, 2) ab Deiner Adresse?")
+    with pytest.raises(ModelRetry, match="final_plan"):
+        check_quiet_wish(quiet_context(wish, quiet), menu)
+    check_quiet_wish(quiet_context(wish, normal), menu)
+
+
+def test_main_road_wish_is_no_route_wish() -> None:
+    """"entlang von Hauptstraßen" ist kein Verlauf, für den ein Fernweg gesucht werden müsste."""
+    assert not ROUTE_WORDS.search("so wenig wie möglich entlang von befahrenen Hauptstraßen entlang fahren")
+    assert not ROUTE_WORDS.search("nicht die Bundesstraße entlang")
+    assert ROUTE_WORDS.search("entlang der Nordseeküste nach Wilhelmshaven")
+    assert ROUTE_WORDS.search("an der Elbe entlang. Bitte ruhige Wege")
+    assert QUIET_WORDS.search("bitte ruhige Wege") and QUIET_WORDS.search("möglichst verkehrsarm")
 
 
 def test_two_routes_for_same_stretch_are_rejected() -> None:

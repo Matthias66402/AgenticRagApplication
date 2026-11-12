@@ -58,6 +58,13 @@ def test_several_named_routes_from_different_sources() -> None:
     assert "Waymarked Trails" in names and "Fernweg-Katalog (aus OpenStreetMap importiert)" in names
 
 
+def test_main_roads_from_overpass() -> None:
+    route = ROUTE | {"source": "BRouter trekking abseits von Hauptstraßen", "main_roads": {"along_main_roads_km": 2.0}}
+    sources = data_sources([tool_return("plan_route", route)])
+    overpass = next(s for s in sources if s["name"] == "Overpass API")
+    assert overpass["purpose"] == "Erkennung von Hauptstraßen" and any(s["name"] == "BRouter" for s in sources)
+
+
 def test_data_sources_without_tools() -> None:
     assert data_sources([]) == []
     assert data_sources([tool_return("estimate_hiking_time", {"walking_hours": 3.0})]) == []

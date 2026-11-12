@@ -10,7 +10,7 @@ from pydantic_ai import ModelRequest, UserPromptPart
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AccommodationType, TransportMode
-from app.agent.tools import accommodation, named_route, routing
+from app.agent.tools import accommodation, named_route, quiet_roads, routing
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.common import haversine_km
@@ -40,6 +40,7 @@ def reset_overpass_state(monkeypatch) -> None:
     monkeypatch.setattr(accommodation, "_cache", {})
     monkeypatch.setattr(accommodation, "_unavailable_until", 0.0)
     monkeypatch.setattr(routing, "_slow_until", {})
+    monkeypatch.setattr(quiet_roads, "_tiles", {})
     monkeypatch.setattr(named_route, "_graphs", {})
     monkeypatch.setattr(named_route, "_catalog_graphs", {})
     monkeypatch.setattr(geocode_module, "_last_request", 0.0)
@@ -251,6 +252,71 @@ async def test_route_estimates_when_all_providers_fail(ctx) -> None:
     assert "cycling-regular" in result["note"] and "BRouter" in result["note"]
     # Keine Etappenorte auf der Luftlinie verteilen, sondern mit Orten am Weg erneut routen
     assert result["note"].endswith(ESTIMATE_ADVICE)
+
+
+# Landesstraße ~13 m östlich der BRouter-Route aus BROUTER_OK (straßenbegleitender Radweg)
+MAIN_ROAD = {"elements": [{"type": "way", "id": 1, "tags": {"highway": "secondary", "ref": "L 123"},
+                           "geometry": [{"lat": 53.11, "lon": 8.2002}, {"lat": 52.89, "lon": 8.2002}]}]}  # fmt: skip
+QUIET_DETOUR = {"features": [{
+    "geometry": {"coordinates": [[8.2, 53.1, 10.0], [8.25, 53.05, 10.0], [8.25, 52.95, 10.0], [8.2, 52.9, 10.0]]},
+    "properties": {"track-length": "24100", "total-time": "4400"},
+}]}  # fmt: skip
+
+
+def brouter_quiet(request: httpx.Request) -> httpx.Response:
+    """Ohne Sperrflächen entlang der Landesstraße, mit ihnen über einen Umweg nach Osten."""
+    return httpx.Response(200, json=QUIET_DETOUR if "polygons" in request.url.params else BROUTER_OK)
+
+
+@respx.mock
+async def test_route_avoids_main_roads(ctx) -> None:
+    """Abenteuer 206: Radwege neben Landesstraßen zählen als Hauptstraße; BRouter bekommt sie als Sperrflächen."""
+    ors = respx.post(url__startswith="https://api.openrouteservice.org/").respond(json=ORS_OK)
+    overpass = respx.post(url__startswith="https://overpass").respond(json=MAIN_ROAD)
+    brouter = respx.get(BROUTER_URL).mock(side_effect=brouter_quiet)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, avoid_main_roads=True)
+
+    assert not ors.called  # Sperrflächen gibt es nur bei BRouter
+    assert overpass.call_count == 1
+    polygons = brouter.calls[1].request.url.params["polygons"]
+    assert polygons.endswith(f",{quiet_roads.PENALTY_WEIGHT}")
+    assert result["source"].startswith("BRouter trekking abseits von Hauptstraßen")
+    assert result["distance_km"] == 24.1
+    main_roads = result["main_roads"]
+    assert main_roads["before_km"] == pytest.approx(22.2, abs=0.2)
+    assert main_roads["along_main_roads_km"] == 0
+    assert main_roads["detour_km"] == pytest.approx(1.9, abs=0.3)
+    assert [v["along_main_roads_km"] for v in main_roads["variants"]][0] == main_roads["before_km"]
+    assert "ändert nichts" in result["note"]
+    # Nach dem Umweg nichts mehr zu meiden → keine weitere Runde
+    assert brouter.call_count == 2
+
+
+@respx.mock
+async def test_main_roads_reported_when_unavoidable(ctx) -> None:
+    """Weicht BRouter nicht aus, bleibt die Route und der Plan nennt die km an der Landesstraße."""
+    respx.post(url__startswith="https://overpass").respond(json=MAIN_ROAD)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, avoid_main_roads=True)
+    assert result["main_roads"]["along_main_roads_km"] == pytest.approx(22.2, abs=0.2)
+    assert result["main_roads"]["sections"] == [{"road": "L 123", "km": pytest.approx(22.2, abs=0.2)}]
+
+
+@respx.mock
+async def test_avoid_main_roads_without_overpass_says_so(ctx) -> None:
+    respx.post(url__startswith="https://overpass").respond(status_code=504)
+    respx.get(BROUTER_URL).respond(json=BROUTER_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.cycling, avoid_main_roads=True)
+    assert "main_roads" not in result
+    assert result["source"] == "BRouter trekking"
+    assert "Hauptstraßen nicht prüfbar" in result["note"]
+
+
+@respx.mock
+async def test_avoid_main_roads_not_for_car(ctx) -> None:
+    respx.post(ORS_URL.format(profile="driving-car")).respond(json=ORS_OK)
+    result = await plan_route(ctx, [START, END], TransportMode.car, avoid_main_roads=True)
+    assert "main_roads" not in result and "nur für Rad" in result["note"]
 
 
 def test_elevation_gain_ignores_noise() -> None:

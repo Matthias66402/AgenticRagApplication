@@ -14,6 +14,7 @@ from pydantic_ai import ModelRequest, RunContext, UserPromptPart
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import TransportMode
+from app.agent.tools import quiet_roads
 from app.agent.tools.common import haversine_km, http_error_message, tool_error
 from app.agent.tools.named_route import ROUTE_TYPES, Guide, RouteGraph, guide, load_route_graph, merge_graphs
 
@@ -40,6 +41,11 @@ SLOW_PROFILE_COOLDOWN_SECONDS = 600
 # Entlang eines Fernwegs: dichte Stützpunkte in Teilanfragen (ORS erlaubt max. 50 Wegpunkte), wenige gleichzeitig
 GUIDED_CHUNK_WAYPOINTS = 40
 GUIDED_CONCURRENCY = 3
+# Hauptstraßen meiden: Ausweichrunden, Gewicht eines Umweg-Meters gegenüber einem Meter an der Hauptstraße,
+# höchstens zulässiger Umweg gegenüber der normalen Route
+QUIET_ROUNDS = 3
+QUIET_DETOUR_COST = 0.5
+QUIET_MAX_DETOUR = 0.4
 # Höhen-Hysterese für selbst berechnete Höhenmeter (filtert Messrauschen der Höhendaten)
 ELEVATION_HYSTERESIS_M = 10.0
 
@@ -271,15 +277,20 @@ async def _route_ors(ctx: RunContext[AgentDeps], profile: str, waypoints: list[C
     )
 
 
-async def _route_brouter(ctx: RunContext[AgentDeps], profile: str, waypoints: list[Coordinate]) -> RouteData:
+async def _route_brouter(
+    ctx: RunContext[AgentDeps], profile: str, waypoints: list[Coordinate], polygons: str | None = None
+) -> RouteData:
+    params: dict[str, Any] = {
+        "lonlats": "|".join(f"{w.lon:.6f},{w.lat:.6f}" for w in waypoints),
+        "profile": profile,
+        "alternativeidx": 0,
+        "format": "geojson",
+    }
+    if polygons:
+        params["polygons"] = polygons  # gewichtete Sperrflächen (Kosten je Meter darin)
     response = await ctx.deps.http.get(
         BROUTER_URL,
-        params={
-            "lonlats": "|".join(f"{w.lon:.6f},{w.lat:.6f}" for w in waypoints),
-            "profile": profile,
-            "alternativeidx": 0,
-            "format": "geojson",
-        },
+        params=params,
         headers={"User-Agent": ctx.deps.settings.nominatim_user_agent},
         timeout=BROUTER_TIMEOUT_SECONDS,
     )
@@ -414,11 +425,98 @@ async def _route_guided(
     return combined, " / ".join(dict.fromkeys(label for _, label, _ in results)), problems, blocked
 
 
+async def _route_quiet(
+    ctx: RunContext[AgentDeps], chain: list[tuple[str, str]], waypoints: list[Coordinate], notes: list[str]
+) -> tuple[RouteData | None, str, list[str], dict[str, Any] | None]:
+    """Route mit möglichst wenig Kilometern auf oder neben Hauptstraßen (siehe app.agent.tools.quiet_roads).
+
+    BRouter routet normal, dann bis zu QUIET_ROUNDS-mal mit den bisher gefundenen Abschnitten an Hauptstraßen als
+    Sperrflächen. Jede Runde weicht weiter aus, wird aber länger (Testrunde Oldenburg: 62 km/32 km an Hauptstraßen →
+    67/18 → 81/8); gewählt wird die Variante mit dem kleinsten Wert aus km an Hauptstraßen + QUIET_DETOUR_COST × Umweg.
+    """
+    brouter = next((profile for provider, profile in chain if provider == "brouter"), None)
+    if brouter is None:
+        return None, "", [], None
+    label = f"{PROVIDER_NAMES['brouter']} {brouter}"
+    problems: list[str] = []
+    try:
+        base = await _route_brouter(ctx, brouter, waypoints)
+    except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
+        problems.append(f"{label}: {http_error_message(PROVIDER_NAMES['brouter'], exc)}")
+        notes.append("Hauptstraßen meiden ging nicht (BRouter nicht erreichbar), normal geroutet.")
+        return None, "", problems, None
+
+    roads = quiet_roads.MainRoads(waypoints[0].lat)
+    try:
+        await roads.cover(ctx, base.geometry, ring=True)
+    except quiet_roads.TooLong:
+        notes.append(
+            "Hauptstraßen meiden geht nur für Strecken bis etwa 150 km; für längere Touren je Etappe aufrufen. "
+            "Diese Route ist normal geroutet (bevorzugt Radwege, prüft aber nicht, ob sie neben Hauptstraßen liegen)."
+        )
+        return base, label, problems, None
+    except httpx.HTTPError as exc:
+        notes.append(
+            f"Hauptstraßen nicht prüfbar ({http_error_message('Overpass API', exc)}): Route normal berechnet, "
+            "Abschnitte neben Hauptstraßen sind möglich. Sag das dem Nutzer, statt eine ruhige Route zu versprechen."
+        )
+        return base, label, problems, None
+
+    measured = roads.measure(base.geometry)
+    variants = [(base, measured)]
+    polygons: list[list[tuple[float, float]]] = []
+    current = measured
+    for _ in range(QUIET_ROUNDS):
+        if not current.runs:
+            break
+        polygons += [roads.corridor(run) for run in current.runs]
+        param = quiet_roads.polygons_param(polygons)
+        if len(param) > quiet_roads.MAX_POLYGON_CHARS:
+            break
+        try:
+            candidate = await _route_brouter(ctx, brouter, waypoints, param)
+            await roads.cover(ctx, candidate.geometry)
+        except (httpx.HTTPError, quiet_roads.TooLong, KeyError, IndexError, ValueError):
+            break
+        current = roads.measure(candidate.geometry)
+        variants.append((candidate, current))
+
+    base_m = measured.distance_m or 1.0
+
+    def score(variant: tuple[RouteData, quiet_roads.Measurement]) -> float:
+        detour = max(variant[1].distance_m - base_m, 0.0)
+        return variant[1].along_m + QUIET_DETOUR_COST * detour
+
+    allowed = [v for v in variants if v[1].distance_m <= base_m * (1 + QUIET_MAX_DETOUR)]
+    route, chosen = min(allowed, key=score)
+    info: dict[str, Any] = {
+        "along_main_roads_km": round(chosen.along_m / 1000, 1),
+        "share_pct": round(100 * chosen.along_m / (chosen.distance_m or 1.0)),
+        "before_km": round(measured.along_m / 1000, 1),
+        "detour_km": round((chosen.distance_m - measured.distance_m) / 1000, 1),
+        "sections": chosen.sections(),
+        "variants": [
+            {"distance_km": round(m.distance_m / 1000, 1), "along_main_roads_km": round(m.along_m / 1000, 1)}
+            for _, m in variants
+        ],
+    }
+    label += " abseits von Hauptstraßen (Straßennetz: © OpenStreetMap-Mitwirkende)"
+    notes.append(
+        "main_roads: km der Route auf oder direkt neben Bundes-, Landes- und Kreisstraßen (auch straßenbegleitende "
+        "Radwege), vorher = ohne Ausweichen. Die Route ist schon die beste der berechneten Varianten; ein erneuter "
+        "Aufruf mit denselben Wegpunkten ändert nichts. Nenne dem Nutzer along_main_roads_km und die größten "
+        "Abschnitte (sections), behaupte nicht, die Route sei frei von Hauptstraßen. Noch ruhiger geht es nur über "
+        "andere Zwischenorte; variants zeigt, wie viel Umweg das Ausweichen kostete."
+    )
+    return route, label, problems, info
+
+
 async def plan_route(
     ctx: RunContext[AgentDeps],
     waypoints: list[Coordinate],
     transport: TransportMode,
     route_name: str | None = None,
+    avoid_main_roads: bool = False,
 ) -> dict[str, Any]:
     """Berechnet eine Route über die angegebenen Wegpunkte (OpenRouteService, Ersatz: BRouter).
 
@@ -433,13 +531,17 @@ async def plan_route(
             Reihenfolge der Tour, z. B. "Hunteradweg, Weserradweg": Die Route wechselt dort, wo sie sich treffen.
             Verlauf aus OpenStreetMap (Katalog bzw. Waymarked Trails, meist wenige Sekunden). Passt kein Name,
             nennt der Fehler die Routen in der Nähe.
+        avoid_main_roads: True, wenn der Nutzer ruhige Wege bzw. möglichst wenig Hauptstraßen oder Verkehr wünscht
+            (Rad, MTB, Wandern): meidet auch Radwege direkt neben Bundes-, Landes- und Kreisstraßen, auch mit Umweg
+            (bis ~40 %). Bei jedem `plan_route` dieser Tour mitgeben. Nicht zusammen mit route_name.
 
     Returns:
         route_id (für AdventurePlan.route_ids), distance_km, duration_hours (beim Wandern Gehzeit nach DAV-Formel),
         ascent_m, descent_m, segments (beim Wandern und MTB mit lowest_m, dem tiefsten Punkt der Etappe);
         mit route_name zusätzlich named_route (gefundene Routen, km auf dem Fernweg, Teilstücke abseits davon,
         checkpoints: Punkte entlang der Route mit Kilometerstand für die Wahl der Etappenorte, blocked_sections:
-        Abschnitte, auf denen der Fernweg laut Kartendaten nicht befahrbar ist und die Route ihn umfährt).
+        Abschnitte, auf denen der Fernweg laut Kartendaten nicht befahrbar ist und die Route ihn umfährt);
+        mit avoid_main_roads zusätzlich main_roads (km auf bzw. neben Hauptstraßen vorher/nachher, größte Abschnitte).
     """
     if len(waypoints) < 2:
         return tool_error("Mindestens Start und Ziel als Wegpunkte angeben.")
@@ -458,6 +560,14 @@ async def plan_route(
     notes: list[str] = []
     named_route: dict[str, Any] | None = None
     direct: tuple[RouteData | None, str, list[str]] | None = None
+    main_roads: dict[str, Any] | None = None
+    if avoid_main_roads and transport not in ROUTE_TYPES:
+        notes.append("avoid_main_roads gilt nur für Rad, MTB und Wandern; normal geroutet.")
+    elif avoid_main_roads and route_name:
+        # Der Fernweg legt den Verlauf fest; Ausweichen würde ihn verlassen
+        notes.append("avoid_main_roads gilt nicht zusammen mit route_name: Die Route folgt dem Fernweg.")
+    elif avoid_main_roads:
+        route, label, problems, main_roads = await _route_quiet(ctx, chain, waypoints, notes)
     if route_name and transport not in ROUTE_TYPES:
         notes.append("route_name gilt nur für Rad, MTB und Wandern; normal geroutet.")
     elif route_name:
@@ -587,6 +697,8 @@ async def plan_route(
                 segment["lowest_m"] = round(lowest)
     if named_route:
         result["named_route"] = named_route
+    if main_roads:
+        result["main_roads"] = main_roads
     if notes:
         result["note"] = " ".join(notes)
     return result

@@ -39,10 +39,20 @@ PUBLIC_TRANSPORT_WORDS = re.compile(
 
 # Wunsch nach einem bestimmten Verlauf: "entlang der Nordseeküste", "an der Elbe entlang", "auf dem Weser-Radweg"
 # ("Radwegen" o. Ä. im Plural zählt nicht: "möglichst auf Radwegen" ist kein bestimmter Fernweg)
+# "entlang" mit Bezug auf Straßen ("nicht entlang von befahrenen Hauptstraßen", "Hauptstraßen entlang") ist ein Wunsch
+# nach ruhigen Wegen (QUIET_WORDS), kein Verlauf (Abenteuer 206)
 ROUTE_WORDS = re.compile(
-    r"\b(entlang|längs)\b|(radweg|radroute|radfernweg|wanderweg|höhenweg|steig|pfad)\b",
+    r"(?<!straßen )(?<!straße )\b(entlang|längs)\b(?![^.!?]{0,40}stra(ß|ss)e)"
+    r"|(radweg|radroute|radfernweg|wanderweg|höhenweg|steig|pfad)\b",
     re.IGNORECASE,
 )
+# Wunsch nach ruhigen Wegen → plan_route mit avoid_main_roads (check_quiet_wish)
+QUIET_WORDS = re.compile(
+    r"(haupt|bundes|land|kreis)stra(ß|ss)e|nebenstra(ß|ss)e|verkehrsarm|wenig(er)? verkehr|ohne verkehr|befahrene"
+    r"|ruhige(n|re|ren)? (wege|straßen|strecke|route|nebenwege)",
+    re.IGNORECASE,
+)
+QUIET_WISH_HINT = "Der Nutzer möchte Hauptstraßen meiden"
 # Zwei Routen gelten als Varianten derselben Strecke, wenn Start und Ziel je höchstens ROUTE_SAME_END_KM auseinander
 # liegen und mindestens ROUTE_DUPLICATE_SHARE der Punkte der einen höchstens ROUTE_SHARED_KM neben der anderen
 ROUTE_SAME_END_KM = 1.0
@@ -163,6 +173,11 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Nennt der Nutzer mehrere Fernwege bzw. Abschnitte nacheinander (z. B. "erst den Hunteradweg, dann den
    Weserradweg"), übergib alle in Reihenfolge der Tour, durch Komma getrennt ("Hunteradweg, Weserradweg"), statt
    nur einen davon zu nehmen.
+   Wünscht der Nutzer ruhige Wege, wenig Verkehr bzw. möglichst keine (befahrenen) Hauptstraßen, übergib bei jedem
+   `plan_route` dieser Tour `avoid_main_roads` true, auch bei späteren Änderungen, und gib danach ohne Rückfrage
+   den Plan aus. Nenne in Zusammenfassung bzw. Notizen die km an Hauptstraßen aus `main_roads` (vorher und
+   nachher) und die größten Abschnitte. Behaupte nie, Du hättest eine Route ruhiger neu berechnet, wenn Du
+   `plan_route` nicht mit `avoid_main_roads` bzw. anderen Wegpunkten aufgerufen hast.
    Rufe es zuerst mit Start, den vom Nutzer genannten Zwischenorten und dem Ziel auf (ohne selbst gewählte
    Etappenorte): Der Fernweg ist oft deutlich länger als die direkte Strecke. Wähle
    die Etappenorte danach aus `named_route.checkpoints` (Kilometerstand entlang der Route) bei der gewünschten
@@ -213,7 +228,9 @@ antworte per `answer_user` kurz aus Nutzersicht, ohne Tools aufzurufen, und nur 
 - Orte und Adressen sucht Du in OpenStreetMap (Nominatim).
 - Routen: Bei ausgeschilderten Fernwegen (z. B. Weser-Radweg) folgst Du deren Verlauf aus OpenStreetMap. Sonst
   berechnen Routing-Dienste auf OpenStreetMap-Daten (OpenRouteService bzw. BRouter) die Strecke mit einem Profil
-  für Wandern, Rad, MTB oder Auto, das z. B. Radwege und Wanderwege bevorzugt. Die Strecke teilst Du in
+  für Wandern, Rad, MTB oder Auto, das z. B. Radwege und Wanderwege bevorzugt. Auf Wunsch meidest Du
+  Hauptstraßen (auch Radwege direkt daneben) und nennst, wie viele km die Route noch an Hauptstraßen verläuft.
+  Die Strecke teilst Du in
   Tagesetappen passender Länge mit Etappenorten, an denen es Unterkünfte gibt.
 - Unterkünfte und Hütten stammen aus OpenStreetMap, das Wetter von Open-Meteo (Vorhersage für die nächsten Tage,
   danach langjährige Klimawerte), Bahnverbindungen aus Fahrplandaten von Transitous.
@@ -469,6 +486,63 @@ def check_route_wish(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
             "des Flusses oder Wegs als route_name; findet das Tool nichts, gib den Plan mit Deiner bisherigen Route "
             "erneut über `final_plan` aus, er wird dann angenommen."
         )
+
+
+def quiet_route_ids(messages: list[ModelMessage]) -> set[str]:
+    """route_ids aus `plan_route`-Aufrufen mit avoid_main_roads in diesen Nachrichten."""
+    calls = {
+        part.tool_call_id
+        for message in messages
+        if isinstance(message, ModelResponse)
+        for part in message.parts
+        if isinstance(part, ToolCallPart) and part.tool_name == "plan_route"
+        and part.args_as_dict().get("avoid_main_roads")
+    }  # fmt: skip
+    return {
+        part.content["route_id"]
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_call_id in calls
+        and isinstance(part.content, dict) and "route_id" in part.content
+    }  # fmt: skip
+
+
+def check_quiet_wish(ctx: RunContext[AgentDeps], output: AdventurePlan | ClarificationQuestion | TextAnswer) -> None:
+    """Wünscht der Nutzer wenig Hauptstraßen, muss die Route mit avoid_main_roads berechnet sein.
+
+    Abenteuer 206: gpt-5-mini rief nach "so wenig wie möglich Hauptstraßen", "alle meiden" und "noch strenger"
+    dreimal `plan_route` mit denselben Argumenten auf (immer 61,2 km), schrieb "neu berechnet, Hauptstraßen gemieden"
+    und fragte zweimal, ob es noch strenger sein soll. Fernweg-Touren (route_name) sind ausgenommen; der Hinweis kommt
+    pro Lauf nur einmal.
+    """
+    if not user_mentions(ctx, QUIET_WORDS):
+        return
+    if any(output_rejected(ctx, name, QUIET_WISH_HINT) for name in ("final_plan", "ask_user", "answer_user")):
+        return
+    if isinstance(output, TextAnswer):
+        # Nachgespielt: Route mit avoid_main_roads berechnet, dann per answer_user ein Menü aus drei Varianten
+        if quiet_route_ids(current_run(ctx)):
+            raise ModelRetry(
+                f"{QUIET_WISH_HINT} und Du hast die Route schon mit `avoid_main_roads` berechnet. Gib den angepassten "
+                "Plan mit dieser route_id über `final_plan` aus, statt per Text Varianten zur Auswahl zu stellen; "
+                "nenne Länge und km an Hauptstraßen aus `main_roads` in der Zusammenfassung."
+            )
+        return
+    if isinstance(output, AdventurePlan):
+        if output.transport not in NAMED_ROUTE_TRANSPORT or used_tool(ctx, "plan_hut_tour"):
+            return
+        named = {result["route_id"] for result in route_results(ctx) if "named_route" in result}
+        if not output.route_ids or set(output.route_ids) & (named | quiet_route_ids(ctx.messages)):
+            return
+    elif quiet_route_ids(ctx.messages) or not route_results(ctx):
+        # Rückfrage vor der ersten Route (z. B. fehlende Pflichtangaben) ist in Ordnung
+        return
+    raise ModelRetry(
+        f"{QUIET_WISH_HINT} (bzw. wünscht ruhige Wege). Rufe `plan_route` mit den Wegpunkten der Tour und "
+        "`avoid_main_roads` true auf, übernimm route_id und Werte und gib den Plan über `final_plan` aus, ohne "
+        "nachzufragen. Nenne die km an Hauptstraßen aus `main_roads` (vorher und nachher)."
+    )
 
 
 def check_hut_tour(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
@@ -808,6 +882,8 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
     def check_plausibility(ctx: RunContext[AgentDeps], output: PlannerOutput) -> PlannerOutput:
         """Selbstprüfung: Unplausible Pläne gehen mit konkretem Hinweis zurück an das Modell."""
         check_default_transport(ctx, output)
+        if isinstance(output, (ClarificationQuestion, TextAnswer)):
+            check_quiet_wish(ctx, output)
         if isinstance(output, TextAnswer):
             check_answer_complete(output)
             check_no_plan_evasion(ctx)
@@ -828,6 +904,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
         check_named_route_used(ctx, output)
         check_hut_tour(ctx, output)
         check_route_wish(ctx, output)
+        check_quiet_wish(ctx, output)
         check_duplicate_routes(ctx, output)
         if (output.outbound_journey or output.return_journey) and not used_tool(ctx, "find_train_connections"):
             raise ModelRetry(

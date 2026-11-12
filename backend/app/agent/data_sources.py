@@ -64,6 +64,8 @@ def _route_uses(route: Any) -> list[tuple[str, str]]:
         sources = str(named.get("source") or "").split(",")
         for source in dict.fromkeys(s if s in PROVIDERS else "openstreetmap" for s in sources):
             uses.append((source, "Verlauf des Fernwegs"))
+    if isinstance(route.get("main_roads"), dict):
+        uses.append(("overpass", "Erkennung von Hauptstraßen"))
     return uses
 
 
