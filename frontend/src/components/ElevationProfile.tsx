@@ -1,5 +1,5 @@
 import type { KeyboardEvent, PointerEvent } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapPlan } from "./RouteMap";
 
 export interface ProfilePoint {
@@ -94,12 +94,15 @@ export function ElevationProfile({ plan, points, onHover }: Props) {
 
   const innerWidth = Math.max(width - PAD.left - PAD.right, 1);
   const innerHeight = HEIGHT - PAD.top - PAD.bottom;
-  const x = (km: number) => PAD.left + (km / stats.total) * innerWidth;
-  const y = (ele: number) => PAD.top + (1 - (ele - stats.axisLow) / (stats.axisHigh - stats.axisLow)) * innerHeight;
+  const x = useCallback((km: number) => PAD.left + (km / stats.total) * innerWidth, [stats, innerWidth]);
+  const y = useCallback(
+    (ele: number) => PAD.top + (1 - (ele - stats.axisLow) / (stats.axisHigh - stats.axisLow)) * innerHeight,
+    [stats, innerHeight],
+  );
 
   const line = useMemo(
     () => points.map((p, i) => `${i ? "L" : "M"}${x(p.km).toFixed(1)},${y(p.ele).toFixed(1)}`).join(""),
-    [points, width, stats],
+    [points, x, y],
   );
   const baseline = PAD.top + innerHeight;
   const area = `${line}L${x(stats.total).toFixed(1)},${baseline}L${PAD.left},${baseline}Z`;
@@ -160,6 +163,7 @@ export function ElevationProfile({ plan, points, onHover }: Props) {
             height={HEIGHT}
             role="img"
             aria-label={summary}
+            // biome-ignore lint/a11y/noNoninteractiveTabindex: Profil ist per Pfeiltasten bedienbar (handleKey)
             tabIndex={0}
             onPointerMove={handlePointer}
             onPointerDown={handlePointer}

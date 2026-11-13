@@ -61,3 +61,10 @@ export function useAuth(): AuthState {
   if (!context) throw new Error("useAuth muss innerhalb von <AuthProvider> verwendet werden");
   return context;
 }
+
+/** Angemeldeter Nutzer für Seiten hinter <ProtectedRoute>, dort ist er immer gesetzt. */
+export function useCurrentUser(): User {
+  const { user } = useAuth();
+  if (!user) throw new Error("useCurrentUser nur hinter <ProtectedRoute> verwenden");
+  return user;
+}

@@ -59,7 +59,7 @@ export function LoginPage() {
           />
         </label>
         {error && <p className="error">{error}</p>}
-        <button className="primary" disabled={busy}>
+        <button type="submit" className="primary" disabled={busy}>
           {busy ? "Melde an …" : "Anmelden"}
         </button>
       </form>
@@ -126,7 +126,7 @@ export function RegisterPage() {
           />
         </label>
         {error && <p className="error">{error}</p>}
-        <button className="primary" disabled={busy}>
+        <button type="submit" className="primary" disabled={busy}>
           {busy ? "Erstelle Konto …" : "Registrieren"}
         </button>
       </form>

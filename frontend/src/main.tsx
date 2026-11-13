@@ -6,7 +6,10 @@ import "./styles.css";
 import { App } from "./App";
 import { AuthProvider } from "./auth/AuthContext";
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("Element #root fehlt in index.html");
+
+createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>

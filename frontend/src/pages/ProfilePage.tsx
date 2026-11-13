@@ -1,36 +1,37 @@
 import { type FormEvent, useState } from "react";
 import { api, json } from "../api/client";
 import type { DefaultTransport, GpxMode, User } from "../api/types";
-import { useAuth } from "../auth/AuthContext";
+import { useAuth, useCurrentUser } from "../auth/AuthContext";
 import { TRANSPORT_LABELS } from "../lib/labels";
 
 const DEFAULT_TRANSPORTS: DefaultTransport[] = ["hiking", "cycling"];
 
 export function ProfilePage() {
-  const { user, setUser } = useAuth();
+  const { setUser } = useAuth();
+  const user = useCurrentUser();
   const [form, setForm] = useState({
-    display_name: user!.display_name,
-    email: user!.email,
+    display_name: user.display_name,
+    email: user.email,
     password: "",
-    home_address: user!.home_address ?? "",
-    home_city: user!.home_city ?? "",
-    default_transport: user!.default_transport ?? "",
-    gpx_mode: user!.gpx_mode,
+    home_address: user.home_address ?? "",
+    home_city: user.home_city ?? "",
+    default_transport: user.default_transport ?? "",
+    gpx_mode: user.gpx_mode,
   });
   const [status, setStatus] = useState<{ ok: boolean; text: string } | null>(null);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     const changes: Record<string, string | null> = {};
-    if (form.display_name !== user!.display_name) changes.display_name = form.display_name;
-    if (form.email !== user!.email) changes.email = form.email;
+    if (form.display_name !== user.display_name) changes.display_name = form.display_name;
+    if (form.email !== user.email) changes.email = form.email;
     if (form.password) changes.password = form.password;
     // Leere Felder löschen die Angabe
-    if (form.home_address !== (user!.home_address ?? "")) changes.home_address = form.home_address;
-    if (form.home_city !== (user!.home_city ?? "")) changes.home_city = form.home_city;
-    if (form.default_transport !== (user!.default_transport ?? ""))
+    if (form.home_address !== (user.home_address ?? "")) changes.home_address = form.home_address;
+    if (form.home_city !== (user.home_city ?? "")) changes.home_city = form.home_city;
+    if (form.default_transport !== (user.default_transport ?? ""))
       changes.default_transport = form.default_transport || null;
-    if (form.gpx_mode !== user!.gpx_mode) changes.gpx_mode = form.gpx_mode;
+    if (form.gpx_mode !== user.gpx_mode) changes.gpx_mode = form.gpx_mode;
     if (Object.keys(changes).length === 0) return setStatus({ ok: true, text: "Keine Änderungen." });
     try {
       const updated = await api<User>("/api/users/me", { method: "PATCH", body: json(changes) });
@@ -126,9 +127,11 @@ export function ProfilePage() {
           </select>
         </label>
 
-        <p className="muted small">Rolle: {user!.role === "admin" ? "Administrator" : "Nutzer"}</p>
+        <p className="muted small">Rolle: {user.role === "admin" ? "Administrator" : "Nutzer"}</p>
         {status && <p className={status.ok ? "success" : "error"}>{status.text}</p>}
-        <button className="primary">Speichern</button>
+        <button type="submit" className="primary">
+          Speichern
+        </button>
       </form>
     </div>
   );

@@ -27,7 +27,7 @@ function Layout() {
             </>
           )}
           <NavLink to="/profile">{user?.display_name}</NavLink>
-          <button className="link" onClick={logout}>
+          <button type="button" className="link" onClick={logout}>
             Abmelden
           </button>
         </nav>

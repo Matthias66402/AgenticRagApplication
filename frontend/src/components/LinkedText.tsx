@@ -20,7 +20,7 @@ export function LinkedText({ text }: { text: string }) {
   const parts: ReactNode[] = [];
   let position = 0;
   for (const match of text.matchAll(LINK_PATTERN)) {
-    const { label, href, url } = match.groups!;
+    const { label, href, url } = match.groups ?? {};
     parts.push(text.slice(position, match.index));
     let shown = label;
     let link = href;

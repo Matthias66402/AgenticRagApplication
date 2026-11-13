@@ -36,6 +36,7 @@ export function JourneyCard({ label, journey }: { label: string; journey: Journe
         {journey.legs.map((leg, i) => {
           const walk = leg.line.startsWith("Fußweg");
           return (
+            // biome-ignore lint/suspicious/noArrayIndexKey: statische Anzeigeliste, wird nie umsortiert
             <li key={i} className={walk ? "walk muted" : undefined}>
               <span className="journey-time">
                 {time(leg.departure)}–{time(leg.arrival)}

@@ -63,7 +63,7 @@ export function AdventuresPage() {
             Beschreibe Deine Tour in eigenen Worten – der Agent plant Route, Etappen, Wetter und Unterkünfte.
           </p>
         </div>
-        <button className="primary" onClick={createAdventure}>
+        <button type="button" className="primary" onClick={createAdventure}>
           + Neues Abenteuer
         </button>
       </div>
@@ -73,7 +73,7 @@ export function AdventuresPage() {
       ) : adventures.length === 0 ? (
         <div className="card empty">
           <p>Noch keine Abenteuer geplant.</p>
-          <button className="primary" onClick={createAdventure}>
+          <button type="button" className="primary" onClick={createAdventure}>
             Erstes Abenteuer planen
           </button>
         </div>

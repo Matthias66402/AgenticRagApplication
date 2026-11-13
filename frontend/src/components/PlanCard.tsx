@@ -41,7 +41,7 @@ export function DownloadButton({ path, fallbackName, label, busyLabel, title }: 
 
   return (
     <div className="download">
-      <button onClick={download} disabled={busy} title={title}>
+      <button type="button" onClick={download} disabled={busy} title={title}>
         {busy ? busyLabel : label}
       </button>
       {error && <span className="error small">{error}</span>}
@@ -228,6 +228,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <h3>Packliste & Tipps</h3>
           <ul>
             {plan.packing_tips.map((t, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: statische Anzeigeliste, wird nie umsortiert
               <li key={i}>
                 <LinkedText text={t} />
               </li>
@@ -240,6 +241,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <h3>Sicherheit & Regeln</h3>
           <ul>
             {plan.safety_notes.map((t, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: statische Anzeigeliste, wird nie umsortiert
               <li key={i}>
                 <LinkedText text={t} />
               </li>
@@ -252,6 +254,7 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
           <h3>Quellen</h3>
           <ul className="muted small">
             {plan.sources.map((t, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: statische Anzeigeliste, wird nie umsortiert
               <li key={i}>
                 <LinkedText text={t} />
               </li>

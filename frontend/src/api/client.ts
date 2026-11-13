@@ -106,8 +106,7 @@ export async function streamChat(
     const { value, done } = await reader.read();
     if (done) break;
     buffer += value;
-    let boundary: number;
-    while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+    for (let boundary = buffer.indexOf("\n\n"); boundary !== -1; boundary = buffer.indexOf("\n\n")) {
       const block = buffer.slice(0, boundary);
       buffer = buffer.slice(boundary + 2);
       const data = block

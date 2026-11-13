@@ -54,7 +54,9 @@ function UserRow({
               value={draft.password}
               onChange={(e) => setDraft({ ...draft, password: e.target.value })}
             />
-            <button className="primary">Speichern</button>
+            <button type="submit" className="primary">
+              Speichern
+            </button>
             <button type="button" className="ghost" onClick={() => setEditing(false)}>
               Abbrechen
             </button>
@@ -89,7 +91,7 @@ function UserRow({
       </td>
       <td className="muted small">{formatDateTime(user.created_at)}</td>
       <td className="actions">
-        <button className="ghost" onClick={() => setEditing(true)}>
+        <button type="button" className="ghost" onClick={() => setEditing(true)}>
           Bearbeiten
         </button>
         {!isSelf && <ConfirmButton onConfirm={onDelete} />}
@@ -171,7 +173,9 @@ export function AdminUsersPage() {
           <option value="user">Nutzer</option>
           <option value="admin">Admin</option>
         </select>
-        <button className="primary">Nutzer anlegen</button>
+        <button type="submit" className="primary">
+          Nutzer anlegen
+        </button>
       </form>
 
       <div className="card table-wrap">

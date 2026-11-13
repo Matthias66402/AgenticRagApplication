@@ -43,6 +43,7 @@ export function AdventurePage() {
     return () => abort.current?.abort();
   }, [load]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Abhängigkeiten sind Auslöser, bei neuen Nachrichten nach unten scrollen
   useEffect(() => {
     chatEnd.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [adventure?.messages.length, live, pendingUser]);
@@ -50,7 +51,7 @@ export function AdventurePage() {
   const busy = live !== null;
   // Diktat: Erkannter Text wird an die Eingabe angehängt, gesendet wird erst auf Wunsch des Nutzers
   const speech = useSpeechInput((text) =>
-    setInput((value) => (value.trim() ? value.trimEnd() + " " : "") + text.trim()),
+    setInput((value) => `${value.trim() ? `${value.trimEnd()} ` : ""}${text.trim()}`),
   );
 
   function handleEvent(event: ChatEvent) {
@@ -134,14 +135,22 @@ export function AdventurePage() {
           </Link>
           {editingTitle ? (
             <input
+              // biome-ignore lint/a11y/noAutofocus: Feld öffnet erst auf Klick zum Umbenennen, Fokus ist erwartet
               autoFocus
               defaultValue={adventure.title}
               onBlur={(e) => saveTitle(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && saveTitle((e.target as HTMLInputElement).value)}
             />
           ) : (
-            <h1 onClick={() => setEditingTitle(true)} title="Klicken zum Umbenennen">
-              {adventure.title}
+            <h1>
+              <button
+                type="button"
+                className="title-edit"
+                onClick={() => setEditingTitle(true)}
+                title="Klicken zum Umbenennen"
+              >
+                {adventure.title}
+              </button>
             </h1>
           )}
         </div>
@@ -155,7 +164,7 @@ export function AdventurePage() {
               </p>
               <div className="examples">
                 {EXAMPLES.map((example) => (
-                  <button key={example} className="example" onClick={() => send(example)}>
+                  <button type="button" key={example} className="example" onClick={() => send(example)}>
                     {example}
                   </button>
                 ))}
@@ -243,7 +252,7 @@ export function AdventurePage() {
               {speech.listening ? "⏹ Stopp" : "🎤"}
             </button>
           )}
-          <button className="primary" disabled={busy || !input.trim()}>
+          <button type="submit" className="primary" disabled={busy || !input.trim()}>
             {busy ? "Plant …" : "Senden"}
           </button>
         </form>

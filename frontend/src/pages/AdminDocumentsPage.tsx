@@ -27,7 +27,7 @@ export function AdminDocumentsPage() {
     try {
       const doc = await api<KnowledgeDocument>("/api/documents", { method: "POST", body });
       setDocuments((list) => [...list.filter((d) => d.id !== doc.id && d.source !== doc.source), doc]);
-      fileInput.current!.value = "";
+      if (fileInput.current) fileInput.current.value = "";
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -51,7 +51,7 @@ export function AdminDocumentsPage() {
       {error && <p className="error">{error}</p>}
       <form className="card row wrap" onSubmit={upload}>
         <input ref={fileInput} type="file" accept=".md,.txt,.pdf" required />
-        <button className="primary" disabled={uploading}>
+        <button type="submit" className="primary" disabled={uploading}>
           {uploading ? "Wird eingelesen …" : "Hochladen & einlesen"}
         </button>
       </form>

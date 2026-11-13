@@ -44,7 +44,7 @@ export function ToolCallBadge({ call }: { call: ToolCall }) {
         <span aria-hidden>{meta.icon}</span>
         <strong>{meta.label}</strong>
         <span className="tool-args">{describeArgs(call)}</span>
-        <span className="tool-state" aria-label={state}>
+        <span className="tool-state" role="img" aria-label={state}>
           {state === "running" ? <span className="spinner" /> : state === "failed" ? "⚠️" : "✓"}
         </span>
       </button>

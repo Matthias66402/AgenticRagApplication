@@ -42,7 +42,10 @@ export function RouteMap({ plan, highlight }: { plan: MapPlan; highlight?: LatLn
       />
       <FitBounds points={allPoints} />
       {routes.length > 0 ? (
-        routes.map((route, i) => <Polyline key={i} positions={route} pathOptions={{ color: "#2563eb", weight: 4 }} />)
+        routes.map((route, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: statische Anzeigeliste, wird nie umsortiert
+          <Polyline key={i} positions={route} pathOptions={{ color: "#2563eb", weight: 4 }} />
+        ))
       ) : (
         <Polyline positions={stagePoints} pathOptions={{ color: "#2563eb", weight: 3, dashArray: "6 8" }} />
       )}
@@ -56,18 +59,19 @@ export function RouteMap({ plan, highlight }: { plan: MapPlan; highlight?: LatLn
           <Tooltip>{stage.label ?? `Tag ${stage.day}: ${shortPlace(stage.end.name)}`}</Tooltip>
         </CircleMarker>
       ))}
-      {plan.stages
-        .filter((s) => s.accommodation)
-        .map((s) => (
-          <CircleMarker
-            key={`acc-${s.day}`}
-            center={[s.accommodation!.lat, s.accommodation!.lon]}
-            radius={6}
-            pathOptions={{ color: "#fff", weight: 2, fillColor: "#16a34a", fillOpacity: 1 }}
-          >
-            <Tooltip>🛏️ {s.accommodation!.name}</Tooltip>
-          </CircleMarker>
-        ))}
+      {plan.stages.map(
+        ({ day, accommodation }) =>
+          accommodation && (
+            <CircleMarker
+              key={`acc-${day}`}
+              center={[accommodation.lat, accommodation.lon]}
+              radius={6}
+              pathOptions={{ color: "#fff", weight: 2, fillColor: "#16a34a", fillOpacity: 1 }}
+            >
+              <Tooltip>🛏️ {accommodation.name}</Tooltip>
+            </CircleMarker>
+          ),
+      )}
       <CircleMarker
         center={[plan.start.lat, plan.start.lon]}
         radius={8}
