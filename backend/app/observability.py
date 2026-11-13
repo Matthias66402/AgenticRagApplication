@@ -100,9 +100,13 @@ def mask_home_addresses(*, params: Any) -> Any:
             if isinstance(value, str):
                 if (masked := mask_text(value)) != value:
                     changed[key] = masked
-            elif isinstance(value, (list, tuple)) and value and all(isinstance(v, str) for v in value):
-                if (masked_list := [mask_text(v) for v in value]) != list(value):
-                    changed[key] = masked_list
+            elif (
+                isinstance(value, (list, tuple))
+                and value
+                and all(isinstance(v, str) for v in value)
+                and (masked_list := [mask_text(v) for v in value]) != list(value)
+            ):
+                changed[key] = masked_list
         if changed:
             patches[identifier] = OtelSpanPatch(set_attributes=changed)
     return MaskOtelSpansResult(span_patches=patches) if patches else None

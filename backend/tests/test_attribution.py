@@ -13,7 +13,7 @@ Einleitung zum Radweg.
 ## Sicherheit
 
 Helm tragen.
-""".encode()
+""".encode()  # noqa: E501  Quellenzeile im Originalformat von Wikivoyage
 
 OWN_DOC = "# Hüttenknigge\n\nHüttenschlafsack mitnehmen.\n".encode()
 

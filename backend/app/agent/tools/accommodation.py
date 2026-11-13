@@ -156,7 +156,11 @@ def build_query(accommodation_type: AccommodationType, lat: float, lon: float, r
 
 
 async def query_overpass(
-    ctx: RunContext[AgentDeps], query: str, timeout: float = REQUEST_TIMEOUT, cache: bool = True
+    ctx: RunContext[AgentDeps],
+    query: str,
+    # gilt pro Overpass-Instanz und geht an httpx, ein äußeres asyncio.timeout passt hier nicht
+    timeout: float = REQUEST_TIMEOUT,  # noqa: ASYNC109
+    cache: bool = True,
 ) -> dict[str, Any]:
     """Probiert die konfigurierten Overpass-Instanzen der Reihe nach durch.
 

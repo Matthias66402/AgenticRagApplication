@@ -21,7 +21,7 @@ import statistics
 import sys
 import time
 from collections.abc import AsyncGenerator, Iterator
-from contextlib import ExitStack, asynccontextmanager, contextmanager
+from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -216,10 +216,8 @@ def measure_usage(run: CaseRun, responses: list[ModelResponse]) -> None:
         run.cache_read_tokens += usage.cache_read_tokens
         run.output_tokens += usage.output_tokens
         run.reasoning_tokens += usage.details.get("reasoning_tokens", 0)
-        try:
+        with suppress(Exception):  # Modell ohne Preisangabe (z. B. in Tests)
             run.cost_usd += float(response.cost().total_price)
-        except Exception:  # Modell ohne Preisangabe (z. B. in Tests)
-            pass
 
 
 class RecordingModel(WrapperModel):

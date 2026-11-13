@@ -13,6 +13,7 @@ Aufruf:
 
 import argparse
 import asyncio
+import itertools
 import json
 from pathlib import Path
 from typing import Any
@@ -96,7 +97,7 @@ async def fetch_overpass_ways(http: httpx.AsyncClient, relation_ids: list[int]) 
         if element.get("type") != "way":
             continue
         nodes, coords = [], []
-        for node, point in zip(element.get("nodes", []), element.get("geometry", [])):
+        for node, point in zip(element.get("nodes", []), element.get("geometry", []), strict=False):
             if point:
                 nodes.append(node)
                 coords.append([round(point["lat"], 6), round(point["lon"], 6)])
@@ -107,7 +108,7 @@ async def fetch_overpass_ways(http: httpx.AsyncClient, relation_ids: list[int]) 
 
 def ways_length_km(ways: list[list[Any]]) -> float:
     """Summe aller Wege (inkl. Varianten und beider Richtungen, daher meist länger als der Fernweg selbst)."""
-    return sum(haversine_km(*a, *b) for _, coords in ways for a, b in zip(coords, coords[1:]))
+    return sum(haversine_km(*a, *b) for _, coords in ways for a, b in itertools.pairwise(coords))
 
 
 def select_entries(catalog: list[dict[str, Any]], names: list[str]) -> list[dict[str, Any]]:

@@ -57,7 +57,7 @@ def test_research_from_planning_runs_counts_per_transport() -> None:
     # Aktueller, noch offener Lauf zählt; eine Ausgabe, die zurückgewiesen und dann ersetzt wurde, entscheidet nicht
     current = [user("Radtour"), calls(("research_knowledge", ROUTING_RESEARCH)), calls(("final_plan", {}))]
     assert researched_for(current, "cycling")
-    assert not researched_for(current + [calls(("answer_user", {"message": "…"}))], "cycling")
+    assert not researched_for([*current, calls(("answer_user", {"message": "…"}))], "cycling")
 
 
 def test_legacy_search_counts_for_any_transport() -> None:

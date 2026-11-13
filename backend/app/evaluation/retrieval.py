@@ -215,7 +215,10 @@ async def run(grade: bool = False, batch: int = 1) -> dict[str, Any]:
             print(
                 f"  {number} {ids}" + (f" ({failures} Fehlversuche)" if failures else ""), file=sys.stderr, flush=True
             )
-    results = [evaluate_case(case, retrieved, kept) for case, retrieved, kept in zip(cases, retrieved_all, kept_all)]
+    results = [
+        evaluate_case(case, retrieved, kept)
+        for case, retrieved, kept in zip(cases, retrieved_all, kept_all, strict=True)
+    ]
     return {
         "created_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "config": {

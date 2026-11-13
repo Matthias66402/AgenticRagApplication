@@ -8,6 +8,7 @@ Route in ihrer Nähe verläuft. Zum Meiden bekommt BRouter diese Abschnitte als 
 und routet neu; Querungen bleiben möglich, nur das lange Entlangfahren wird teuer.
 """
 
+import itertools
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -148,7 +149,7 @@ class MainRoads:
     def _add(self, road: Road) -> None:
         label, points = road
         coords = [self.xy(lat, lon) for lat, lon in points]
-        for a, b in zip(coords, coords[1:]):
+        for a, b in itertools.pairwise(coords):
             for gx in range(int(min(a[0], b[0]) // GRID_M) - 1, int(max(a[0], b[0]) // GRID_M) + 2):
                 for gy in range(int(min(a[1], b[1]) // GRID_M) - 1, int(max(a[1], b[1]) // GRID_M) + 2):
                     self.grid[(gx, gy)].append((a, b, label))
@@ -167,7 +168,7 @@ class MainRoads:
         current: Run | None = None
         total = along = 0.0
         coords = [self.xy(p[0], p[1]) for p in geometry]
-        for a, b in zip(coords, coords[1:]):
+        for a, b in itertools.pairwise(coords):
             length = math.hypot(b[0] - a[0], b[1] - a[1])
             total += length
             road = self.nearest(((a[0] + b[0]) / 2, (a[1] + b[1]) / 2))
@@ -225,7 +226,7 @@ def _simplify(points: list[tuple[float, float]], tolerance: float) -> list[tuple
         if best > tolerance:
             keep[index] = True
             stack.extend([(start, index), (index, end)])
-    return [p for p, k in zip(points, keep) if k]
+    return [p for p, k in zip(points, keep, strict=True) if k]
 
 
 def polygons_param(polygons: list[list[tuple[float, float]]]) -> str:

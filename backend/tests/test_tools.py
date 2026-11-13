@@ -1,4 +1,5 @@
 import datetime as dt
+import itertools
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -306,7 +307,7 @@ async def test_route_avoids_main_roads(ctx) -> None:
     assert main_roads["before_km"] == pytest.approx(22.2, abs=0.2)
     assert main_roads["along_main_roads_km"] == 0
     assert main_roads["detour_km"] == pytest.approx(1.9, abs=0.3)
-    assert [v["along_main_roads_km"] for v in main_roads["variants"]][0] == main_roads["before_km"]
+    assert main_roads["variants"][0]["along_main_roads_km"] == main_roads["before_km"]
     assert "ändert nichts" in result["note"]
     # Nach dem Umweg nichts mehr zu meiden → keine weitere Runde
     assert brouter.call_count == 2
@@ -458,7 +459,7 @@ def waymarked_coast(request: httpx.Request) -> httpx.Response:
 def brouter_echo(request: httpx.Request) -> httpx.Response:
     """BRouter-Antwort mit geraden Linien zwischen den übergebenen Punkten."""
     points = [[float(v) for v in p.split(",")] for p in request.url.params["lonlats"].split("|")]
-    meters = sum(haversine_km(a[1], a[0], b[1], b[0]) for a, b in zip(points, points[1:])) * 1000
+    meters = sum(haversine_km(a[1], a[0], b[1], b[0]) for a, b in itertools.pairwise(points)) * 1000
     return httpx.Response(200, json={"features": [{
         "geometry": {"coordinates": [[lon, lat, 10.0] for lon, lat in points]},
         "properties": {"track-length": str(meters), "total-time": str(meters / 5)},
@@ -713,7 +714,7 @@ def test_detour_between_named_places_is_routed_directly() -> None:
     line = [(53.10, 8.10), (53.10, 8.20), (53.20, 8.20), (53.20, 8.30), (53.10, 8.30)]  # erst Osten, dann Bogen
     graph = named_route.build_graph(["Bucht-Radweg"], [([1, 2, 3, 4, 5], line)])
     places = [line[0], line[1], line[-1]]
-    straight = [named_route.haversine_km(*a, *b) for a, b in zip(places, places[1:])]  # je ~6,7 km
+    straight = [named_route.haversine_km(*a, *b) for a, b in itertools.pairwise(places)]  # je ~6,7 km
     route_guide = named_route.guide(graph, places, straight)
     assert route_guide.detour_legs == ["Teilstück 2: 29 km über den Fernweg, 7 km direkt"]
     assert route_guide.off_route_legs == [] and route_guide.on_route_km == pytest.approx(6.7, abs=0.2)

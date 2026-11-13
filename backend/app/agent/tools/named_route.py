@@ -11,6 +11,7 @@ Relation sind in OSM ungeordnet und enthalten Varianten; der Graph braucht keine
 """
 
 import heapq
+import itertools
 import math
 import re
 import time
@@ -303,7 +304,7 @@ def overpass_ways(data: dict[str, Any]) -> list[Way]:
     for element in data.get("elements", []):
         if element.get("type") == "way":
             # Overpass liefert für fehlende Knoten null
-            nodes = zip(element.get("nodes", []), element.get("geometry", []))
+            nodes = zip(element.get("nodes", []), element.get("geometry", []), strict=False)
             pairs = [(n, (p["lat"], p["lon"])) for n, p in nodes if p]
             ways.append(([n for n, _ in pairs], [p for _, p in pairs]))
     return ways
@@ -429,13 +430,13 @@ def build_graph(names: list[str], ways: list[Way], source: str = "") -> RouteGra
     node_way: dict[int, int] = {}
     ends: list[int] = []
     for index, (way_nodes, way_coords) in enumerate(ways):
-        nodes = [(node, (point[0], point[1])) for node, point in zip(way_nodes, way_coords)]
+        nodes = [(node, (point[0], point[1])) for node, point in zip(way_nodes, way_coords, strict=False)]
         for node, point in nodes:
             if node not in graph.coords:
                 graph.coords[node] = point
                 graph.grid.setdefault(_cell(*point), []).append(node)
                 node_way[node] = index
-        for (a, _), (b, _) in zip(nodes, nodes[1:]):
+        for (a, _), (b, _) in itertools.pairwise(nodes):
             graph._connect(a, b)
         if nodes:
             ends += [nodes[0][0], nodes[-1][0]]
@@ -483,7 +484,7 @@ def sample(points: list[Point], spacing_km: float) -> list[Point]:
     """Punkte im Abstand `spacing_km` entlang des Pfads, ohne Anfang und Ende."""
     samples = []
     travelled = 0.0
-    for a, b in zip(points, points[1:]):
+    for a, b in itertools.pairwise(points):
         travelled += haversine_km(*a, *b)
         if travelled >= spacing_km:
             samples.append(b)
@@ -546,7 +547,7 @@ def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | No
     partial_legs = []
     detour_legs = []
     gap_legs: list[str] = []
-    for leg, (a, b) in enumerate(zip(waypoints, waypoints[1:])):
+    for leg, (a, b) in enumerate(itertools.pairwise(waypoints)):
         path = None
         straight = haversine_km(*a, *b)
         radius = leg_snap_km(straight)

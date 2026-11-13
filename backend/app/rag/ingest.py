@@ -47,7 +47,7 @@ def split_markdown(text: str, max_chars: int = MAX_CHUNK_CHARS) -> list[TextChun
         if match:
             flush()
             level = len(match.group(1))
-            heading_path[:] = heading_path[: level - 1] + [match.group(2).strip()]
+            heading_path[:] = [*heading_path[: level - 1], match.group(2).strip()]
         else:
             current.append(line)
     flush()

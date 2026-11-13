@@ -1,5 +1,6 @@
 """Export eines gespeicherten Abenteuerplans als GPX 1.1."""
 
+import itertools
 import xml.etree.ElementTree as ET
 from typing import Any
 
@@ -59,7 +60,7 @@ def stage_tracks(plan: dict[str, Any]) -> list[list[list[float]]]:
             )
         )
     cuts.append(len(track) - 1)
-    return [track[a : b + 1] for a, b in zip(cuts, cuts[1:])]
+    return [track[a : b + 1] for a, b in itertools.pairwise(cuts)]
 
 
 def build_gpx(plan: dict[str, Any], day: int | None = None) -> str:

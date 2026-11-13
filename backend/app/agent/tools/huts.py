@@ -6,6 +6,7 @@ Korridor zwischen Start und Ziel gesucht und so ausgewählt, dass sie in Laufric
 etwa gleich lang werden.
 """
 
+import itertools
 import math
 import re
 from typing import Any
@@ -182,7 +183,8 @@ def valley_drops(geometry: list[list[float]], waypoints: list[Coordinate]) -> li
         return [None] * (len(waypoints) - 1)
     cuts = cut_indices(geometry, waypoints)
     return [
-        min(geometry[a][2], geometry[b][2]) - min(p[2] for p in geometry[a : b + 1]) for a, b in zip(cuts, cuts[1:])
+        min(geometry[a][2], geometry[b][2]) - min(p[2] for p in geometry[a : b + 1])
+        for a, b in itertools.pairwise(cuts)
     ]
 
 
@@ -193,7 +195,7 @@ def leg_problems(waypoints: list[Coordinate], route: dict[str, Any], drops: list
     if route.get("estimated") or len(segments) != len(waypoints) - 1:
         return {}  # Schätzung ohne echten Wegverlauf sagt über Umwege nichts aus
     problems: dict[int, str] = {}
-    for day, (segment, drop) in enumerate(zip(segments, drops)):
+    for day, (segment, drop) in enumerate(zip(segments, drops, strict=False)):
         a, b = waypoints[day], waypoints[day + 1]
         straight = haversine_km(a.lat, a.lon, b.lat, b.lon)
         km = segment["distance_km"]
@@ -317,7 +319,7 @@ async def plan_hut_tour(
     unlikely = [h["name"] for h in chain if not h["overnight_likely"]]
     if unlikely:
         notes.append(f"Ohne Hinweis auf Übernachtung (evtl. nur Einkehr): {', '.join(unlikely)}.")
-    for day, (segment, drop) in enumerate(zip(route.get("segments", []), drops), start=1):
+    for day, (segment, drop) in enumerate(zip(route.get("segments", []), drops, strict=False), start=1):
         if "lowest_m" in segment and (drop or 0) > VALLEY_DROP_M:
             notes.append(f"Etappe {day} steigt bis auf {segment['lowest_m']} m ins Tal ab.")
     if note := walking_time_note(route):

@@ -1,6 +1,7 @@
 """Routing über OpenRouteService (mit API-Key) und BRouter (ohne Key) mit gegenseitigem Fallback."""
 
 import asyncio
+import itertools
 import math
 import re
 import time
@@ -145,7 +146,7 @@ def simplify_track(points: list[list[float]], tolerance_m: float = SIMPLIFY_TOLE
             if max_dist > tolerance_m:
                 keep[index] = True
                 stack.extend([(start, index), (index, end)])
-        result = [p for p, k in zip(points, keep) if k]
+        result = [p for p, k in zip(points, keep, strict=True) if k]
         if len(result) <= MAX_GEOMETRY_POINTS:
             return result
         tolerance_m *= 2
@@ -190,7 +191,7 @@ def lowest_points(geometry: list[list[float]], waypoints: list[Coordinate]) -> l
     """Tiefster Punkt (m) je Teilstück; zeigt, ob eine Etappe zwischen zwei Hütten durchs Tal führt."""
     cuts = cut_indices(geometry, waypoints)
     lowest: list[float | None] = []
-    for start, end in zip(cuts, cuts[1:]):
+    for start, end in itertools.pairwise(cuts):
         elevations = [p[2] for p in geometry[start : end + 1] if len(p) > 2]
         lowest.append(min(elevations) if elevations else None)
     return lowest
@@ -201,13 +202,13 @@ def split_segments(
 ) -> list[dict[str, float]]:
     """Teilt eine Gesamtroute an den Zwischen-Wegpunkten und berechnet Werte je Teilstück."""
     cumulative = [0.0]
-    for a, b in zip(geometry, geometry[1:]):
+    for a, b in itertools.pairwise(geometry):
         cumulative.append(cumulative[-1] + haversine_km(a[0], a[1], b[0], b[1]) * 1000)
     total = cumulative[-1] or 1.0
 
     cuts = cut_indices(geometry, waypoints)
     segments = []
-    for start, end in zip(cuts, cuts[1:]):
+    for start, end in itertools.pairwise(cuts):
         distance = cumulative[end] - cumulative[start]
         ascent, descent = elevation_gain(geometry[start : end + 1])
         segments.append({
@@ -223,12 +224,12 @@ def checkpoints(geometry: list[list[float]], transport: TransportMode) -> list[d
     mit viel zu langen Etappen); aus diesen Punkten wählt er den bei der gewünschten Tagesdistanz.
     """
     spacing = CHECKPOINT_SPACING_KM.get(transport, 10.0)
-    total = sum(haversine_km(a[0], a[1], b[0], b[1]) for a, b in zip(geometry, geometry[1:]))
+    total = sum(haversine_km(a[0], a[1], b[0], b[1]) for a, b in itertools.pairwise(geometry))
     spacing = max(spacing, total / MAX_CHECKPOINTS)
     result = []
     travelled = 0.0
     next_mark = spacing
-    for a, b in zip(geometry, geometry[1:]):
+    for a, b in itertools.pairwise(geometry):
         travelled += haversine_km(a[0], a[1], b[0], b[1])
         if travelled >= next_mark and total - travelled >= spacing / 2:
             result.append({"km": round(travelled), "lat": round(b[0], 5), "lon": round(b[1], 5)})
@@ -253,7 +254,7 @@ def doubled_km(geometry: list[list[float]]) -> tuple[float, float]:
     xy = [(p[1] * 111320.0 * math.cos(lat0), p[0] * 110540.0) for p in geometry]
     samples = [xy[0]]
     carry = 0.0  # Strecke seit der letzten Abtastung
-    for a, b in zip(xy, xy[1:]):
+    for a, b in itertools.pairwise(xy):
         length = math.dist(a, b)
         position = DOUBLED_STEP_M - carry
         while position <= length:
@@ -292,7 +293,7 @@ def loop_note(doubled: float, total: float) -> str | None:
 def _estimate(waypoints: list[Coordinate], transport: TransportMode, reason: str) -> dict[str, Any]:
     factor, speed = ESTIMATE_FACTORS[transport]
     segments = []
-    for a, b in zip(waypoints, waypoints[1:]):
+    for a, b in itertools.pairwise(waypoints):
         km = haversine_km(a.lat, a.lon, b.lat, b.lon) * factor
         segments.append({"distance_km": round(km, 1), "duration_hours": round(km / speed, 1)})
     return {
@@ -453,7 +454,7 @@ async def _route_guided(
     blocked = []
     for index, routed_km in sorted(freed):
         chunk = chunks[index]
-        along_km = sum(haversine_km(a.lat, a.lon, b.lat, b.lon) for a, b in zip(chunk, chunk[1:]))
+        along_km = sum(haversine_km(a.lat, a.lon, b.lat, b.lon) for a, b in itertools.pairwise(chunk))
         blocked.append({
             "from": {"lat": round(chunk[0].lat, 5), "lon": round(chunk[0].lon, 5)},
             "to": {"lat": round(chunk[-1].lat, 5), "lon": round(chunk[-1].lon, 5)},
@@ -767,7 +768,9 @@ async def plan_route(
             part["duration_hours"] = walking_hours(part["distance_km"], part["ascent_m"], part["descent_m"])
         notes.append("duration_hours: reine Gehzeit nach DAV-Formel ohne Pausen (mit Pausen etwa 20-30 % mehr).")
     if transport in (TransportMode.hiking, TransportMode.mtb) and len(result["segments"]) == len(waypoints) - 1:
-        for segment, lowest in zip(result["segments"], lowest_points(ctx.deps.routes[route_id], waypoints)):
+        for segment, lowest in zip(
+            result["segments"], lowest_points(ctx.deps.routes[route_id], waypoints), strict=False
+        ):
             if lowest is not None:
                 segment["lowest_m"] = round(lowest)
     if named_route:

@@ -32,7 +32,7 @@ HISTORY = [
             "source": "BRouter trekking entlang Elberadweg",
             "named_route": {"routes": ["Elberadweg"], "source": "waymarked"},
         },
-    ),  # fmt: skip
+    ),
 ]
 
 

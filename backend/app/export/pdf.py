@@ -1,6 +1,7 @@
 """Export eines gespeicherten Abenteuerplans als druckbares PDF (A4)."""
 
 import datetime as dt
+import itertools
 import math
 import re
 from pathlib import Path
@@ -338,7 +339,7 @@ class PlanPdf(FPDF):
         if len(track) < 2 or any(len(p) < 3 for p in track):
             return
         distances = [0.0]
-        for a, b in zip(track, track[1:]):
+        for a, b in itertools.pairwise(track):
             distances.append(distances[-1] + _distance_km(a, b))
         elevations = [p[2] for p in track]
         low, high = min(elevations), max(elevations)
@@ -355,7 +356,7 @@ class PlanPdf(FPDF):
         def project(km: float, ele: float) -> tuple[float, float]:
             return x0 + km / total * width, y0 + height - (ele - axis_low) / span * height
 
-        outline = [project(d, e) for d, e in zip(distances, elevations)]
+        outline = [project(d, e) for d, e in zip(distances, elevations, strict=True)]
         self.set_fill_color(*PRIMARY_SOFT)
         self.polygon([(x0, y0 + height), *outline, (x0 + width, y0 + height)], style="F")
         self.set_draw_color(*PRIMARY)

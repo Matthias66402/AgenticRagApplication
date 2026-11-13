@@ -1,4 +1,5 @@
 import datetime as dt
+import itertools
 import math
 import re
 from typing import Any
@@ -251,7 +252,8 @@ selben Schritt gemeinsam auf statt nacheinander, z. B. `geocode` für alle Orte 
    Hütten ohne Hinweis auf Übernachtung (`overnight_likely`: false) in den Etappen-Notizen erwähnen. Meldet
    `note` zu lange Gehzeiten, nenne sie in den Notizen der Etappen und in der Zusammenfassung und biete die dort
    genannte Zahl an Nächten an; plane trotzdem mit den gewünschten Tagen, statt nachzufragen.
-4. `get_weather` für Ort und Zeitraum, bei jedem Plan (auch Tagestouren), Ergebnis in `weather_summary`. Eine Vorhersage gibt es nur für die nächste Woche; für spätere Tage liefert es
+4. `get_weather` für Ort und Zeitraum, bei jedem Plan (auch Tagestouren), Ergebnis in `weather_summary`. Eine Vorhersage
+   gibt es nur für die nächste Woche; für spätere Tage liefert es
    Klimawerte (`kind` climate). Beschreibe diese in `weather_summary` als typisches Wetter der Jahreszeit (z. B.
    "Anfang September meist 12-20 °C, gelegentlich Regen"), nicht als Vorhersage für einzelne Tage.
 5. `research_knowledge` einmal vor jedem neuen Plan: Ein Recherche-Agent durchsucht die Wissensbasis zu Region
@@ -714,7 +716,7 @@ def segment_km(point: list[float], a: list[float], b: list[float]) -> float:
 
 def resample(track: list[list[float]], samples: int) -> list[list[float]]:
     """Gleichmäßig über die Länge verteilte Punkte: Vereinfachte Geometrien haben Stützpunkte nur an Kurven."""
-    steps = [haversine_km(a[0], a[1], b[0], b[1]) for a, b in zip(track, track[1:])]
+    steps = [haversine_km(a[0], a[1], b[0], b[1]) for a, b in itertools.pairwise(track)]
     total = sum(steps)
     if not total:
         return track[:1]
@@ -732,7 +734,7 @@ def resample(track: list[list[float]], samples: int) -> list[list[float]]:
 
 def shared_share(track: list[list[float]], other: list[list[float]]) -> float:
     """Anteil der Länge von `track`, der höchstens ROUTE_SHARED_KM neben der Linie `other` liegt."""
-    segments = list(zip(other, other[1:])) or [(other[0], other[0])]
+    segments = list(itertools.pairwise(other)) or [(other[0], other[0])]
     points = resample(track, ROUTE_SHARE_SAMPLES)
     near = sum(1 for p in points if any(segment_km(p, a, b) <= ROUTE_SHARED_KM for a, b in segments))
     return near / len(points)

@@ -198,12 +198,14 @@ async def test_prefetched_places_are_in_planner_history(deps: AgentDeps) -> None
         seen["instructions"] = info.instructions
         yield {0: DeltaToolCall(name=QUESTION[0], json_args=json.dumps(QUESTION[1]))}
 
-    with intake_finds({"place_name": "Garmisch-Partenkirchen", "country_codes": "de"}):
-        with planner_agent.override(model=FunctionModel(stream_function=planner_step)):
-            assert await visited_nodes(deps, "Wanderung ab Garmisch") == [
-                "intake", "prefetch_geocode", "planner", "finish_question"
-            ]  # fmt: skip
-            events, outcome = await collect("Wanderung ab Garmisch", deps)
+    with (
+        intake_finds({"place_name": "Garmisch-Partenkirchen", "country_codes": "de"}),
+        planner_agent.override(model=FunctionModel(stream_function=planner_step)),
+    ):
+        assert await visited_nodes(deps, "Wanderung ab Garmisch") == [
+            "intake", "prefetch_geocode", "planner", "finish_question"
+        ]  # fmt: skip
+        events, outcome = await collect("Wanderung ab Garmisch", deps)
 
     assert nominatim.call_count == 1  # zweiter Lauf aus dem Cache
     # Der Planer sieht Nachricht, Vorab-Aufruf und Ergebnis, als hätte er geocode selbst aufgerufen
@@ -211,7 +213,11 @@ async def test_prefetched_places_are_in_planner_history(deps: AgentDeps) -> None
     assert kinds == [["user-prompt"], ["tool-call"], ["tool-return"]]
     assert seen["messages"][0].parts[0].content == "Wanderung ab Garmisch"
     call, result = seen["messages"][1].parts[0], seen["messages"][2].parts[0]
-    assert (call.tool_name, call.args, call.tool_call_id) == ("geocode", {"place_name": "Garmisch-Partenkirchen", "country_codes": "de"}, result.tool_call_id)  # fmt: skip
+    assert (call.tool_name, call.args, call.tool_call_id) == (
+        "geocode",
+        {"place_name": "Garmisch-Partenkirchen", "country_codes": "de"},
+        result.tool_call_id,
+    )
     assert result.content[0]["lat"] == 47.49
     assert seen["instructions"] and "Outdoor-Tourenplaner" in seen["instructions"]  # Anweisungen trotz fehlendem Prompt
 
@@ -380,10 +386,12 @@ async def test_prefetched_research_satisfies_planner(deps: AgentDeps) -> None:
         else:
             yield {0: DeltaToolCall(name="final_plan", json_args=json.dumps(make_plan()))}
 
-    with intake_finds({"place_name": "Garmisch-Partenkirchen"}, research=RESEARCH):
-        with planner_agent.override(model=FunctionModel(stream_function=planner_step)):
-            nodes = await visited_nodes(deps, "Tageswanderung ab Garmisch morgen")
-            events, outcome = await collect("Tageswanderung ab Garmisch morgen", deps)
+    with (
+        intake_finds({"place_name": "Garmisch-Partenkirchen"}, research=RESEARCH),
+        planner_agent.override(model=FunctionModel(stream_function=planner_step)),
+    ):
+        nodes = await visited_nodes(deps, "Tageswanderung ab Garmisch morgen")
+        events, outcome = await collect("Tageswanderung ab Garmisch morgen", deps)
 
     assert len(nodes) == 5 and nodes[0] == "intake" and nodes[-2:] == ["planner", "finish_plan"]  # Planer nur einmal
     assert sorted(nodes[1:3]) == ["prefetch_geocode", "prefetch_research"]  # parallel, Reihenfolge beliebig

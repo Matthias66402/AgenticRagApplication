@@ -123,7 +123,7 @@ async def render_basemap(viewport: Viewport) -> Image.Image | None:
         return None
 
     canvas = Image.new("RGB", (math.ceil(viewport.width), math.ceil(viewport.height)), BACKGROUND)
-    for (x, y), data in zip(tiles, images):
+    for (x, y), data in zip(tiles, images, strict=True):
         if data:
             tile = Image.open(io.BytesIO(data)).convert("RGB")
             canvas.paste(tile, (round(x * TILE_SIZE - viewport.left), round(y * TILE_SIZE - viewport.top)))
