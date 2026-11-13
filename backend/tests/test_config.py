@@ -37,7 +37,9 @@ def test_unknown_variable_is_reported(tmp_path: Path) -> None:
 def test_invalid_value_is_reported(tmp_path: Path) -> None:
     path = write_env(tmp_path / ".env.example", LLM_REQUESTS_PER_MINUTE="")
 
-    assert check(path) == ["LLM_REQUESTS_PER_MINUTE: Input should be a valid integer, unable to parse string as an integer"]
+    assert check(path) == [
+        "LLM_REQUESTS_PER_MINUTE: Input should be a valid integer, unable to parse string as an integer"
+    ]
 
 
 def test_missing_file_is_reported(tmp_path: Path) -> None:

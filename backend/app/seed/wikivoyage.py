@@ -80,7 +80,10 @@ async def run(args: argparse.Namespace) -> int:
                 print(status + f", {len(document.chunks)} Abschnitte eingelesen")
             except Exception as exc:  # z. B. Embedding-Anbieter gesperrt
                 failures += 1
-                print(status + f", Einlesen fehlgeschlagen: {exc}\n  Datei ist gespeichert; später mit `python -m app.seed` einlesen.")
+                print(
+                    status
+                    + f", Einlesen fehlgeschlagen: {exc}\n  Datei ist gespeichert; später mit `python -m app.seed` einlesen."
+                )
     return 1 if failures else 0
 
 

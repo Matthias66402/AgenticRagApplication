@@ -5,8 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.auth.deps import CurrentUser, SessionDep
-from app.export.filename import export_filename
 from app.export.basemap import render_basemap
+from app.export.filename import export_filename
 from app.export.gpx import build_gpx, has_track, stage_tracks
 from app.export.pdf import build_pdf, map_viewport
 from app.export.trip import exportable_plan
@@ -32,7 +32,9 @@ async def get_export_plan(session: SessionDep, adventure_id: int, user_id: int) 
     """Abenteuer und Plan in Tourform für die Exporte (Reisekarten siehe app.export.trip)."""
     adventure = await get_owned_adventure(session, adventure_id, user_id)
     if not adventure.plan:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Abenteuer gibt es noch keinen Plan")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Abenteuer gibt es noch keinen Plan"
+        )
     return adventure, exportable_plan(adventure.plan)
 
 

@@ -414,7 +414,9 @@ async def waymarked_graph(
         if any(matches(n, {"name": r.get("name", ""), "ref": r.get("ref", "")}) for n in wanted)
     }  # fmt: skip
     if not found:
-        return not_found_message(name, [(WAYMARKED_GROUP_RANK.get(r.get("group"), 4), short_name(r)) for r in near.values()])
+        return not_found_message(
+            name, [(WAYMARKED_GROUP_RANK.get(r.get("group"), 4), short_name(r)) for r in near.values()]
+        )
 
     ways: list[Way] = []
     for base in dict.fromkeys(base for base, _ in found):
@@ -565,7 +567,8 @@ def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | No
         else:
             long_connections += [
                 f"Wegpunkt {i + 1} ({snap[1]:.0f} km)"
-                for i, snap in ((leg, start), (leg + 1, goal)) if snap[1] > MAX_SNAP_KM
+                for i, snap in ((leg, start), (leg + 1, goal))
+                if snap[1] > MAX_SNAP_KM
             ]
             path = graph.shortest_path(start[0], goal[0])
             if path is None and (bridged := graph.bridged_path(start[0], goal[0])):
@@ -599,7 +602,13 @@ def guide(graph: RouteGraph, waypoints: list[Point], direct_km: list[float] | No
             off_route_legs.append(leg + 1)
         dense.append(b)
     return Guide(
-        dense, on_route_km, off_route_legs, reasons, list(dict.fromkeys(long_connections)), partial_legs, detour_legs,
+        dense,
+        on_route_km,
+        off_route_legs,
+        reasons,
+        list(dict.fromkeys(long_connections)),
+        partial_legs,
+        detour_legs,
         gap_legs,
     )
 
@@ -609,7 +618,12 @@ async def catalog_overview(deps: AgentDeps) -> str:
 
     Ohne diese Liste rät das Modell Namen wie "North Sea Cycle Route", die erst eine langsame Live-Suche auslösen.
     """
-    columns = (LongDistanceRoute.name, LongDistanceRoute.aliases, LongDistanceRoute.route_type, LongDistanceRoute.course)
+    columns = (
+        LongDistanceRoute.name,
+        LongDistanceRoute.aliases,
+        LongDistanceRoute.route_type,
+        LongDistanceRoute.course,
+    )
     try:
         async with deps.session_factory() as session:
             rows = (await session.execute(select(*columns).order_by(LongDistanceRoute.name))).all()

@@ -20,8 +20,8 @@ from app.agent.graph import INTERNAL_MESSAGE, NETWORK_ERROR_MESSAGE, OFF_TOPIC_M
 from app.agent.intake import Prefetch, conversation_context, intake_agent, intake_prompt, plan_prefetch
 from app.agent.plan_schema import TransportMode
 from app.agent.planner import planner_agent
-from app.agent.tools import geocode as geocode_module
 from app.agent.runner import RunOutcome, run_planner
+from app.agent.tools import geocode as geocode_module
 from app.config import get_settings
 from app.db import SessionLocal
 from tests.test_agent import RESEARCH, WEATHER, make_plan, scripted_model
@@ -37,7 +37,9 @@ async def deps() -> AsyncIterator[AgentDeps]:
         yield AgentDeps(settings=get_settings(), http=http, session_factory=SessionLocal, user_name="Test")
 
 
-async def collect(message: str, deps: AgentDeps, history: list[Any] | None = None) -> tuple[list[dict[str, Any]], RunOutcome]:
+async def collect(
+    message: str, deps: AgentDeps, history: list[Any] | None = None
+) -> tuple[list[dict[str, Any]], RunOutcome]:
     outcome = RunOutcome()
     events = [event async for event in run_planner(message, history or [], deps, outcome)]
     return events, outcome
@@ -140,11 +142,19 @@ async def test_runner_reports_network_errors_clearly(deps: AgentDeps, error: Exc
     assert outcome.error == NETWORK_ERROR_MESSAGE
 
 
-GARMISCH = {"display_name": "Garmisch-Partenkirchen", "lat": "47.49", "lon": "11.09", "category": "place", "type": "town"}
+GARMISCH = {
+    "display_name": "Garmisch-Partenkirchen",
+    "lat": "47.49",
+    "lon": "11.09",
+    "category": "place",
+    "type": "town",
+}
 
 
 def intake_finds(
-    *places: dict[str, Any], research: dict[str, Any] | None = None, start_date: str | None = None,
+    *places: dict[str, Any],
+    research: dict[str, Any] | None = None,
+    start_date: str | None = None,
     topic: str = "outdoor",
 ) -> Any:
     output = {"places": list(places), "research": research, "start_date": start_date, "topic": topic}
@@ -234,7 +244,10 @@ async def test_intake_failure_falls_back_to_planner(deps: AgentDeps) -> None:
 
 async def test_off_topic_message_is_rejected_without_planner(deps: AgentDeps) -> None:
     """Fachfremde Nachricht: feste Absage, kein Planer-Lauf, Verlauf des Planers bleibt unverändert."""
-    with intake_finds({"place_name": "Afrika"}, topic="fachfremd"), planner_agent.override(model=scripted_model(QUESTION)):
+    with (
+        intake_finds({"place_name": "Afrika"}, topic="fachfremd"),
+        planner_agent.override(model=scripted_model(QUESTION)),
+    ):
         assert await visited_nodes(deps, "Wo leben Löwen?") == ["intake", "reject_off_topic"]
         events, outcome = await collect("Wo leben Löwen?", deps)
     assert events == []
@@ -261,7 +274,9 @@ async def test_question_about_approach_reaches_planner(deps: AgentDeps) -> None:
 async def test_answer_ending_with_colon_is_retried(deps: AgentDeps) -> None:
     """Kündigt die Antwort nur an ("… was wichtig ist:"), muss das Modell die vollständige Antwort ausgeben."""
     with planner_agent.override(
-        model=scripted_model(("answer_user", {"message": "Ich fasse kurz zusammen:"}), ("answer_user", {"message": "Fertig."}))
+        model=scripted_model(
+            ("answer_user", {"message": "Ich fasse kurz zusammen:"}), ("answer_user", {"message": "Fertig."})
+        )
     ):
         _, outcome = await collect("Hallo", deps)
     assert outcome.answer == "Fertig."
@@ -294,7 +309,9 @@ async def test_summary_instead_of_answer_is_retried(deps: AgentDeps, summary: st
 
 
 async def test_long_explanation_starting_with_announcement_is_accepted(deps: AgentDeps) -> None:
-    explanation = "Ich erkläre kurz, wie ich vorgehe: " + "Ich suche die Orte in OpenStreetMap und plane die Route. " * 8
+    explanation = (
+        "Ich erkläre kurz, wie ich vorgehe: " + "Ich suche die Orte in OpenStreetMap und plane die Route. " * 8
+    )
     with planner_agent.override(model=scripted_model(("answer_user", {"message": explanation}))):
         _, outcome = await collect("Wie wählst Du die Routen aus?", deps)
     assert outcome.answer == explanation.strip()

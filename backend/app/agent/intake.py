@@ -81,14 +81,14 @@ Art der NEUEN Nachricht (`topic`):
 
 
 class PlaceQuery(BaseModel):
-    place_name: str = Field(description="Suchbegriff wie für geocode, z. B. \"Garmisch-Partenkirchen\"")
-    country_codes: str | None = Field(default=None, description="Kommagetrennte ISO-Ländercodes, z. B. \"de\"")
+    place_name: str = Field(description='Suchbegriff wie für geocode, z. B. "Garmisch-Partenkirchen"')
+    country_codes: str | None = Field(default=None, description='Kommagetrennte ISO-Ländercodes, z. B. "de"')
 
 
 class ResearchRequest(BaseModel):
     """Argumente für research_knowledge (app.agent.tools.research)."""
 
-    region: str = Field(description="Region, Ort oder Route, z. B. \"Harz\" oder \"Nordseeküsten-Radweg\"")
+    region: str = Field(description='Region, Ort oder Route, z. B. "Harz" oder "Nordseeküsten-Radweg"')
     transport: TransportMode
     accommodation_type: AccommodationType | None = None
     extra_topic: str | None = Field(default=None, description="Höchstens ein Zusatzthema")
@@ -121,7 +121,7 @@ class Prefetch(BaseModel):
         return (
             f"Vorab-Auswertung der aktuellen Nachricht (prüfe sie, maßgeblich ist die Nachricht): Startdatum "
             f"{self.start_date.isoformat()} ({WEEKDAYS[self.start_date.weekday()]}). Eine relative Zeitangabe "
-            "(\"in … Tagen\") ist das Startdatum, keine Dauer."
+            '("in … Tagen") ist das Startdatum, keine Dauer.'
         )
 
 

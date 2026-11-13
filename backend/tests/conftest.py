@@ -7,26 +7,26 @@ os.environ["DATABASE_URL"] = os.environ.get(
 # Keine Traces aus Tests nach Langfuse senden, auch wenn .env Keys enthält
 os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 
-import datetime as dt  # noqa: E402
-from collections.abc import AsyncIterator, Iterator  # noqa: E402
-from typing import Any  # noqa: E402
+import datetime as dt
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
-import httpx  # noqa: E402
-import pytest  # noqa: E402
-from pydantic_ai.embeddings import TestEmbeddingModel  # noqa: E402
-from pydantic_ai.models.test import TestModel  # noqa: E402
-from sqlalchemy import text  # noqa: E402
+import httpx
+import pytest
+from pydantic_ai.embeddings import TestEmbeddingModel
+from pydantic_ai.models.test import TestModel
+from sqlalchemy import text
 
-from app.auth.security import hash_password  # noqa: E402
-from app.config import get_settings  # noqa: E402
-from app.db import SessionLocal, engine  # noqa: E402
-from app.agent.intake import intake_agent  # noqa: E402
-from app.agent.research import research_agent  # noqa: E402
-from app.agent.tools import weather  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models import User, UserRole  # noqa: E402
-from app.rag.embeddings import get_embedder  # noqa: E402
-from app.rag.relevance import get_relevance_agent  # noqa: E402
+from app.agent.intake import intake_agent
+from app.agent.research import research_agent
+from app.agent.tools import weather
+from app.auth.security import hash_password
+from app.config import get_settings
+from app.db import SessionLocal, engine
+from app.main import app
+from app.models import User, UserRole
+from app.rag.embeddings import get_embedder
+from app.rag.relevance import get_relevance_agent
 
 PASSWORD = "secret-pass-123"
 
@@ -34,7 +34,11 @@ PASSWORD = "secret-pass-123"
 @pytest.fixture(autouse=True)
 async def clean_db() -> AsyncIterator[None]:
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE users, adventures, chat_messages, documents, chunks, long_distance_routes RESTART IDENTITY CASCADE"))
+        await conn.execute(
+            text(
+                "TRUNCATE users, adventures, chat_messages, documents, chunks, long_distance_routes RESTART IDENTITY CASCADE"
+            )
+        )
     yield
 
 
@@ -109,6 +113,7 @@ async def admin_headers(client: httpx.AsyncClient) -> dict[str, str]:
 @pytest.fixture
 def fake_weather(monkeypatch: pytest.MonkeyPatch) -> None:
     """get_weather ohne Open-Meteo: feste Werte als Vorhersage bzw. Klimawerte."""
+
     def days(start: dt.date, end: dt.date, kind: str) -> list[dict[str, Any]]:
         count = (end - start).days + 1
         return [

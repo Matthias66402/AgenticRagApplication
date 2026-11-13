@@ -12,20 +12,45 @@ import httpx
 import pytest
 import respx
 from pydantic import ValidationError
-from pydantic_ai import Agent, ModelMessage, ModelRequest, ModelResponse, ModelRetry, ToolCallPart, ToolReturnPart, UserPromptPart
+from pydantic_ai import (
+    Agent,
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ModelRetry,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 
-from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
-from app.schemas.adventure import plan_places
 from app.agent.models import REQUEST_TIMEOUT_SECONDS, build_model, model_settings
-from app.agent.research import research_agent
-from app.agent.planner import DAILY_DISTANCE, FIXED_DURATION, QUIET_WORDS, ROUTE_WORDS, check_blocked_sections, check_duplicate_routes, check_duration_question, check_no_plan_evasion, check_quiet_wish, check_round_trip, check_route_wish, check_stage_distances, check_stays, check_wild_camping_question, planner_agent
+from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
+from app.agent.planner import (
+    DAILY_DISTANCE,
+    FIXED_DURATION,
+    QUIET_WORDS,
+    ROUTE_WORDS,
+    check_blocked_sections,
+    check_duplicate_routes,
+    check_duration_question,
+    check_no_plan_evasion,
+    check_quiet_wish,
+    check_round_trip,
+    check_route_wish,
+    check_stage_distances,
+    check_stays,
+    check_wild_camping_question,
+    planner_agent,
+)
 from app.agent.rate_limit import RateLimitedModel, RequestBudget
+from app.agent.research import research_agent
 from app.agent.tools import weather as weather_module
 from app.agent.tools.routing import BROUTER_URL, ORS_URL
 from app.agent.tools.transit import WEEKDAYS, next_timetable_change
-from app.evaluation.planner import retry_feedback
 from app.config import get_settings
+from app.evaluation.planner import retry_feedback
+from app.schemas.adventure import plan_places
 from tests.test_tools import BROUTER_OK, END, START, TRANSIT_OK, add_test_route, one_trip
 
 TOMORROW = dt.date.today() + dt.timedelta(days=1)
@@ -194,9 +219,7 @@ async def test_question_when_information_missing(client: httpx.AsyncClient, user
     assert [m["role"] for m in stored["messages"]] == ["user", "assistant"]
 
 
-async def test_plan_with_tool_call_and_self_correction(
-    client: httpx.AsyncClient, user_headers: dict[str, str]
-) -> None:
+async def test_plan_with_tool_call_and_self_correction(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     model = scripted_model(
         ("estimate_hiking_time", {"distance_km": 15, "ascent_m": 600}),
@@ -290,7 +313,9 @@ async def test_journey_only_from_train_connections(client: httpx.AsyncClient, us
 
 
 @respx.mock
-async def test_plan_links_bahn_search_without_timetable(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+async def test_plan_links_bahn_search_without_timetable(
+    client: httpx.AsyncClient, user_headers: dict[str, str]
+) -> None:
     """Nach dem Fahrplanwechsel ohne Fahrplandaten hängt das Backend den bahn.de-Link an den Plan, nicht das LLM; auch
     wenn der Agent die Bahn in einer früheren Nachricht abgefragt hat oder nur antwortet."""
     respx.get(get_settings().transit_api_url).respond(json={"itineraries": []})
@@ -483,7 +508,9 @@ async def test_train_trip_with_bike_to_station(client: httpx.AsyncClient, user_h
 
 
 @respx.mock
-async def test_train_trip_with_bike_from_arrival_station(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
+async def test_train_trip_with_bike_from_arrival_station(
+    client: httpx.AsyncClient, user_headers: dict[str, str]
+) -> None:
     """Zug nach Augsburg, dann mit dem Rad vom Bahnhof zur Jugendherberge: Der Weg gehört in `egress`. Das Modell
     trug ihn erst in `access` ein und plante nach der Zurückweisung den Weg von zu Hause zum Bahnhof."""
     respx.post(ORS_URL.format(profile="cycling-regular")).respond(status_code=503)
@@ -769,9 +796,13 @@ async def test_plan_needs_weather_summary(client: httpx.AsyncClient, user_header
     """Wetter abgefragt, aber nicht übernommen → Korrektur; liefert Open-Meteo einen Fehler, geht der Plan ohne durch."""
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     without = make_plan() | {"weather_summary": None}
-    model = scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", without), ("final_plan", make_plan()))
+    model = scripted_model(
+        ("research_knowledge", RESEARCH), WEATHER, ("final_plan", without), ("final_plan", make_plan())
+    )
     with planner_agent.override(model=model):
-        response = await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung"})
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung"}
+        )
     assert parse_sse(response.text)[-2]["plan"]["weather_summary"] == "Sonnig, 5-15 °C."
 
 
@@ -784,8 +815,12 @@ async def test_plan_without_weather_when_service_fails(
     monkeypatch.setattr(weather_module, "_forecast", unavailable)
     adventure = (await client.post("/api/adventures", headers=user_headers, json={})).json()
     without = make_plan() | {"weather_summary": None}
-    with planner_agent.override(model=scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", without))):
-        response = await client.post(f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung"})
+    with planner_agent.override(
+        model=scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", without))
+    ):
+        response = await client.post(
+            f"/api/chat/{adventure['id']}", headers=user_headers, json={"message": "Wanderung"}
+        )
     assert parse_sse(response.text)[-2]["plan"]["weather_summary"] is None
 
 
@@ -896,7 +931,7 @@ def test_no_duration_question_with_daily_distance() -> None:
 
 
 def test_main_road_wish_is_no_route_wish() -> None:
-    """"entlang von Hauptstraßen" ist kein Verlauf, für den ein Fernweg gesucht werden müsste."""
+    """ "entlang von Hauptstraßen" ist kein Verlauf, für den ein Fernweg gesucht werden müsste."""
     assert not ROUTE_WORDS.search("so wenig wie möglich entlang von befahrenen Hauptstraßen entlang fahren")
     assert not ROUTE_WORDS.search("nicht die Bundesstraße entlang")
     assert ROUTE_WORDS.search("entlang der Nordseeküste nach Wilhelmshaven")

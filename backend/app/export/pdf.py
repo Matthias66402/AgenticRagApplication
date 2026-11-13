@@ -46,7 +46,9 @@ JOURNEYS = [("Anreise", "outbound_journey"), ("Rückreise", "return_journey")]
 # Reisekarte (siehe app.export.trip): die Bahnfahrt ist die Reise selbst, die Etappe der Weg zum Bahnhof
 TRAIN_TRIP_JOURNEYS = [("Hinfahrt", "outbound_journey"), ("Rückfahrt", "return_journey")]
 ACCESS_LABELS = {"cycling": "Rad", "hiking": "Zu Fuß"}
-TRANSIT_NOTE = "Fahrplandaten: Transitous (transitous.org) · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise prüfen."
+TRANSIT_NOTE = (
+    "Fahrplandaten: Transitous (transitous.org) · ohne Gewähr, ohne Echtzeit und Preise – vor der Reise prüfen."
+)
 # Links im Fließtext des LLM: Markdown-Link [Text](URL) oder nackte URL (auch ohne Schema ab „www.“)
 LINK_PATTERN = re.compile(
     r"\[(?P<label>[^\][\n]+)\]\((?P<href>https?://[^\s()]+(?:\([^\s()]*\)[^\s()]*)*)\)"
@@ -198,7 +200,9 @@ class PlanPdf(FPDF):
         for item in items:
             self.style(size, color=color)
             self.cell(5, size * 0.5, "•")
-            self.multi_cell(0, size * 0.5, _with_links(item), markdown=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+            self.multi_cell(
+                0, size * 0.5, _with_links(item), markdown=True, align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT
+            )
             self.ln(1)
 
     # --- Inhalte -------------------------------------------------------------------------------------------------
@@ -275,7 +279,10 @@ class PlanPdf(FPDF):
         self.rect(x0, y0, width, height)
 
         self.set_y(y0 + height + 2)
-        legend = [(START_COLOR, "Start"), (PRIMARY, station_route_labels(plan)[1] if is_train_trip(plan) else "Etappenziel (Tag)")]
+        legend = [
+            (START_COLOR, "Start"),
+            (PRIMARY, station_route_labels(plan)[1] if is_train_trip(plan) else "Etappenziel (Tag)"),
+        ]
         if accommodations:
             legend.append((ACCOMMODATION_COLOR, "Unterkunft"))
         x = x0
@@ -289,7 +296,11 @@ class PlanPdf(FPDF):
         self.scale_and_attribution(viewport, y0 + height + 2)
         self.ln(5)
         if not track:
-            self.paragraph("Keine berechnete Route – gestrichelt ist die Luftlinie zwischen den Etappenzielen.", size=7.5, color=MUTED)
+            self.paragraph(
+                "Keine berechnete Route – gestrichelt ist die Luftlinie zwischen den Etappenzielen.",
+                size=7.5,
+                color=MUTED,
+            )
 
     def scale_and_attribution(self, viewport: Viewport, y: float) -> None:
         """Rechts unter der Karte, damit nichts die Route verdeckt: Maßstabsleiste und OSM-Hinweis (ODbL)."""
@@ -392,21 +403,36 @@ class PlanPdf(FPDF):
             width = self.epw - DAY_COLUMN
             self.set_xy(right, y0)
             self.style(10.5, bold=True)
-            self.multi_cell(width, 5.5, f"{_short(stage['start']['name'])} → {_short(stage['end']['name'])}", align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
+            self.multi_cell(
+                width,
+                5.5,
+                f"{_short(stage['start']['name'])} → {_short(stage['end']['name'])}",
+                align="L",
+                new_x=XPos.LEFT,
+                new_y=YPos.NEXT,
+            )
             self.style(8.5, color=MUTED)
-            self.multi_cell(width, 4.5, " · ".join(d for d in details if d), align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
+            self.multi_cell(
+                width, 4.5, " · ".join(d for d in details if d), align="L", new_x=XPos.LEFT, new_y=YPos.NEXT
+            )
             if acc := stage.get("accommodation"):
                 self.set_xy(right, self.get_y() + 1)  # ln() würde an den linken Rand springen
                 label = ACCOMMODATION_LABELS.get(acc.get("type", ""), "Unterkunft")
                 self.style(9.5)
-                self.multi_cell(width, 5, f"Übernachtung: {acc['name']} ({label})", align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
+                self.multi_cell(
+                    width, 5, f"Übernachtung: {acc['name']} ({label})", align="L", new_x=XPos.LEFT, new_y=YPos.NEXT
+                )
                 if acc.get("website"):
                     self.style(8.5, color=PRIMARY)
-                    self.multi_cell(width, 4.5, acc["website"], link=acc["website"], align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
+                    self.multi_cell(
+                        width, 4.5, acc["website"], link=acc["website"], align="L", new_x=XPos.LEFT, new_y=YPos.NEXT
+                    )
             if stage.get("notes"):
                 self.set_xy(right, self.get_y() + 1)
                 self.style(9.5)
-                self.multi_cell(width, 5, _with_links(stage["notes"]), markdown=True, align="L", new_x=XPos.LEFT, new_y=YPos.NEXT)
+                self.multi_cell(
+                    width, 5, _with_links(stage["notes"]), markdown=True, align="L", new_x=XPos.LEFT, new_y=YPos.NEXT
+                )
             # Bei einem Seitenumbruch in der rechten Spalte gilt left_bottom nur für die vorige Seite
             bottom = max(self.get_y(), left_bottom) if self.page == page else self.get_y()
             self.set_xy(self.l_margin, bottom + 3)
@@ -423,7 +449,9 @@ class PlanPdf(FPDF):
         for label, journey in journeys:
             self.ensure_space(25)
             legs = journey["legs"]
-            days_later = (dt.date.fromisoformat(journey["arrival"][:10]) - dt.date.fromisoformat(journey["departure"][:10])).days
+            days_later = (
+                dt.date.fromisoformat(journey["arrival"][:10]) - dt.date.fromisoformat(journey["departure"][:10])
+            ).days
             transfers = journey["transfers"]
             self.style(10.5, bold=True)
             self.cell(0, 5.5, f"{label} · {_date(journey['departure'][:10])}", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
@@ -438,7 +466,9 @@ class PlanPdf(FPDF):
                 self.style(8.5, color=MUTED)
                 self.cell(24, 4.5, f"{_time(leg['departure'])}–{_time(leg['arrival'])}")
                 if leg["line"].startswith("Fußweg"):
-                    self.multi_cell(0, 4.5, f"{leg['line']} → {leg['to_stop']}", align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+                    self.multi_cell(
+                        0, 4.5, f"{leg['line']} → {leg['to_stop']}", align="L", new_x=XPos.LMARGIN, new_y=YPos.NEXT
+                    )
                     continue
                 self.style(8.5, bold=True)
                 self.cell(self.get_string_width(leg["line"]) + 2.5, 4.5, leg["line"])
@@ -455,7 +485,9 @@ class PlanPdf(FPDF):
             self.ln(3)
         for link in links:
             status = "noch kein Fahrplan verfügbar" if link["missing"] else "Fahrplan evtl. unvollständig"
-            self.paragraph(f"{link['label']}: {status} – [Verbindungen bei bahn.de]({link['url']})", size=9.5, links=True)
+            self.paragraph(
+                f"{link['label']}: {status} – [Verbindungen bei bahn.de]({link['url']})", size=9.5, links=True
+            )
             self.ln(1)
         if journeys:
             self.paragraph(TRANSIT_NOTE, size=8, color=MUTED)

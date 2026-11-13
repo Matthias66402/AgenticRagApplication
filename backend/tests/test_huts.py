@@ -10,7 +10,13 @@ from app.agent.planner import check_hut_tour
 from app.agent.tools import geocode as geocode_module
 from app.agent.tools.common import haversine_km
 from app.agent.tools.huts import (
-    attempt_score, choose_chain, overnight_likely, plan_hut_tour, problem_legs, valley_drops, walking_time_note,
+    attempt_score,
+    choose_chain,
+    overnight_likely,
+    plan_hut_tour,
+    problem_legs,
+    valley_drops,
+    walking_time_note,
 )  # fmt: skip
 from app.agent.tools.routing import BROUTER_URL, Coordinate
 from tests.test_agent import make_plan
@@ -41,7 +47,14 @@ def nominatim_huts(request: httpx.Request) -> httpx.Response:
 def corridor_hut(name: str, along_km: float, offset_km: float = 0.0, likely: bool = True) -> dict:
     lon = START.lon + along_km / (111.32 * 0.682)
     lat = START.lat + offset_km / 110.57
-    return {"name": name, "lat": lat, "lon": lon, "km_from_start": along_km, "offset_km": offset_km, "overnight_likely": likely}
+    return {
+        "name": name,
+        "lat": lat,
+        "lon": lon,
+        "km_from_start": along_km,
+        "offset_km": offset_km,
+        "overnight_likely": likely,
+    }
 
 
 def test_overnight_likely() -> None:
@@ -109,9 +122,12 @@ def test_deep_valley_between_huts_is_a_problem_leg() -> None:
     """Zwischen zwei Hütten zurück ins Tal (Wank-Haus → Meilerhütte über Garmisch) taugt nicht als Etappe."""
     waypoints = [START, Coordinate(lat=47.0, lon=11.1), Coordinate(lat=47.0, lon=11.2), END]
     geometry = [
-        [47.0, 11.0, 700.0], [47.0, 11.1, 1800.0],  # Aufstieg zur ersten Hütte
-        [47.0, 11.15, 750.0], [47.0, 11.2, 2300.0],  # ins Tal und wieder hinauf
-        [47.0, 11.3, 1700.0], [47.0, 11.4, 1500.0],
+        [47.0, 11.0, 700.0],
+        [47.0, 11.1, 1800.0],  # Aufstieg zur ersten Hütte
+        [47.0, 11.15, 750.0],
+        [47.0, 11.2, 2300.0],  # ins Tal und wieder hinauf
+        [47.0, 11.3, 1700.0],
+        [47.0, 11.4, 1500.0],
     ]
     drops = valley_drops(geometry, waypoints)
     assert drops == [0.0, 1050.0, 0.0]
@@ -164,4 +180,6 @@ def test_hut_tour_must_use_plan_hut_tour() -> None:
     check_hut_tour(SimpleNamespace(messages=used), plan)
     # Rundtour und Hotel-Übernachtung brauchen das Tool nicht
     check_hut_tour(SimpleNamespace(messages=[]), AdventurePlan.model_validate(make_plan(days=2, accommodation="hut")))
-    check_hut_tour(SimpleNamespace(messages=[]), plan.model_copy(update={"accommodation_type": AccommodationType.hotel}))
+    check_hut_tour(
+        SimpleNamespace(messages=[]), plan.model_copy(update={"accommodation_type": AccommodationType.hotel})
+    )

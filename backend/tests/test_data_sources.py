@@ -26,8 +26,12 @@ HISTORY = [
     tool_return("plan_route", {"estimated": True, "distance_km": 30.0}),
     tool_return(
         "plan_route",
-        {"route_id": "r-2", "estimated": False, "source": "BRouter trekking entlang Elberadweg",
-         "named_route": {"routes": ["Elberadweg"], "source": "waymarked"}},
+        {
+            "route_id": "r-2",
+            "estimated": False,
+            "source": "BRouter trekking entlang Elberadweg",
+            "named_route": {"routes": ["Elberadweg"], "source": "waymarked"},
+        },
     ),  # fmt: skip
 ]
 
@@ -49,7 +53,10 @@ def test_data_sources_from_successful_tool_results() -> None:
 def test_named_route_without_recorded_source() -> None:
     """Ältere Verläufe ohne named_route.source: Verlauf allgemein aus OpenStreetMap."""
     route = ROUTE | {"named_route": {"routes": ["Elberadweg"]}}
-    assert [s["name"] for s in data_sources([tool_return("plan_route", route)])] == ["OpenStreetMap", "OpenRouteService"]
+    assert [s["name"] for s in data_sources([tool_return("plan_route", route)])] == [
+        "OpenStreetMap",
+        "OpenRouteService",
+    ]
 
 
 def test_several_named_routes_from_different_sources() -> None:

@@ -64,7 +64,8 @@ class Stage(BaseModel):
     descent_m: float | None = Field(default=None, ge=0)
     duration_hours: float | None = Field(default=None, ge=0, description="Reine Bewegungszeit")
     accommodation: AccommodationStop | None = Field(
-        default=None, description="Übernachtung am Etappenende; nur aus find_accommodation- bzw. plan_hut_tour-Ergebnissen"
+        default=None,
+        description="Übernachtung am Etappenende; nur aus find_accommodation- bzw. plan_hut_tour-Ergebnissen",
     )
     notes: str | None = None
 
@@ -165,7 +166,9 @@ class EgressRoute(BaseModel):
     transport: Literal["cycling", "hiking"]
     start: Place = Field(description="Zielbahnhof der Hinfahrt")
     end: Place = Field(description="Ziel am Ankunftsort, z. B. die Unterkunft")
-    departure: str = local_time("Losfahren am Zielbahnhof, Ortszeit YYYY-MM-DDTHH:MM: Ankunft der Verbindung plus Puffer")
+    departure: str = local_time(
+        "Losfahren am Zielbahnhof, Ortszeit YYYY-MM-DDTHH:MM: Ankunft der Verbindung plus Puffer"
+    )
     distance_km: float = Field(ge=0)
     duration_hours: float = Field(ge=0, description="Fahr- bzw. Gehzeit aus plan_route")
     route_id: str = Field(description="route_id aus plan_route")

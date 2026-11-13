@@ -53,7 +53,10 @@ def stage_tracks(plan: dict[str, Any]) -> list[list[list[float]]]:
     for stage in stages[:-1]:
         end = stage["end"]
         cuts.append(
-            min(range(cuts[-1], len(track)), key=lambda i: haversine_km(end["lat"], end["lon"], track[i][0], track[i][1]))
+            min(
+                range(cuts[-1], len(track)),
+                key=lambda i: haversine_km(end["lat"], end["lon"], track[i][0], track[i][1]),
+            )
         )
     cuts.append(len(track) - 1)
     return [track[a : b + 1] for a, b in zip(cuts, cuts[1:])]
@@ -101,7 +104,9 @@ def build_gpx(plan: dict[str, Any], day: int | None = None) -> str:
         )  # fmt: skip
         if acc := stage.get("accommodation"):
             label = ACCOMMODATION_LABELS.get(acc.get("type", ""), "Unterkunft")
-            desc = f"{label}, Übernachtung nach Tag {stage['day']}" + (f" · {acc['website']}" if acc.get("website") else "")
+            desc = f"{label}, Übernachtung nach Tag {stage['day']}" + (
+                f" · {acc['website']}" if acc.get("website") else ""
+            )
             _add_waypoint(gpx, acc["lat"], acc["lon"], acc["name"], desc, "Lodging")
 
     # Immer nur ein Track: Komoot & Co. bieten mehrere Tracks einer Datei als getrennte Touren zur Auswahl an

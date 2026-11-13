@@ -4,16 +4,31 @@ from typing import Any
 import httpx
 import pytest
 from pydantic_ai import (
-    ModelRequest, ModelResponse, RequestUsage, RetryFeedbackPart, RetryInfo, ToolCallPart, ToolReturnPart,
+    ModelRequest,
+    ModelResponse,
+    RequestUsage,
+    RetryFeedbackPart,
+    RetryInfo,
+    ToolCallPart,
+    ToolReturnPart,
 )  # fmt: skip
 
 from app.agent.deps import AgentDeps
 from app.agent.plan_schema import AdventurePlan, ClarificationQuestion, TextAnswer
-from app.config import get_settings
 from app.agent.planner import planner_agent
+from app.config import get_settings
 from app.evaluation.planner import (
-    CASES_FILE, OUTPUT_NAMES, CaseRun, check_output, covered_seconds, measure, measure_usage, phase_seconds,
-    run_case, summarize, tool_time_stats,
+    CASES_FILE,
+    OUTPUT_NAMES,
+    CaseRun,
+    check_output,
+    covered_seconds,
+    measure,
+    measure_usage,
+    phase_seconds,
+    run_case,
+    summarize,
+    tool_time_stats,
 )  # fmt: skip
 from tests.test_agent import RESEARCH, WEATHER, make_plan, scripted_model
 
@@ -86,7 +101,12 @@ def test_measure_and_summarize() -> None:
 
 async def test_run_case_measures_planner_and_research() -> None:
     """Ganzer Fall über den Graphen mit geskripteten Modellen: Aufzeichnung umfasst auch den Recherche-Agenten."""
-    case = {"id": "t", "message": "Wanderung ab Garmisch morgen", "expected_output": "final_plan", "transport": "hiking"}
+    case = {
+        "id": "t",
+        "message": "Wanderung ab Garmisch morgen",
+        "expected_output": "final_plan",
+        "transport": "hiking",
+    }
     model = scripted_model(("research_knowledge", RESEARCH), WEATHER, ("final_plan", make_plan()))
     async with httpx.AsyncClient() as http:
         with planner_agent.override(model=model):

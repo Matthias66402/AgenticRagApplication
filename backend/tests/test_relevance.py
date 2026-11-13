@@ -55,7 +55,9 @@ async def test_grade_batch_keeps_judgements_per_query() -> None:
     swedish, huts = [hit("Wildcampen DACH"), hit("Jedermannsrecht")], [hit("Hüttenknigge"), hit("Kanu")]
     model = judge({(1, 0): False, (1, 1): True, (2, 0): True, (2, 1): False})
     with get_relevance_agent().override(model=model):
-        first, empty, second = await grade_batch([("Jedermannsrecht Schweden", swedish), ("leer", []), ("Hütten", huts)])
+        first, empty, second = await grade_batch(
+            [("Jedermannsrecht Schweden", swedish), ("leer", []), ("Hütten", huts)]
+        )
     assert [c.document for c in first.kept] == ["Jedermannsrecht"]
     assert empty.kept == [] and not empty.failed  # ohne Treffer nicht im Prompt
     # Die leere Anfrage zählt nicht mit: "Hütten" ist Suchanfrage 2 im Prompt
@@ -71,7 +73,11 @@ async def test_parallel_searches_share_one_grading_call() -> None:
             grade_hits("Wildcampen Norwegen", [hit("Wildcampen DACH")], batch_key="lauf-1"),
             grade_hits("Hüttenschlafsack", [hit("Hüttenknigge")], batch_key="lauf-1"),
         )
-    assert len(calls) == 1 and "Suchanfrage 1: Wildcampen Norwegen" in calls[0] and "Suchanfrage 2: Hüttenschlafsack" in calls[0]
+    assert (
+        len(calls) == 1
+        and "Suchanfrage 1: Wildcampen Norwegen" in calls[0]
+        and "Suchanfrage 2: Hüttenschlafsack" in calls[0]
+    )
     assert a.kept == [] and [c.document for c in b.kept] == ["Hüttenknigge"]
 
     calls.clear()

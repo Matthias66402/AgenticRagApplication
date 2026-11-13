@@ -133,11 +133,14 @@ def chat_turn(*, message: str, user_id: int, adventure_id: int) -> Iterator[Any]
         return
     from langfuse import propagate_attributes
 
-    with observe("chat-turn", as_type="span", input=message) as root, propagate_attributes(
-        user_id=str(user_id),
-        session_id=f"adventure-{adventure_id}",
-        trace_name="chat-turn",
-        tags=["chat"],
-        metadata={"adventure_id": str(adventure_id)},
+    with (
+        observe("chat-turn", as_type="span", input=message) as root,
+        propagate_attributes(
+            user_id=str(user_id),
+            session_id=f"adventure-{adventure_id}",
+            trace_name="chat-turn",
+            tags=["chat"],
+            metadata={"adventure_id": str(adventure_id)},
+        ),
     ):
         yield root

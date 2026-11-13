@@ -36,7 +36,17 @@ OSM_FILTERS: dict[AccommodationType, list[OsmFilter]] = {
 
 # Offene Shelter (lean_to) stehen auch als Grillplatz oder Unterstand auf Schul- und Klinikgeländen. Zum Übernachten
 # gedachte tragen meist Buchungs- bzw. Platzangaben (in Dänemark importiert aus udinaturen.dk, pladsinaturen.dk).
-OVERNIGHT_HINTS = {"reservation", "capacity:persons", "capacity", "fee", "website", "url", "name", "operator", "overnight"}
+OVERNIGHT_HINTS = {
+    "reservation",
+    "capacity:persons",
+    "capacity",
+    "fee",
+    "website",
+    "url",
+    "name",
+    "operator",
+    "overnight",
+}
 NO_ACCESS = {"private", "no"}
 
 
@@ -44,6 +54,7 @@ def _usable(tags: dict[str, str]) -> bool:
     if tags.get("access") in NO_ACCESS:
         return False
     return tags.get("shelter_type") != "lean_to" or bool(OVERNIGHT_HINTS & tags.keys())
+
 
 # Ausgewählte OSM-Tags → Feldnamen im Tool-Ergebnis
 DETAIL_TAGS = [
@@ -122,9 +133,13 @@ async def search_nominatim(
         for item in results[query]:
             tags = item.get("extratags") or {}
             # Nominatim liefert den Namen getrennt von den extratags
-            if not _matches(tags, conditions) or not _usable(tags | ({"name": item["name"]} if item.get("name") else {})):
+            if not _matches(tags, conditions) or not _usable(
+                tags | ({"name": item["name"]} if item.get("name") else {})
+            ):
                 continue
-            entry = _entry(item.get("name"), float(item["lat"]), float(item["lon"]), tags, (lat, lon), accommodation_type)
+            entry = _entry(
+                item.get("name"), float(item["lat"]), float(item["lon"]), tags, (lat, lon), accommodation_type
+            )
             # Erster Treffer gewinnt (behält seine Detail-Tags, falls ein Objekt mehrfach auftaucht)
             found.setdefault((item.get("osm_type", ""), item.get("osm_id", 0)), entry)
     return list(found.values())
@@ -227,9 +242,7 @@ async def find_accommodation(
                 result["note"] = f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km."
             return result
         empty.append(current.value)
-    result["note"] = (
-        f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km. {SHIFT_STAGE_HINT}"
-    )
+    result["note"] = f"Keine Unterkünfte vom Typ {', '.join(empty)} im Umkreis von {radius_km:g} km. {SHIFT_STAGE_HINT}"
     return result
 
 

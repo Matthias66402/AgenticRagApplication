@@ -4,20 +4,38 @@ import re
 from typing import Any
 
 from pydantic_ai import (
-    Agent, ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ModelRetry, RunContext, Tool,
-    ToolCallPart, ToolOutput, ToolReturnPart, UserPromptPart,
+    Agent,
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    ModelRetry,
+    RunContext,
+    Tool,
+    ToolCallPart,
+    ToolOutput,
+    ToolReturnPart,
+    UserPromptPart,
 )  # fmt: skip
 
 from app.agent.deps import AgentDeps
 from app.agent.history import researched_for, weather_results
-from app.agent.plan_schema import (
-    MAX_STAGE_KM, AccessRoute, AccommodationType, AdventurePlan, ClarificationQuestion, EgressRoute, Journey, TextAnswer,
-    TrainTripPlan, TransportMode,
-)  # fmt: skip
 from app.agent.models import build_model, model_settings
+from app.agent.plan_schema import (
+    MAX_STAGE_KM,
+    AccessRoute,
+    AccommodationType,
+    AdventurePlan,
+    ClarificationQuestion,
+    EgressRoute,
+    Journey,
+    TextAnswer,
+    TrainTripPlan,
+    TransportMode,
+)  # fmt: skip
 from app.agent.tools.accommodation import find_accommodation
-from app.agent.tools.geocode import geocode
 from app.agent.tools.common import haversine_km
+from app.agent.tools.geocode import geocode
 from app.agent.tools.huts import MIN_HUT_TOUR_KM, plan_hut_tour
 from app.agent.tools.named_route import catalog_overview
 from app.agent.tools.research import research_knowledge
@@ -320,13 +338,11 @@ def current_run(ctx: RunContext[AgentDeps]) -> list[ModelMessage]:
         for index, message in enumerate(ctx.messages)
         if isinstance(message, ModelRequest) and any(isinstance(part, UserPromptPart) for part in message.parts)
     ]
-    return ctx.messages[starts[-1]:] if starts else ctx.messages
+    return ctx.messages[starts[-1] :] if starts else ctx.messages
 
 
 def output_rejected(ctx: RunContext[AgentDeps], tool_name: str, prefix: str = "") -> bool:
-    """Wurde in diesem Lauf eine Ausgabe über `tool_name` zurückgewiesen (optional mit Hinweis, der so beginnt)?
-
-    """
+    """Wurde in diesem Lauf eine Ausgabe über `tool_name` zurückgewiesen (optional mit Hinweis, der so beginnt)?"""
     return any(
         isinstance(part, ToolReturnPart) and part.tool_name == tool_name and part.outcome == "retried"
         and isinstance(part.content, str) and part.content.startswith(prefix)
@@ -408,7 +424,7 @@ def check_wild_camping_question(ctx: RunContext[AgentDeps], output: Clarificatio
         return
     raise ModelRetry(
         f"{WILD_CAMPING_HINT} (Jedermannsrecht), wo sich kein Platz findet. Frage nicht danach, sondern plane diese "
-        "Etappenenden an einem realen Ort bei der gewünschten Tagesdistanz, schreibe \"Wildcampen (Jedermannsrecht)\" "
+        'Etappenenden an einem realen Ort bei der gewünschten Tagesdistanz, schreibe "Wildcampen (Jedermannsrecht)" '
         "in die Etappen-Notizen und gib den Plan über `final_plan` aus."
     )
 
@@ -554,7 +570,7 @@ def check_route_wish(ctx: RunContext[AgentDeps], output: AdventurePlan) -> None:
             f"{ROUTE_WISH_HINT} (z. B. entlang einer Küste, eines Flusses oder auf einem "
             "Fernweg). Rufe `plan_route` mit Start, den vom Nutzer genannten Zwischenorten und Ziel und dem passenden "
             "Fernweg als `route_name` auf (z. B. "
-            "\"Nordseeküsten-Radweg\", \"Elberadweg\"), wähle die Etappenorte aus `named_route.checkpoints` und "
+            '"Nordseeküsten-Radweg", "Elberadweg"), wähle die Etappenorte aus `named_route.checkpoints` und '
             "plane dann neu. Gibt es keinen Fernweg (z. B. ein Uferweg an einem kleinen Fluss), versuche den Namen "
             "des Flusses oder Wegs als route_name; findet das Tool nichts, gib den Plan mit Deiner bisherigen Route "
             "erneut über `final_plan` aus, er wird dann angenommen."
@@ -732,7 +748,7 @@ def check_duplicate_routes(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
     ids = [rid for rid in dict.fromkeys(output.route_ids) if ctx.deps.routes.get(rid)]
     tracks = {rid: ctx.deps.routes[rid] for rid in ids}
     for index, first in enumerate(ids):
-        for second in ids[index + 1:]:
+        for second in ids[index + 1 :]:
             a, b = tracks[first], tracks[second]
             same_ends = all(
                 haversine_km(p[0], p[1], q[0], q[1]) <= ROUTE_SAME_END_KM for p, q in ((a[0], b[0]), (a[-1], b[-1]))
@@ -782,11 +798,13 @@ def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
     for section in sections:
         start, end = nearest_place(output, section["from"]), nearest_place(output, section["to"])
         where = f"bei {start}" if start == end else f"zwischen {start} und {end}"
-        texts.append(f"{where} ({section['off_route_km']:.0f} km Umfahrung statt {section['named_route_km']:.0f} km Fernweg)")
+        texts.append(
+            f"{where} ({section['off_route_km']:.0f} km Umfahrung statt {section['named_route_km']:.0f} km Fernweg)"
+        )
     if not BLOCKED_MENTIONED.search(output.summary):
         raise ModelRetry(
             f"Die Route umfährt den Fernweg {'; '.join(texts)}, weil er dort laut Kartendaten nicht befahrbar ist "
-            "(z. B. Baustelle). Schreib das in `summary` ausdrücklich (\"nicht befahrbar\", \"umfährt\") und behaupte "
+            '(z. B. Baustelle). Schreib das in `summary` ausdrücklich ("nicht befahrbar", "umfährt") und behaupte '
             "nirgends, die Tour führe dort über den Fernweg oder einen gewünschten Abschnitt. Hatte der Nutzer genau "
             "diesen Abschnitt gewünscht, sag ihm, dass sich der Wunsch laut Kartendaten nicht umsetzen lässt."
         )
@@ -795,7 +813,7 @@ def check_blocked_sections(ctx: RunContext[AgentDeps], output: AdventurePlan) ->
             f"Die Route führt nicht über {', '.join(sorted({name for name, _ in claims}))}: Dieser Abschnitt des "
             f"Fernwegs ist laut Kartendaten nicht befahrbar, die Route umfährt ihn {'; '.join(texts)}. Dein Plan "
             f"stellt es anders dar: {' | '.join(f'„{text}“' for _, text in claims)}. Formuliere diese Stellen um "
-            "(z. B. \"nicht über …\", \"umfährt …\") und wähle dort keine Etappenorte."
+            '(z. B. "nicht über …", "umfährt …") und wähle dort keine Etappenorte.'
         )
     note = (
         f"Laut Kartendaten (OpenStreetMap) ist der Fernweg {'; '.join(texts)} nicht befahrbar, z. B. wegen einer "
@@ -907,7 +925,7 @@ def check_connections_shown(ctx: RunContext[AgentDeps], output: TextAnswer) -> N
     if not ctx.deps.train_queries and SHOWN_BELOW.search(output.message):
         raise ModelRetry(
             "Unter Deiner Antwort wird nichts angezeigt, weil Du in dieser Nachricht keine Verbindung abgefragt hast. "
-            "Verweise nicht auf \"unten\". Möchte der Nutzer eine Verbindung sehen, gib eine Reisekarte über "
+            'Verweise nicht auf "unten". Möchte der Nutzer eine Verbindung sehen, gib eine Reisekarte über '
             "`final_train_trip` aus oder frage die Verbindungen mit `find_train_connections` erneut ab."
         )
 
@@ -960,7 +978,7 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
             lines.append("Profil-Vorgaben des Nutzers (gelten, wenn er nichts anderes nennt; frage dann nicht danach):")
         if deps.home:
             lines.append(
-                f"- Wohnadresse: {deps.home}. Start bzw. Abfahrtsort und Ziel bei \"nach Hause\" (per `geocode` suchen)."
+                f'- Wohnadresse: {deps.home}. Start bzw. Abfahrtsort und Ziel bei "nach Hause" (per `geocode` suchen).'
             )
         if deps.default_transport:
             label = TRANSPORT_LABELS.get(deps.default_transport, deps.default_transport)
@@ -999,7 +1017,9 @@ def build_agent() -> Agent[AgentDeps, PlannerOutput]:
                 "zu Fortbewegungsart, Übernachtung und Region dieser Tour und berücksichtige sie im Plan."
             )
         if output.start_date < ctx.deps.today:
-            raise ModelRetry(f"Das Startdatum {output.start_date} liegt in der Vergangenheit (heute: {ctx.deps.today}).")
+            raise ModelRetry(
+                f"Das Startdatum {output.start_date} liegt in der Vergangenheit (heute: {ctx.deps.today})."
+            )
         check_weather(history_json, output)
         check_named_route_used(ctx, output)
         check_hut_tour(ctx, output)

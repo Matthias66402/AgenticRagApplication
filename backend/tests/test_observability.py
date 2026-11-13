@@ -19,7 +19,10 @@ def test_mask_text_replaces_address_and_street(tracing: None) -> None:
     register_home_address(" Nelkenstraße 10a ")
     # Im Agent-Kontext, im Geocoding-Aufruf und im Geocoding-Ergebnis (andere Reihenfolge, andere Schreibweise)
     assert mask_text("Wohnadresse: Nelkenstraße 10a, 26121 Oldenburg.") == "Wohnadresse: [Adresse], 26121 Oldenburg."
-    assert mask_text('{"place_name": "nelkenstraße 10a, 26121 Oldenburg"}') == '{"place_name": "[Adresse], 26121 Oldenburg"}'
+    assert (
+        mask_text('{"place_name": "nelkenstraße 10a, 26121 Oldenburg"}')
+        == '{"place_name": "[Adresse], 26121 Oldenburg"}'
+    )
     assert mask_text("10a, Nelkenstraße, Ziegelhof, Oldenburg") == "10a, [Straße], Ziegelhof, Oldenburg"
     assert mask_text("Radtour ab Oldenburg") == "Radtour ab Oldenburg"
 

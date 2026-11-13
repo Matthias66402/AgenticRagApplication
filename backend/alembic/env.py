@@ -1,10 +1,10 @@
 import asyncio
 import os
 
-from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from alembic import context
 from app import models  # noqa: F401  registriert alle Tabellen
 from app.config import get_settings
 from app.db import Base

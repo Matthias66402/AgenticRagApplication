@@ -12,12 +12,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 async def document_rows(session: SessionDep, document_id: int | None = None) -> list[DocumentRead]:
-    query = (
-        select(Document, func.count(Chunk.id))
-        .outerjoin(Chunk)
-        .group_by(Document.id)
-        .order_by(Document.title)
-    )
+    query = select(Document, func.count(Chunk.id)).outerjoin(Chunk).group_by(Document.id).order_by(Document.title)
     if document_id is not None:
         query = query.where(Document.id == document_id)
     return [

@@ -15,9 +15,9 @@ Für jede Testfrage werden die besten RANK_DEPTH Abschnitte ohne Mindestähnlich
 
 import argparse
 import asyncio
-import logging
 import datetime as dt
 import json
+import logging
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -192,9 +192,7 @@ async def run(grade: bool = False, batch: int = 1) -> dict[str, Any]:
     async with SessionLocal() as session:
         documents = await session.scalar(select(func.count(Document.id)))
         chunks = await session.scalar(select(func.count(Chunk.id)))
-        retrieved_all = [
-            await search_chunks(session, case["query"], top_k=RANK_DEPTH, min_score=0.0) for case in cases
-        ]
+        retrieved_all = [await search_chunks(session, case["query"], top_k=RANK_DEPTH, min_score=0.0) for case in cases]
     kept_all: list[set[int] | None] = [None] * len(cases)
     grade_failures = 0
     ungraded = 0
@@ -214,7 +212,9 @@ async def run(grade: bool = False, batch: int = 1) -> dict[str, Any]:
             for i, kept_hits in zip(group, kept_lists, strict=True):
                 kept_all[i] = {n for n, c in enumerate(retrieved_all[i]) if any(c is k for k in kept_hits)}
             ids = ", ".join(cases[i]["id"] for i in group)
-            print(f"  {number} {ids}" + (f" ({failures} Fehlversuche)" if failures else ""), file=sys.stderr, flush=True)
+            print(
+                f"  {number} {ids}" + (f" ({failures} Fehlversuche)" if failures else ""), file=sys.stderr, flush=True
+            )
     results = [evaluate_case(case, retrieved, kept) for case, retrieved, kept in zip(cases, retrieved_all, kept_all)]
     return {
         "created_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
@@ -258,7 +258,9 @@ def print_report(report: dict[str, Any]) -> None:
     for case in report["cases"]:
         if case["answerable"] and not (case["rank"] and case["rank"] <= TOP_K):
             top = case["results"][0]
-            print(f"  {case['id']:22} Rang {case['rank'] or '–':>2}  Platz 1: {top['document']} > {top['heading']} ({top['score']})")
+            print(
+                f"  {case['id']:22} Rang {case['rank'] or '–':>2}  Platz 1: {top['document']} > {top['heading']} ({top['score']})"
+            )
     print("\nSchwellen-Sweep (Mindestähnlichkeit → Recall / Fehlkontext):")
     for row in s["threshold_sweep"]:
         print(f"  {row['threshold']:.2f} → {row['recall']:.0%} / {row['false_context_rate']:.0%}")

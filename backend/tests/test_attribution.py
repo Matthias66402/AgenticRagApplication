@@ -27,7 +27,10 @@ HISTORY = [
     {"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "Radtour bitte"}]},
     knowledge_return("Testradweg", "Hüttenknigge"),
     knowledge_return("Nicht gesucht", tool_name="geocode"),
-    {"kind": "request", "parts": [{"part_kind": "tool-return", "tool_name": "search_knowledge", "content": {"error": "x"}}]},
+    {
+        "kind": "request",
+        "parts": [{"part_kind": "tool-return", "tool_name": "search_knowledge", "content": {"error": "x"}}],
+    },
     knowledge_return("Hüttenknigge", "Testradweg"),
 ]
 

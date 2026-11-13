@@ -73,7 +73,6 @@ async def test_gpx_download(client: httpx.AsyncClient, user_headers: dict[str, s
     assert points[1].findtext("g:ele", namespaces=NS) == "912.5"
 
 
-
 async def test_gpx_per_day(client: httpx.AsyncClient, user_headers: dict[str, str]) -> None:
     adventure_id = await store_adventure("user@example.com", PLAN)
     response = await client.get(f"/api/adventures/{adventure_id}/gpx?day=2", headers=user_headers)
@@ -100,7 +99,10 @@ async def test_gpx_per_day(client: httpx.AsyncClient, user_headers: dict[str, st
 
 def test_gpx_joins_partial_routes_into_one_track() -> None:
     # Eine Teilroute je Tag ergibt trotzdem nur einen Track, sonst bietet Komoot die Tage einzeln zur Auswahl an
-    routes = {"r-1": [[47.49, 11.09, 708.0], [47.44, 11.26, 912.5]], "r-2": [[47.44, 11.26, 912.5], [47.26, 11.39, 574.0]]}
+    routes = {
+        "r-1": [[47.49, 11.09, 708.0], [47.44, 11.26, 912.5]],
+        "r-2": [[47.44, 11.26, 912.5], [47.26, 11.39, 574.0]],
+    }
     root = ET.fromstring(build_gpx(PLAN | {"route_ids": ["r-1", "r-2"], "routes": routes}))
     tracks = root.findall("g:trk", NS)
     assert len(tracks) == 1 and tracks[0].findtext("g:name", namespaces=NS) == PLAN["title"]

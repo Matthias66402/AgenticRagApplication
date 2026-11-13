@@ -38,7 +38,11 @@ PROVIDERS: dict[str, Provider] = {
     "ors": _osm("OpenRouteService", "https://openrouteservice.org"),
     "brouter": _osm("BRouter", "https://brouter.de"),
     "open-meteo": Provider(
-        "Open-Meteo", "https://open-meteo.com", "Open-Meteo.com", "CC BY 4.0", "https://creativecommons.org/licenses/by/4.0/"
+        "Open-Meteo",
+        "https://open-meteo.com",
+        "Open-Meteo.com",
+        "CC BY 4.0",
+        "https://creativecommons.org/licenses/by/4.0/",
     ),
     "transitous": Provider("Transitous", "https://transitous.org", "Fahrplandaten der Verkehrsunternehmen"),
 }
@@ -101,9 +105,7 @@ def data_sources(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 continue
             for key, purpose in tool_uses(part.get("tool_name", ""), part.get("content")):
                 purposes.setdefault(key, {}).setdefault(purpose, None)
-    return [
-        asdict(PROVIDERS[key]) | {"purpose": ", ".join(purposes[key])} for key in PROVIDERS if key in purposes
-    ]
+    return [asdict(PROVIDERS[key]) | {"purpose": ", ".join(purposes[key])} for key in PROVIDERS if key in purposes]
 
 
 def describe(source: dict[str, Any]) -> str:

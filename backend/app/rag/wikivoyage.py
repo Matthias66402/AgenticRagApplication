@@ -25,7 +25,15 @@ ATTRIBUTION_RE = re.compile(
 )
 
 # Abschnitte ohne Nutzen für die Tourenplanung (Linklisten, Literaturangaben)
-SKIP_SECTIONS = {"literatur", "weblinks", "einzelnachweise", "anmerkungen", "quellen", "further reading", "external links"}
+SKIP_SECTIONS = {
+    "literatur",
+    "weblinks",
+    "einzelnachweise",
+    "anmerkungen",
+    "quellen",
+    "further reading",
+    "external links",
+}
 
 SECTION_RE = re.compile(r"^(={2,6})\s*(.*?)\s*\1\s*$")
 
@@ -111,7 +119,14 @@ def extract_to_markdown(extract: str) -> str:
 async def search_titles(http: httpx.AsyncClient, query: str, lang: str = "de", limit: int = 5) -> list[str]:
     response = await http.get(
         API_URL.format(lang=lang),
-        params={"action": "query", "format": "json", "formatversion": 2, "list": "search", "srsearch": query, "srlimit": limit},
+        params={
+            "action": "query",
+            "format": "json",
+            "formatversion": 2,
+            "list": "search",
+            "srsearch": query,
+            "srlimit": limit,
+        },
     )
     response.raise_for_status()
     return [hit["title"] for hit in response.json()["query"]["search"]]

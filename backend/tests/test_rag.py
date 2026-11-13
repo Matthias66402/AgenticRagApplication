@@ -51,7 +51,9 @@ async def test_document_upload_admin_only(
     assert response.status_code == 201
     assert response.json()["chunk_count"] == 2
 
-    bad = await client.post("/api/documents", headers=admin_headers, files={"file": ("x.exe", b"MZ", "application/octet-stream")})
+    bad = await client.post(
+        "/api/documents", headers=admin_headers, files={"file": ("x.exe", b"MZ", "application/octet-stream")}
+    )
     assert bad.status_code == 400
 
     doc_id = response.json()["id"]

@@ -99,4 +99,3 @@ def test_agents_with_same_model_share_budget() -> None:
     assert shared_budget("openai:gpt-5-mini", 5) is not first.budget
     # Geändertes Limit: neues Budget statt des alten
     assert shared_budget("test", 3).per_minute == 3
-

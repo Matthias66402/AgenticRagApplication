@@ -113,7 +113,11 @@ async def _huts_in_corridor(
         if any(haversine_km(hut["lat"], hut["lon"], h["lat"], h["lon"]) < SAME_HUT_KM for h in huts):
             continue
         hut = {k: v for k, v in hut.items() if k != "distance_km"}
-        hut |= {"km_from_start": round(along, 1), "offset_km": round(offset, 1), "overnight_likely": overnight_likely(hut)}
+        hut |= {
+            "km_from_start": round(along, 1),
+            "offset_km": round(offset, 1),
+            "overnight_likely": overnight_likely(hut),
+        }
         huts.append(hut)
     return sorted(huts, key=lambda h: h["km_from_start"])
 
@@ -142,7 +146,7 @@ def choose_chain(
         # oberhalb des Zielorts)
         if (j != last and progress[j] - progress[i] < 1.0) or (i, j) in forbidden:
             return math.inf
-        km =haversine_km(*points[i], *points[j]) * DETOUR_FACTOR
+        km = haversine_km(*points[i], *points[j]) * DETOUR_FACTOR
         return ((km - target) / target) ** 2 + 5 * max(0.0, km - MAX_LEG_KM) / MAX_LEG_KM
 
     def node_cost(i: int) -> float:
@@ -178,8 +182,7 @@ def valley_drops(geometry: list[list[float]], waypoints: list[Coordinate]) -> li
         return [None] * (len(waypoints) - 1)
     cuts = cut_indices(geometry, waypoints)
     return [
-        min(geometry[a][2], geometry[b][2]) - min(p[2] for p in geometry[a : b + 1])
-        for a, b in zip(cuts, cuts[1:])
+        min(geometry[a][2], geometry[b][2]) - min(p[2] for p in geometry[a : b + 1]) for a, b in zip(cuts, cuts[1:])
     ]
 
 

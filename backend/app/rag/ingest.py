@@ -78,9 +78,7 @@ def guess_title(source: str, text: str) -> str:
     return source.rsplit(".", 1)[0].replace("-", " ").replace("_", " ").title()
 
 
-async def ingest_document(
-    session: AsyncSession, source: str, data: bytes, uploaded_by: int | None = None
-) -> Document:
+async def ingest_document(session: AsyncSession, source: str, data: bytes, uploaded_by: int | None = None) -> Document:
     """Liest ein Dokument ein. Eine vorhandene Version mit gleichem `source` wird ersetzt."""
     if not source.lower().endswith(SUPPORTED_SUFFIXES):
         raise ValueError(f"Nicht unterstütztes Format. Erlaubt: {', '.join(SUPPORTED_SUFFIXES)}")

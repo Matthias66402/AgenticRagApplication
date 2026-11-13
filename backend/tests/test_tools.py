@@ -16,7 +16,14 @@ from app.agent.tools.accommodation import find_accommodation
 from app.agent.tools.common import haversine_km
 from app.agent.tools.geocode import geocode, station_fallback
 from app.agent.tools.routing import (
-    BROUTER_URL, ESTIMATE_ADVICE, ORS_URL, Coordinate, elevation_gain, estimate_hiking_time, plan_route, walking_hours,
+    BROUTER_URL,
+    ESTIMATE_ADVICE,
+    ORS_URL,
+    Coordinate,
+    elevation_gain,
+    estimate_hiking_time,
+    plan_route,
+    walking_hours,
 )  # fmt: skip
 from app.agent.tools.sun import sun_times
 from app.agent.tools.transit import (
@@ -60,7 +67,6 @@ async def ctx():
         )
 
 
-
 @pytest.fixture
 def quiet_roads_enabled(ctx) -> None:
     ctx.deps.settings = ctx.deps.settings.model_copy(update={"avoid_main_roads_enabled": True})
@@ -94,7 +100,9 @@ async def test_geocode_prefers_locality_over_municipality_area(ctx) -> None:
 
     # Ortspunkt statt Ortschaftsgrenze (z. B. Bad Zwischenahn)
     geocode_module._cache.clear()
-    respx.get(geocode_module.NOMINATIM_URL).respond(json=[municipality, locality | {"category": "place", "type": "town"}])
+    respx.get(geocode_module.NOMINATIM_URL).respond(
+        json=[municipality, locality | {"category": "place", "type": "town"}]
+    )
     assert (await geocode(ctx, "Worpswede"))[0]["lat"] == 53.223002
 
     # Gleichnamiger Ort außerhalb der Gemeinde (anderswo in Deutschland) ändert die Reihenfolge nicht
@@ -176,7 +184,12 @@ ORS_OK = {
     "features": [
         {
             "geometry": {"coordinates": [[8.2, 53.1, 5], [8.4, 52.9, 20]]},
-            "properties": {"summary": {"distance": 36000, "duration": 7200}, "ascent": 40, "descent": 25, "segments": []},
+            "properties": {
+                "summary": {"distance": 36000, "duration": 7200},
+                "ascent": 40,
+                "descent": 25,
+                "segments": [],
+            },
         }
     ]
 }
@@ -375,20 +388,26 @@ def test_elevation_gain_ignores_noise() -> None:
 
 
 async def test_route_estimate_for_canoe(ctx) -> None:
-    result = await plan_route(ctx, [Coordinate(lat=53.0, lon=13.0), Coordinate(lat=53.1, lon=13.0)], TransportMode.canoe)
+    result = await plan_route(
+        ctx, [Coordinate(lat=53.0, lon=13.0), Coordinate(lat=53.1, lon=13.0)], TransportMode.canoe
+    )
     assert result["estimated"] is True
     assert result["distance_km"] > 11
 
 
 # Fernweg als Bogen nach Norden: zwei Wege mit ~45 m Lücke zwischen 8.30 und der Fortsetzung
 COAST_START, COAST_VIA, COAST_END = (
-    Coordinate(lat=53.10, lon=8.20), Coordinate(lat=53.15, lon=8.30), Coordinate(lat=53.10, lon=8.40)
+    Coordinate(lat=53.10, lon=8.20),
+    Coordinate(lat=53.15, lon=8.30),
+    Coordinate(lat=53.10, lon=8.40),
 )
-COAST_RELATIONS = {"elements": [
-    {"type": "relation", "id": 1, "tags": {"name": "D2 Testküsten-Radweg - Abschnitt Nord", "network": "ncn"}},
-    {"type": "relation", "id": 2, "tags": {"name": "Nord-Testküsten-Weg", "network": "rcn"}},
-    {"type": "relation", "id": 3, "tags": {"name": "Moortour", "network": "lcn"}},
-]}
+COAST_RELATIONS = {
+    "elements": [
+        {"type": "relation", "id": 1, "tags": {"name": "D2 Testküsten-Radweg - Abschnitt Nord", "network": "ncn"}},
+        {"type": "relation", "id": 2, "tags": {"name": "Nord-Testküsten-Weg", "network": "rcn"}},
+        {"type": "relation", "id": 3, "tags": {"name": "Moortour", "network": "lcn"}},
+    ]
+}
 COAST_WAYS = {"elements": [
     {"type": "way", "id": 10, "nodes": [1, 2, 3],
      "geometry": [{"lat": 53.10, "lon": 8.20}, {"lat": 53.15, "lon": 8.25}, {"lat": 53.15, "lon": 8.30}]},
@@ -413,7 +432,12 @@ def waymarked_down() -> respx.Route:
 def waymarked_way(way: dict[str, Any]) -> dict[str, Any]:
     """Weg wie in `details/relation/{id}`: Web-Mercator-Koordinaten, keine Knoten-IDs."""
     coords = [list(named_route.to_mercator(p["lat"], p["lon"])) for p in way["geometry"]]
-    return {"route_type": "base", "id": way["id"], "tags": {}, "geometry": {"type": "LineString", "coordinates": coords}}
+    return {
+        "route_type": "base",
+        "id": way["id"],
+        "tags": {},
+        "geometry": {"type": "LineString", "coordinates": coords},
+    }
 
 
 def waymarked_coast(request: httpx.Request) -> httpx.Response:
@@ -852,7 +876,9 @@ async def test_accommodation_via_nominatim(ctx) -> None:
                 {"osm_type": "node", "osm_id": 3, "name": "", "lat": "47.0", "lon": "11.005", "extratags": {}},
             ])  # fmt: skip
         # Selbstversorgerhütte taucht doppelt auf (beide Filter) → nur einmal im Ergebnis
-        return httpx.Response(200, json=[{"osm_type": "node", "osm_id": 2, "name": "Nahe Hütte", "lat": "47.01", "lon": "11.0"}])
+        return httpx.Response(
+            200, json=[{"osm_type": "node", "osm_id": 2, "name": "Nahe Hütte", "lat": "47.01", "lon": "11.0"}]
+        )
 
     route = respx.get(geocode_module.NOMINATIM_URL).mock(side_effect=respond)
     result = await find_accommodation(ctx, 47.0, 11.0, AccommodationType.hut, radius_km=5)
@@ -884,11 +910,30 @@ async def test_bivouac_finds_overnight_shelters(ctx) -> None:
     amenity=shelter wird nur einmal abgefragt.
     """
     shelters = [
-        {"osm_type": "way", "osm_id": 1, "name": "", "lat": "56.0", "lon": "8.1",
-         "extratags": {"shelter_type": "lean_to", "reservation": "yes", "website": "https://www.pladsinaturen.dk/x"}},
-        {"osm_type": "way", "osm_id": 2, "name": "", "lat": "56.0", "lon": "8.1", "extratags": {"shelter_type": "lean_to"}},
-        {"osm_type": "way", "osm_id": 3, "name": "Shelter Hof", "lat": "56.0", "lon": "8.1",
-         "extratags": {"shelter_type": "lean_to", "access": "private"}},
+        {
+            "osm_type": "way",
+            "osm_id": 1,
+            "name": "",
+            "lat": "56.0",
+            "lon": "8.1",
+            "extratags": {"shelter_type": "lean_to", "reservation": "yes", "website": "https://www.pladsinaturen.dk/x"},
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 2,
+            "name": "",
+            "lat": "56.0",
+            "lon": "8.1",
+            "extratags": {"shelter_type": "lean_to"},
+        },
+        {
+            "osm_type": "way",
+            "osm_id": 3,
+            "name": "Shelter Hof",
+            "lat": "56.0",
+            "lon": "8.1",
+            "extratags": {"shelter_type": "lean_to", "access": "private"},
+        },
     ]
     camp_sites = [
         {"osm_type": "node", "osm_id": 4, "name": "Shelterplads ved Å", "lat": "56.01", "lon": "8.1", "extratags": {"camp_site": "basic"}},
@@ -975,7 +1020,14 @@ def transit_place(name: str, tz: str | None = "Europe/Berlin", track: str | None
 
 def transit_leg(mode: str, origin: dict, destination: dict, start: str, end: str, **extra) -> dict:
     duration = (dt.datetime.fromisoformat(end) - dt.datetime.fromisoformat(start)).seconds
-    return {"mode": mode, "from": origin, "to": destination, "startTime": start, "endTime": end, "duration": duration} | extra
+    return {
+        "mode": mode,
+        "from": origin,
+        "to": destination,
+        "startTime": start,
+        "endTime": end,
+        "duration": duration,
+    } | extra
 
 
 # Zeiten in UTC wie bei der MOTIS-API; Ende Oktober gilt in Berlin noch Sommerzeit (UTC+2)
@@ -1065,7 +1117,10 @@ async def test_train_connections_service_down(ctx) -> None:
 
 
 async def test_train_connections_disabled_or_past(ctx) -> None:
-    assert "Vergangenheit" in (await find_train_connections(ctx, **TRANSIT_ARGS | {"date": TODAY - dt.timedelta(days=1)}))["error"]
+    assert (
+        "Vergangenheit"
+        in (await find_train_connections(ctx, **TRANSIT_ARGS | {"date": TODAY - dt.timedelta(days=1)}))["error"]
+    )
     ctx.deps.settings = ctx.deps.settings.model_copy(update={"transit_api_url": ""})
     assert "nicht konfiguriert" in (await find_train_connections(ctx, **TRANSIT_ARGS))["error"]
 

@@ -12,7 +12,6 @@ from app.export.pdf import build_pdf, map_viewport
 from tests.conftest import auth_headers, create_user
 from tests.test_gpx import PLAN, store_adventure
 
-
 TILE_PATTERN = r"https://tile\.openstreetmap\.org/\d+/\d+/\d+\.png"
 
 
@@ -171,7 +170,12 @@ def test_pdf_with_train_journeys() -> None:
         ],
         "notes": "Frühe Verbindung, damit die erste Etappe bei Tageslicht endet.",
     }  # fmt: skip
-    night = outbound | {"departure": "2026-11-07T22:10:00", "arrival": "2026-11-08T06:05:00", "transfers": 2, "notes": None}
+    night = outbound | {
+        "departure": "2026-11-07T22:10:00",
+        "arrival": "2026-11-08T06:05:00",
+        "transfers": 2,
+        "notes": None,
+    }
     text = pdf_text(build_pdf(PLAN | {"outbound_journey": outbound, "return_journey": night}))
 
     assert "An- und Abreise" in text

@@ -31,9 +31,9 @@ from typing import Annotated, Any, Literal, TypedDict
 import httpx
 import openai
 from langgraph.graph import END, START, StateGraph
-from pydantic import BaseModel
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.runtime import Runtime
+from pydantic import BaseModel
 from pydantic_ai import (
     AgentRunResultEvent,
     AgentStreamEvent,
@@ -45,11 +45,11 @@ from pydantic_ai import (
     ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
+    RunUsage,
     TextPart,
     TextPartDelta,
     ToolCallPart,
     ToolReturnPart,
-    RunUsage,
     UsageLimits,
     UserPromptPart,
 )
@@ -237,7 +237,9 @@ def planner_history(state: PlannerState) -> tuple[str | None, list[ModelMessage]
         return state["message"], history or None
     history += [
         ModelRequest(parts=[UserPromptPart(state["message"])]),
-        ModelResponse(parts=[ToolCallPart(c["tool_name"], c["args"], tool_call_id=c["tool_call_id"]) for c in prefetched]),
+        ModelResponse(
+            parts=[ToolCallPart(c["tool_name"], c["args"], tool_call_id=c["tool_call_id"]) for c in prefetched]
+        ),
         ModelRequest(
             parts=[ToolReturnPart(c["tool_name"], c["result"], tool_call_id=c["tool_call_id"]) for c in prefetched]
         ),
@@ -264,7 +266,9 @@ async def planner(state: PlannerState, runtime: Runtime[AgentDeps]) -> PlannerSt
                     runtime.stream_writer(ui)
     except ModelRateLimitError:
         # Trotz Drosselung möglich, z. B. wenn ein anderer Prozess (Evaluation) dasselbe Limit nutzt
-        return {"error": "Das Sprachmodell ist gerade ausgelastet (Anfragelimit erreicht). Bitte in einer Minute erneut senden."}
+        return {
+            "error": "Das Sprachmodell ist gerade ausgelastet (Anfragelimit erreicht). Bitte in einer Minute erneut senden."
+        }
     except Exception as exc:
         if is_network_error(exc):
             logger.warning("Planer ohne Verbindung zum Sprachmodell: %s: %s", type(exc).__name__, exc)

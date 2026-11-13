@@ -58,10 +58,14 @@ def exportable_plan(plan: dict[str, Any]) -> dict[str, Any]:
         "duration_hours": leg["duration_hours"],
         "notes": notes,
     }
-    return common | {
-        "transport": leg["transport"],
-        "station_route": kind,
-        "start": leg["start"],
-        "stages": [stage],
-        "route_ids": [leg["route_id"]],
-    } | ({"destination": leg["end"]} if kind == "egress" else {})
+    return (
+        common
+        | {
+            "transport": leg["transport"],
+            "station_route": kind,
+            "start": leg["start"],
+            "stages": [stage],
+            "route_ids": [leg["route_id"]],
+        }
+        | ({"destination": leg["end"]} if kind == "egress" else {})
+    )

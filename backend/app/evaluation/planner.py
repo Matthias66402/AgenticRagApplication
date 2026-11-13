@@ -28,8 +28,15 @@ from typing import Any
 
 import httpx
 from pydantic_ai import (
-    Agent, ModelMessage, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, RetryFeedbackPart, RunContext,
-    ToolCallPart, ToolReturnPart,
+    Agent,
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    RetryFeedbackPart,
+    RunContext,
+    ToolCallPart,
+    ToolReturnPart,
 )  # fmt: skip
 from pydantic_ai.exceptions import UserError
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
@@ -121,12 +128,15 @@ def tool_returns(messages: list[ModelMessage], tool_name: str) -> list[Any]:
 def check_output(case: dict[str, Any], output: Any, messages: list[ModelMessage], deps: AgentDeps) -> dict[str, bool]:
     """Fallabhängige Qualitätsprüfungen; der Ausgabetyp wird immer geprüft."""
     checks = {"output_type": OUTPUT_NAMES.get(type(output)) == case["expected_output"]}
-    calls = [p.tool_name for m in messages if isinstance(m, ModelResponse) for p in m.parts if isinstance(p, ToolCallPart)]
+    calls = [
+        p.tool_name for m in messages if isinstance(m, ModelResponse) for p in m.parts if isinstance(p, ToolCallPart)
+    ]
     if isinstance(output, AdventurePlan):
         checks["transport"] = output.transport.value == case.get("transport", output.transport.value)
         checks["duration_days"] = output.duration_days == case.get("duration_days", output.duration_days)
         searches = sum(
-            len(result.get("queries", [])) for result in tool_returns(messages, "research_knowledge")
+            len(result.get("queries", []))
+            for result in tool_returns(messages, "research_knowledge")
             if isinstance(result, dict)
         )
         checks["knowledge_searches"] = searches >= MIN_KNOWLEDGE_SEARCHES
@@ -382,7 +392,9 @@ def summarize(runs: list[CaseRun]) -> dict[str, Any]:
         "mean_phase_seconds": {
             phase: round(statistics.mean(phase_seconds(r).get(phase, 0.0) for r in runs), 1)
             for phase in ("intake", "prefetch", "planner")
-        } if runs else {},
+        }
+        if runs
+        else {},
         "tool_seconds": tool_time_stats(runs),
     }
 

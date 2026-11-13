@@ -42,8 +42,14 @@ def next_timetable_change(today: dt.date) -> dt.date:
 
 
 def bahn_search_url(
-    from_name: str, from_lat: float, from_lon: float, to_name: str, to_lat: float, to_lon: float,
-    moment: dt.datetime, arrive_by: bool,
+    from_name: str,
+    from_lat: float,
+    from_lon: float,
+    to_name: str,
+    to_lat: float,
+    to_lon: float,
+    moment: dt.datetime,
+    arrive_by: bool,
 ) -> str:
     """Vorausgefüllte Verbindungssuche auf bahn.de; Orte als Koordinaten, damit kein Bahnhofs-ID nötig ist."""
 
