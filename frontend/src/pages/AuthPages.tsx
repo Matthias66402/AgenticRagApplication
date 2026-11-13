@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { type FormEvent, useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 
@@ -98,7 +98,11 @@ export function RegisterPage() {
       <form onSubmit={submit} className="stack">
         <label>
           Name
-          <input required value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
+          <input
+            required
+            value={form.displayName}
+            onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+          />
         </label>
         <label>
           E-Mail

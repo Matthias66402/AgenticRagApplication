@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { api, json } from "../api/client";
 import type { Role, User } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
@@ -7,7 +7,12 @@ import { formatDateTime } from "../lib/labels";
 
 const EMPTY = { email: "", display_name: "", password: "", role: "user" as Role };
 
-function UserRow({ user, isSelf, onChange, onDelete }: {
+function UserRow({
+  user,
+  isSelf,
+  onChange,
+  onDelete,
+}: {
   user: User;
   isSelf: boolean;
   onChange: (changes: Partial<User> & { password?: string }) => Promise<void>;
@@ -31,8 +36,17 @@ function UserRow({ user, isSelf, onChange, onDelete }: {
       <tr>
         <td colSpan={5}>
           <form className="row wrap" onSubmit={save}>
-            <input required value={draft.display_name} onChange={(e) => setDraft({ ...draft, display_name: e.target.value })} />
-            <input type="email" required value={draft.email} onChange={(e) => setDraft({ ...draft, email: e.target.value })} />
+            <input
+              required
+              value={draft.display_name}
+              onChange={(e) => setDraft({ ...draft, display_name: e.target.value })}
+            />
+            <input
+              type="email"
+              required
+              value={draft.email}
+              onChange={(e) => setDraft({ ...draft, email: e.target.value })}
+            />
             <input
               type="password"
               minLength={8}
@@ -91,7 +105,9 @@ export function AdminUsersPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api<User[]>("/api/users").then(setUsers).catch((e) => setError(e.message));
+    api<User[]>("/api/users")
+      .then(setUsers)
+      .catch((e) => setError(e.message));
   }, []);
 
   async function run(action: () => Promise<void>) {
@@ -130,8 +146,19 @@ export function AdminUsersPage() {
       {error && <p className="error">{error}</p>}
 
       <form className="card row wrap" onSubmit={create}>
-        <input required placeholder="Name" value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} />
-        <input type="email" required placeholder="E-Mail" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+        <input
+          required
+          placeholder="Name"
+          value={form.display_name}
+          onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+        />
+        <input
+          type="email"
+          required
+          placeholder="E-Mail"
+          value={form.email}
+          onChange={(e) => setForm({ ...form, email: e.target.value })}
+        />
         <input
           type="password"
           required
@@ -160,7 +187,13 @@ export function AdminUsersPage() {
           </thead>
           <tbody>
             {users.map((u) => (
-              <UserRow key={u.id} user={u} isSelf={u.id === me?.id} onChange={update(u.id)} onDelete={() => remove(u.id)} />
+              <UserRow
+                key={u.id}
+                user={u}
+                isSelf={u.id === me?.id}
+                onChange={update(u.id)}
+                onDelete={() => remove(u.id)}
+              />
             ))}
           </tbody>
         </table>

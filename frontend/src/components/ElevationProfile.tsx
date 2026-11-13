@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MapPlan } from "./RouteMap";
 
 export interface ProfilePoint {
@@ -137,7 +137,8 @@ export function ElevationProfile({ plan, points, onHover }: Props) {
   const xTicks = niceTicks(0, stats.total, Math.max(2, Math.floor(innerWidth / 90)));
   const point = active === null ? null : points[active];
   const summary =
-    `Höhenprofil über ${fmt(stats.total, 1)} km, ` + `tiefster Punkt ${fmt(stats.low)} m, höchster Punkt ${fmt(stats.high)} m`;
+    `Höhenprofil über ${fmt(stats.total, 1)} km, ` +
+    `tiefster Punkt ${fmt(stats.low)} m, höchster Punkt ${fmt(stats.high)} m`;
 
   return (
     <div className="profile">
@@ -153,63 +154,63 @@ export function ElevationProfile({ plan, points, onHover }: Props) {
         </span>
       </div>
       <div className="profile-chart" ref={ref}>
-      {width > 0 && (
-        <svg
-          width={width}
-          height={HEIGHT}
-          role="img"
-          aria-label={summary}
-          tabIndex={0}
-          onPointerMove={handlePointer}
-          onPointerDown={handlePointer}
-          onPointerLeave={() => select(null)}
-          onBlur={() => select(null)}
-          onKeyDown={handleKey}
-        >
-          {yTicks.map((t) => (
-            <g key={t} className="profile-grid">
-              <line x1={PAD.left} x2={PAD.left + innerWidth} y1={y(t)} y2={y(t)} />
-              <text x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end">
-                {fmt(t)} m
+        {width > 0 && (
+          <svg
+            width={width}
+            height={HEIGHT}
+            role="img"
+            aria-label={summary}
+            tabIndex={0}
+            onPointerMove={handlePointer}
+            onPointerDown={handlePointer}
+            onPointerLeave={() => select(null)}
+            onBlur={() => select(null)}
+            onKeyDown={handleKey}
+          >
+            {yTicks.map((t) => (
+              <g key={t} className="profile-grid">
+                <line x1={PAD.left} x2={PAD.left + innerWidth} y1={y(t)} y2={y(t)} />
+                <text x={PAD.left - 6} y={y(t)} dy="0.32em" textAnchor="end">
+                  {fmt(t)} m
+                </text>
+              </g>
+            ))}
+            {xTicks.map((t) => (
+              <text key={t} className="profile-axis" x={x(t)} y={baseline + 16} textAnchor="middle">
+                {fmt(t)} km
               </text>
-            </g>
-          ))}
-          {xTicks.map((t) => (
-            <text key={t} className="profile-axis" x={x(t)} y={baseline + 16} textAnchor="middle">
-              {fmt(t)} km
-            </text>
-          ))}
-          {stageMarks.map((m) => (
-            <g key={m.day} className="profile-stage">
-              <line x1={x(m.km)} x2={x(m.km)} y1={PAD.top} y2={baseline} />
-              <text x={x(m.km) + 4} y={PAD.top + 10}>
-                Ende Tag {m.day}
-              </text>
-            </g>
-          ))}
-          <path className="profile-area" d={area} />
-          <path className="profile-line" d={line} />
-          <line className="profile-baseline" x1={PAD.left} x2={PAD.left + innerWidth} y1={baseline} y2={baseline} />
-          {point && (
-            <g className="profile-cursor">
-              <line x1={x(point.km)} x2={x(point.km)} y1={PAD.top} y2={baseline} />
-              <circle cx={x(point.km)} cy={y(point.ele)} r={4.5} />
-            </g>
-          )}
-        </svg>
-      )}
-      {point && (
-        <div
-          className="profile-tooltip"
-          style={{
-            left: Math.min(Math.max(x(point.km), 60), width - 60),
-            top: Math.max(y(point.ele) - 52, 0),
-          }}
-        >
-          <strong>{fmt(point.ele)} m</strong>
-          <span className="muted">bei km {fmt(point.km, 1)}</span>
-        </div>
-      )}
+            ))}
+            {stageMarks.map((m) => (
+              <g key={m.day} className="profile-stage">
+                <line x1={x(m.km)} x2={x(m.km)} y1={PAD.top} y2={baseline} />
+                <text x={x(m.km) + 4} y={PAD.top + 10}>
+                  Ende Tag {m.day}
+                </text>
+              </g>
+            ))}
+            <path className="profile-area" d={area} />
+            <path className="profile-line" d={line} />
+            <line className="profile-baseline" x1={PAD.left} x2={PAD.left + innerWidth} y1={baseline} y2={baseline} />
+            {point && (
+              <g className="profile-cursor">
+                <line x1={x(point.km)} x2={x(point.km)} y1={PAD.top} y2={baseline} />
+                <circle cx={x(point.km)} cy={y(point.ele)} r={4.5} />
+              </g>
+            )}
+          </svg>
+        )}
+        {point && (
+          <div
+            className="profile-tooltip"
+            style={{
+              left: Math.min(Math.max(x(point.km), 60), width - 60),
+              top: Math.max(y(point.ele) - 52, 0),
+            }}
+          >
+            <strong>{fmt(point.ele)} m</strong>
+            <span className="muted">bei km {fmt(point.km, 1)}</span>
+          </div>
+        )}
       </div>
     </div>
   );

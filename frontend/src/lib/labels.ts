@@ -30,7 +30,12 @@ export const TOOL_LABELS: Record<string, { icon: string; label: string }> = {
   find_train_connections: { icon: "🚆", label: "Bahnverbindung" },
 };
 
-const dateFormat = new Intl.DateTimeFormat("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" });
+const dateFormat = new Intl.DateTimeFormat("de-DE", {
+  weekday: "short",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
 const dateTimeFormat = new Intl.DateTimeFormat("de-DE", { dateStyle: "medium", timeStyle: "short" });
 
 export const formatDate = (iso: string) => dateFormat.format(new Date(`${iso}T12:00:00`));

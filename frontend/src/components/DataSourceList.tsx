@@ -12,8 +12,7 @@ export function DataSourceList({ sources }: { sources: DataSource[] }) {
             <a href={s.url} target="_blank" rel="noreferrer">
               {s.name}
             </a>{" "}
-            ({s.purpose})
-            {s.data && <> · {s.data.startsWith("©") ? `Daten ${s.data}` : s.data}</>}
+            ({s.purpose}){s.data && <> · {s.data.startsWith("©") ? `Daten ${s.data}` : s.data}</>}
             {s.license && (
               <>
                 {" "}

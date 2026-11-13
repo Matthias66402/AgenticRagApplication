@@ -1,4 +1,4 @@
-import { NavLink, Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
 import { useAuth } from "./auth/AuthContext";
 import { ProtectedRoute } from "./auth/ProtectedRoute";
 import { AdminDocumentsPage } from "./pages/AdminDocumentsPage";

@@ -1,6 +1,6 @@
+import type { LatLngTuple } from "leaflet";
 import { useEffect, useMemo } from "react";
 import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap } from "react-leaflet";
-import type { LatLngTuple } from "leaflet";
 import type { AdventurePlan, Stage } from "../api/types";
 import { shortPlace } from "../lib/labels";
 
@@ -26,10 +26,7 @@ export function RouteMap({ plan, highlight }: { plan: MapPlan; highlight?: LatLn
   );
   // Ohne berechnete Route (z. B. Schätzung ohne ORS-Key): Etappenpunkte gestrichelt verbinden
   const stagePoints = useMemo<LatLngTuple[]>(
-    () => [
-      [plan.start.lat, plan.start.lon],
-      ...plan.stages.map((s): LatLngTuple => [s.end.lat, s.end.lon]),
-    ],
+    () => [[plan.start.lat, plan.start.lon], ...plan.stages.map((s): LatLngTuple => [s.end.lat, s.end.lon])],
     [plan],
   );
   const allPoints = useMemo<LatLngTuple[]>(

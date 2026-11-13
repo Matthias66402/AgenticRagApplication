@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
 import type { AccessRoute, TrainTripPlan } from "../api/types";
 import { formatDate, shortPlace } from "../lib/labels";
+import { DataSourceList } from "./DataSourceList";
+import { buildProfile, ElevationProfile, type ProfilePoint } from "./ElevationProfile";
 import { JourneyCard, TransitNote } from "./JourneyCard";
 import { LinkedText } from "./LinkedText";
-import { ElevationProfile, buildProfile, type ProfilePoint } from "./ElevationProfile";
-import { DataSourceList } from "./DataSourceList";
 import { DownloadButton } from "./PlanCard";
-import { RouteMap, type MapPlan } from "./RouteMap";
+import { type MapPlan, RouteMap } from "./RouteMap";
 
 const ACCESS_LABELS = { cycling: "🚲 Mit dem Rad zum Bahnhof", hiking: "🚶 Zu Fuß zum Bahnhof" };
 const EGRESS_LABELS = { cycling: "🚲 Mit dem Rad vom Bahnhof", hiking: "🚶 Zu Fuß vom Bahnhof" };
@@ -48,8 +48,8 @@ function StationRoute({
           {leg.departure.slice(11, 16)} {shortPlace(leg.start.name)} → {shortPlace(leg.end.name)}
         </div>
         <div className="muted small">
-          {leg.distance_km.toLocaleString("de-DE", { maximumFractionDigits: 1 })} km · {formatMinutes(leg.duration_hours)}{" "}
-          · {timing}
+          {leg.distance_km.toLocaleString("de-DE", { maximumFractionDigits: 1 })} km ·{" "}
+          {formatMinutes(leg.duration_hours)} · {timing}
         </div>
       </div>
     </section>

@@ -28,7 +28,9 @@ export function JourneyCard({ label, journey }: { label: string; journey: Journe
       </div>
       <div className="muted small">
         {formatDuration(journey.duration_minutes)} ·{" "}
-        {journey.transfers === 0 ? "ohne Umstieg" : `${journey.transfers} ${journey.transfers === 1 ? "Umstieg" : "Umstiege"}`}
+        {journey.transfers === 0
+          ? "ohne Umstieg"
+          : `${journey.transfers} ${journey.transfers === 1 ? "Umstieg" : "Umstiege"}`}
       </div>
       <ol className="journey-legs small">
         {journey.legs.map((leg, i) => {

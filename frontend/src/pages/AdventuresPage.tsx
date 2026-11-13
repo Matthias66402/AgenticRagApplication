@@ -35,7 +35,9 @@ export function AdventuresPage() {
   }
 
   useEffect(() => {
-    api<AdventureListItem[]>("/api/adventures").then(setAdventures).catch((e) => setError(e.message));
+    api<AdventureListItem[]>("/api/adventures")
+      .then(setAdventures)
+      .catch((e) => setError(e.message));
   }, []);
 
   async function createAdventure() {
@@ -57,7 +59,9 @@ export function AdventuresPage() {
       <div className="page-header">
         <div>
           <h1>Deine Abenteuer</h1>
-          <p className="muted">Beschreibe Deine Tour in eigenen Worten – der Agent plant Route, Etappen, Wetter und Unterkünfte.</p>
+          <p className="muted">
+            Beschreibe Deine Tour in eigenen Worten – der Agent plant Route, Etappen, Wetter und Unterkünfte.
+          </p>
         </div>
         <button className="primary" onClick={createAdventure}>
           + Neues Abenteuer

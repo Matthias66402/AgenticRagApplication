@@ -2,16 +2,18 @@ import { useMemo, useState } from "react";
 import { downloadFile } from "../api/client";
 import type { AdventurePlan } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { ACCOMMODATION_LABELS, TRANSPORT_LABELS, formatDate, shortPlace } from "../lib/labels";
-import { ElevationProfile, buildProfile } from "./ElevationProfile";
+import { ACCOMMODATION_LABELS, formatDate, shortPlace, TRANSPORT_LABELS } from "../lib/labels";
+import { DataSourceList } from "./DataSourceList";
 import type { ProfilePoint } from "./ElevationProfile";
+import { buildProfile, ElevationProfile } from "./ElevationProfile";
 import { JourneyCard, TransitNote } from "./JourneyCard";
 import { LinkedText } from "./LinkedText";
 import { RouteMap } from "./RouteMap";
-import { DataSourceList } from "./DataSourceList";
 
 const num = (value: number | null | undefined, unit: string) =>
-  value === null || value === undefined ? null : `${value.toLocaleString("de-DE", { maximumFractionDigits: 1 })} ${unit}`;
+  value === null || value === undefined
+    ? null
+    : `${value.toLocaleString("de-DE", { maximumFractionDigits: 1 })} ${unit}`;
 
 interface DownloadButtonProps {
   path: string;
@@ -94,7 +96,11 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
                   fallbackName={`abenteuer_${stage.day}.gpx`}
                   label={`⬇ GPX Tag ${stage.day}`}
                   busyLabel="Erstelle GPX …"
-                  title={hasTrack ? `Track und Wegpunkte für Tag ${stage.day}` : `Wegpunkte für Tag ${stage.day} (keine berechnete Route)`}
+                  title={
+                    hasTrack
+                      ? `Track und Wegpunkte für Tag ${stage.day}`
+                      : `Wegpunkte für Tag ${stage.day} (keine berechnete Route)`
+                  }
                 />
               ))
             ) : (
@@ -103,7 +109,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
                 fallbackName="abenteuer.gpx"
                 label={hasTrack ? "⬇ GPX" : "⬇ GPX (nur Wegpunkte)"}
                 busyLabel="Erstelle GPX …"
-                title={hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"}
+                title={
+                  hasTrack ? "Track mit Höhenprofil und Wegpunkten" : "Keine berechnete Route – enthält nur Wegpunkte"
+                }
               />
             )}
           </div>
@@ -192,7 +200,9 @@ export function PlanCard({ plan, adventureId }: { plan: AdventurePlan; adventure
               {timetableLinks.map((link) => (
                 <li key={link.url}>
                   🚆 {link.label}:{" "}
-                  {link.missing ? "noch kein Fahrplan verfügbar" : "Fahrplan nach dem Fahrplanwechsel evtl. unvollständig"}{" "}
+                  {link.missing
+                    ? "noch kein Fahrplan verfügbar"
+                    : "Fahrplan nach dem Fahrplanwechsel evtl. unvollständig"}{" "}
                   –{" "}
                   <a href={link.url} target="_blank" rel="noreferrer">
                     Verbindungen bei bahn.de
