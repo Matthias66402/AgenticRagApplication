@@ -1,0 +1,30 @@
+name: Lint
+
+# Backend: Ruff prüft Regeln und Formatierung (Konfiguration in backend/pyproject.toml).
+# Das Frontend wird im Workflow "Frontend" mit Biome geprüft, weil dort npm ci ohnehin läuft.
+on:
+  push:
+    paths: &paths
+      - backend/**
+      - .github/workflows/lint.yml
+  pull_request:
+    paths: *paths
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      # Gleiche Minor-Version wie in pyproject.toml (dev) und .pre-commit-config.yaml, sonst kommen neue Regeln überraschend
+      - name: Ruff installieren
+        run: pip install "ruff==0.17.*"
+      - name: Regeln prüfen
+        run: ruff check --output-format=github .
+      - name: Formatierung prüfen
+        run: ruff format --check --diff .

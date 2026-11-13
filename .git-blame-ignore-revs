@@ -1,0 +1,7 @@
+# Reine Formatierungs-Commits, die git blame überspringen soll.
+# Lokal einmalig: git config blame.ignoreRevsFile .git-blame-ignore-revs (GitHub liest die Datei automatisch)
+
+# Backend mit ruff format formatieren, Imports sortieren
+b51998baa33ae600833bec9aab201b70df1baec0
+# Frontend mit Biome formatieren, Imports sortieren
+ee1fe90d2002459f0c063e1551b14b4e59395c00

@@ -1,6 +1,7 @@
 name: Frontend
 
-# Installiert die Abhängigkeiten exakt nach package-lock.json und baut das Frontend (Typprüfung mit tsc + Vite-Build)
+# Installiert die Abhängigkeiten exakt nach package-lock.json, prüft mit Biome (Lint + Formatierung)
+# und baut das Frontend (Typprüfung mit tsc + Vite-Build)
 on:
   push:
     paths: &paths
@@ -24,5 +25,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Abhängigkeiten installieren
         run: npm ci
+      # biome ci schreibt nichts um und meldet Fehler als GitHub-Annotationen
+      - name: Lint und Formatierung prüfen
+        run: npx biome ci --reporter=github .
       - name: Bauen
         run: npm run build

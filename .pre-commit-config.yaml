@@ -1,0 +1,26 @@
+# Einrichten: pip install pre-commit && pre-commit install
+# Alles prüfen: pre-commit run --all-files
+#
+# Bewusst ohne pre-commit/pre-commit-hooks (trailing-whitespace, check-yaml, …): deren Python-Launcher
+# blockiert die Windows-Anwendungssteuerung (WinError 4551). Leerzeichen und Dateiende übernehmen
+# ruff format und Biome für den Code.
+repos:
+  # Ruff findet die Konfiguration in backend/pyproject.toml selbst; Version wie in lint.yml halten
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  # Biome aus frontend/node_modules (npm ci bzw. npm install vorher nötig); prüft das ganze Frontend in ~0,1 s
+  - repo: local
+    hooks:
+      - id: biome
+        name: biome
+        entry: npm --prefix frontend run format
+        language: system
+        files: ^frontend/
+        pass_filenames: false

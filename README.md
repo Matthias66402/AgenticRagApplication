@@ -57,6 +57,28 @@ Für die Test-DB-Migration (einmalig):
 docker compose exec backend sh -c 'ALEMBIC_DATABASE_URL=$TEST_DATABASE_URL alembic upgrade head'
 ```
 
+## Linting und Formatierung
+
+Backend: [Ruff](https://docs.astral.sh/ruff/) (Konfiguration in `backend/pyproject.toml`). Frontend: [Biome](https://biomejs.dev/) (`frontend/biome.json`), weil typescript-eslint TypeScript 7 noch nicht unterstützt.
+
+```bash
+docker compose exec backend ruff check --fix .     # Regeln prüfen, Sicheres automatisch beheben
+docker compose exec backend ruff format .          # formatieren
+cd frontend && npm run lint                        # Biome: Regeln + Formatierung prüfen
+cd frontend && npm run format                      # Biome: beheben und formatieren
+```
+
+Der Formatter bricht Python-Code bei 120 Zeichen um; der Linter meldet Überlänge erst ab 150 Zeichen, damit Prompts und Docstrings nicht zerstückelt werden müssen. Ausnahmen stehen als `# noqa: <Regel>` bzw. `// biome-ignore <Regel>: <Grund>` direkt an der Stelle, immer mit Begründung.
+
+Damit Fehler schon beim Commit auffallen, einmalig pre-commit einrichten (prüft nur Ruff und Biome, siehe `.pre-commit-config.yaml`):
+
+```bash
+pip install pre-commit && pre-commit install
+git config blame.ignoreRevsFile .git-blame-ignore-revs   # Formatierungs-Commits in git blame überspringen
+```
+
+In GitHub Actions prüft `.github/workflows/lint.yml` das Backend mit Ruff, `.github/workflows/frontend.yml` das Frontend mit `biome ci` vor dem Build.
+
 ## Wie der Agent arbeitet
 
 Ausführliche Erklärung mit Code-Verweisen: [docs/agentic-rag.md](docs/agentic-rag.md)
